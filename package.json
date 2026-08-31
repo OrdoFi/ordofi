@@ -1,0 +1,23 @@
+{
+  "name": "ordofi",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OrdoFi — the execution layer for Robinhood Chain",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "watcher": "npm run start -w @ordofi/watcher",
+    "report": "npm run report -w @ordofi/watcher",
+    "gateway": "npm run start -w @ordofi/gateway",
+    "auction": "npm run start -w @ordofi/auction",
+    "web": "npm run dev -w @ordofi/web",
+    "typecheck": "tsc -p apps/watcher/tsconfig.json && tsc -p apps/gateway/tsconfig.json && tsc -p apps/auction/tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0"
+  }
+}

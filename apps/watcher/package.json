@@ -1,0 +1,17 @@
+{
+  "name": "@ordofi/watcher",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "report": "tsx src/report.ts"
+  },
+  "dependencies": {
+    "@ordofi/core": "*",
+    "viem": "^2.21.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0"
+  }
+}

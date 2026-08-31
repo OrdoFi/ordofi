@@ -1,0 +1,51 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      SERVICE: gateway
+      ORDO_PORT: 8547
+      ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+      ORDO_API_KEYS: ${ORDO_API_KEYS:-}
+      ORDO_ALLOW_ANON: ${ORDO_ALLOW_ANON:-1}
+    ports: ["8547:8547"]
+    restart: unless-stopped
+
+  auction:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      SERVICE: auction
+      ORDO_AUCTION_PORT: 8548
+      ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+      ORDO_AUCTION_WINDOW_MS: ${ORDO_AUCTION_WINDOW_MS:-200}
+    ports: ["8548:8548"]
+    volumes: ["ordo-data:/app/data"]
+    restart: unless-stopped
+
+  watcher:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      SERVICE: watcher
+      ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+      ORDO_ETH_USD: ${ORDO_ETH_USD:-2250}
+    volumes: ["ordo-data:/app/data"]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      SERVICE: web
+      ORDO_WEB_PORT: 3000
+    ports: ["3000:3000"]
+    volumes: ["ordo-data:/app/data"]
+    restart: unless-stopped
+
+volumes:
+  ordo-data:

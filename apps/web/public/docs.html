@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrdoFi Docs</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .doc { max-width: 780px; margin: 0 auto; padding: 40px 0 80px; }
+    .doc h1 { font-size: 40px; letter-spacing: -0.02em; margin-bottom: 8px; }
+    .doc h2 { font-size: 24px; margin: 44px 0 14px; letter-spacing: -0.01em; }
+    .doc h3 { font-size: 17px; margin: 28px 0 10px; color: var(--accent); }
+    .doc p, .doc li { color: var(--muted); font-size: 15.5px; }
+    .doc ul { margin: 12px 0 12px 22px; }
+    .doc .code { margin: 14px 0; color: #c9d1d9; }
+    .doc table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+    .doc th, .doc td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+    .doc th { color: var(--text); }
+    .doc td { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+    .pill { display:inline-block; font-family: var(--mono); font-size: 12px; padding: 2px 8px; border-radius: 5px; background: var(--accent-glow); color: var(--accent); }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#43e08f" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#43e08f"/></svg> OrdoFi</a>
+      <div class="nav-links"><a href="/">Home</a><a href="#quickstart">Quickstart</a><a href="#rpc">Gateway API</a><a href="#searcher">Searcher API</a></div>
+    </div>
+  </nav>
+
+  <div class="wrap doc">
+    <h1>OrdoFi Documentation</h1>
+    <p>The execution layer for Robinhood Chain (Arbitrum Nitro L2, chain ID 4663).</p>
+
+    <h2 id="quickstart">Quickstart</h2>
+    <div class="code">
+<span class="c"># clone & install</span>
+npm install
+
+<span class="c"># 1. measure MEV on the chain</span>
+npm run watcher        <span class="c"># follows the head, writes data/*.ndjson</span>
+npm run report         <span class="c"># USD-denominated report → data/report.json</span>
+
+<span class="c"># 2. run the smart RPC gateway</span>
+npm run gateway        <span class="c"># :8547</span>
+
+<span class="c"># 3. run the order-flow auction</span>
+npm run auction        <span class="c"># :8548</span>
+
+<span class="c"># 4. serve the site</span>
+npm run web            <span class="c"># :3000</span>
+    </div>
+
+    <h2 id="rpc">Gateway API <span class="pill">:8547</span></h2>
+    <p>A drop-in JSON-RPC endpoint. Point any wallet, bot, or app at it. Standard <code>eth_*</code> methods pass through to the chain; OrdoFi adds protection and extensions. Authenticate with an <code>x-api-key</code> header.</p>
+
+    <h3>eth_sendRawTransaction <span class="pill">protected</span></h3>
+    <p>The transaction is simulated from the recovered sender first. If it would revert, it is rejected with code <code>-32000</code> and never reaches the sequencer — so you don't pay gas for a guaranteed failure. Otherwise it forwards normally and returns the tx hash.</p>
+
+    <h3>ordo_simulate</h3>
+    <p>Simulate a raw signed transaction without sending it. Returns <code>{ ok, revertReason?, from, to }</code>.</p>
+    <div class="code">
+curl -X POST http://localhost:8547 <span class="k">\</span>
+  -H <span class="s">'x-api-key: YOUR_KEY'</span> -H <span class="s">'content-type: application/json'</span> <span class="k">\</span>
+  -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"ordo_simulate","params":["0x02f8..."]}'</span>
+    </div>
+
+    <h3>ordo_sendBundle</h3>
+    <p>Submit up to 10 transactions to be sequenced back-to-back. Every tx is simulated first; if any would revert, the whole bundle is rejected. Params: <code>{ txs: [rawTx, ...] }</code>.</p>
+    <p style="color:#8a909a;font-size:13px;"><strong>Ordering guarantee:</strong> best-effort on a first-come-first-served chain — transactions are fired in the same tick to minimize the gap at the sequencer. Enforced atomicity requires sequencer integration (Phase 3) and is documented as such in the response.</p>
+
+    <h3>Operational endpoints</h3>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Returns</th></tr>
+      <tr><td>GET</td><td>/health</td><td>status, upstream, uptime</td></tr>
+      <tr><td>GET</td><td>/metrics</td><td>Prometheus text</td></tr>
+      <tr><td>GET</td><td>/metrics.json</td><td>counters + latency percentiles</td></tr>
+    </table>
+
+    <h2 id="searcher">Searcher API <span class="pill">:8548</span></h2>
+    <p>Connect over WebSocket to <code>ws://host:8548/searcher</code> to receive order-flow opportunities and bid on backrun rights.</p>
+    <div class="code">
+<span class="c">// on connect you receive:</span>
+{ <span class="k">"type"</span>: <span class="s">"welcome"</span>, <span class="k">"auctionWindowMs"</span>: 200, <span class="k">"swapTopics"</span>: {...} }
+
+<span class="c">// for each user transaction OrdoFi is holding:</span>
+{ <span class="k">"type"</span>: <span class="s">"opportunity"</span>, <span class="k">"opportunity"</span>: {
+    <span class="k">"id"</span>: <span class="s">"…"</span>, <span class="k">"hint"</span>: { <span class="k">"poolsTouched"</span>: […], <span class="k">"selector"</span>: <span class="s">"0x…"</span>, <span class="k">"value"</span>: <span class="s">"0x0"</span> } } }
+
+<span class="c">// respond with a sealed bid before the window closes:</span>
+{ <span class="k">"type"</span>: <span class="s">"bid"</span>, <span class="k">"opportunityId"</span>: <span class="s">"…"</span>, <span class="k">"searcher"</span>: <span class="s">"0xyou"</span>,
+  <span class="k">"bidWei"</span>: <span class="s">"1000000000000000"</span>, <span class="k">"backrunRawTx"</span>: <span class="s">"0x02f8…"</span> }
+    </div>
+    <p>Auctions are sealed-bid, second-price: the highest bidder wins and pays the second-highest price. The winning backrun is dispatched immediately after the user transaction.</p>
+
+    <h2 id="submit">Submitting order flow <span class="pill">POST /submit</span></h2>
+    <p>Wallets and apps route user transactions through the auction to earn rebates:</p>
+    <div class="code">
+curl -X POST http://localhost:8548/submit <span class="k">\</span>
+  -H <span class="s">'content-type: application/json'</span> <span class="k">\</span>
+  -d <span class="s">'{"rawTx":"0x02f8…","originLabel":"v4.fun","rebateAddress":"0xapp…"}'</span>
+    </div>
+    <p>Response includes the auction result and the rebate ledger entry (user / app / protocol split). Check accrued rebates at <code>GET /stats</code>.</p>
+
+    <h2>Rebate split</h2>
+    <p>Configurable via env; defaults route the majority to users:</p>
+    <table>
+      <tr><th>Recipient</th><th>Default</th><th>Env</th></tr>
+      <tr><td>User</td><td>90%</td><td>ORDO_REBATE_USER</td></tr>
+      <tr><td>App (order-flow originator)</td><td>5%</td><td>ORDO_REBATE_APP</td></tr>
+      <tr><td>Protocol</td><td>5%</td><td>ORDO_REBATE_PROTOCOL</td></tr>
+    </table>
+
+    <p style="margin-top:40px;color:#6b7280;font-size:13px;">Not affiliated with Robinhood Markets, Inc.</p>
+  </div>
+</body>
+</html>
