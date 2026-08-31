@@ -17,6 +17,33 @@ const MIME = {
   ".json": "application/json",
 };
 
+function recentArbs(n) {
+  const f = join(DATA_DIR, "arbs.ndjson");
+  if (!existsSync(f)) return [];
+  const lines = readFileSync(f, "utf8").trim().split("\n").filter(Boolean);
+  return lines
+    .slice(-n)
+    .reverse()
+    .map((l) => {
+      try {
+        return JSON.parse(l);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+async function auctionStats() {
+  const url = process.env.ORDO_AUCTION_URL ?? "http://localhost:8548";
+  try {
+    const r = await fetch(`${url}/stats`, { signal: AbortSignal.timeout(1500) });
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
 const SETTLED_EVENT = parseAbiItem(
   "event Settled(bytes32 indexed opportunityId, address indexed searcher, uint256 amount, uint256 userAmt, uint256 appAmt, uint256 protocolAmt, address user, address app)",
 );
@@ -101,9 +128,48 @@ createServer(async (req, res) => {
     return;
   }
 
+  if (path === "/api/arbs/recent") {
+    const n = Math.min(200, Number(url.searchParams.get("n") ?? 40));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(recentArbs(n)));
+    return;
+  }
+
+  if (path === "/api/auction") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(await auctionStats()));
+    return;
+  }
+
+  if (path === "/api/explorer") {
+    res.writeHead(200, { "content-type": "application/json" });
+    const reportFile = join(DATA_DIR, "report.json");
+    const report = existsSync(reportFile) ? JSON.parse(readFileSync(reportFile, "utf8")) : null;
+    let onchain = { deployed: false };
+    try {
+      onchain = await onchainStats(SETTLEMENT);
+    } catch {
+      /* ignore */
+    }
+    res.end(
+      JSON.stringify({
+        report,
+        recentArbs: recentArbs(40),
+        auction: await auctionStats(),
+        onchain,
+        generatedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
   if (path === "/") path = "/index.html";
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
+  if (path === "/explorer") path = "/explorer.html";
+  if (path === "/searchers") path = "/searchers.html";
+  if (path === "/apps") path = "/apps.html";
+  if (path === "/operators") path = "/operators.html";
   const file = join(ROOT, path);
   if (!file.startsWith(ROOT) || !existsSync(file)) {
     res.writeHead(404).end("not found");

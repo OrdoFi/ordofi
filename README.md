@@ -31,7 +31,7 @@ current numbers against your own data.
 | `apps/watcher` | — | Follows the head, detects swaps + atomic arbs, writes NDJSON, and generates a USD-denominated MEV report |
 | `apps/gateway` | 8547 | Smart JSON-RPC: `eth_*` passthrough, revert-protected sends, `ordo_simulate`, `ordo_sendBundle`, API keys, rate limits, `/health` + `/metrics` |
 | `apps/auction` | 8548 | Backrun order-flow auction: user `/submit`, searcher WS feed, sealed-bid second-price auctioneer, rebate ledger |
-| `apps/web` | 3000 | Landing page, docs, and live on-chain settlement **dashboard** (`/dashboard`) |
+| `apps/web` | 3000 | Full site: landing, **Explorer** (`/explorer`, live network monitoring), onboarding for `/searchers` `/apps` `/operators`, `/docs`, and on-chain `/dashboard` |
 | `apps/searcher-bot` | — | Reference searcher bot: connects to the auction, signs EIP-712 bids, submits backruns |
 | `packages/sdk` | — | `@ordofi/sdk` — searcher/app SDK (bid signing, bond management, order-flow submission) |
 | `contracts` | — | `OrdoSettlement.sol` — on-chain bonded settlement for the auction (Foundry) |

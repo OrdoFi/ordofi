@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrdoFi for Apps &amp; Wallets</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#43e08f" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#43e08f"/></svg> OrdoFi</a>
+      <div class="nav-links">
+        <a href="/">Home</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
+        <a href="/apps">Apps</a><a href="/operators">Operators</a><a href="/docs">Docs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap doc">
+    <h1>OrdoFi for Apps &amp; Wallets</h1>
+    <p class="lead">Your users' swaps generate MEV that today leaks entirely to bots. Route their transactions through OrdoFi and that value flows back to them — and to you.</p>
+
+    <div class="callout">
+      Every swap on Robinhood Chain that moves a price creates a backrun opportunity. Right now a handful of colocated searchers capture all of it. When you route order flow through OrdoFi, that backrun is auctioned and <strong>90% of the proceeds are rebated to your user, 5% to you</strong> as the originating app.
+    </div>
+
+    <h2>Integrate in one call</h2>
+    <p>Instead of broadcasting a signed user transaction to the raw sequencer RPC, submit it to OrdoFi:</p>
+    <div class="code">
+<span class="k">import</span> { submitOrderFlow } <span class="k">from</span> <span class="s">"@ordofi/sdk"</span>;
+
+<span class="k">const</span> { result, rebate } = <span class="k">await</span> submitOrderFlow(<span class="s">"https://auction.ordofi.xyz"</span>, {
+  rawTx,                            <span class="c">// the user's signed transaction</span>
+  originLabel: <span class="s">"your-app"</span>,          <span class="c">// attribution</span>
+  rebateAddress: <span class="s">"0xYourApp…"</span>,      <span class="c">// where your 5% accrues</span>
+});
+    </div>
+    <p>The user transaction is dispatched immediately (never delayed), a backrun is auctioned in parallel, and the rebate split is recorded — claimable on-chain once settlement is live.</p>
+
+    <h2>Or just point your RPC at the gateway</h2>
+    <p>For wallets that don't want to change submission logic, use the OrdoFi gateway as a drop-in RPC. You get free revert protection (transactions that would fail never cost gas) plus the option to opt user flow into the auction.</p>
+    <div class="code">
+<span class="c"># drop-in JSON-RPC with revert protection</span>
+https://rpc.ordofi.xyz    <span class="c"># add header: x-api-key: YOUR_KEY</span>
+    </div>
+
+    <h2>Rebate split</h2>
+    <table>
+      <tr><th>Recipient</th><th>Default</th></tr>
+      <tr><td>Your user</td><td>90%</td></tr>
+      <tr><td>Your app</td><td>5%</td></tr>
+      <tr><td>Protocol</td><td>5%</td></tr>
+    </table>
+
+    <h2>Who this is for</h2>
+    <ul>
+      <li><strong>DEX front-ends</strong> — give traders better effective prices via rebates.</li>
+      <li><strong>Wallets</strong> — a "get paid for your order flow" feature, on by default.</li>
+      <li><strong>Aggregators &amp; bots</strong> — v4.fun, Scalar, and anything routing swaps on Robinhood Chain.</li>
+    </ul>
+
+    <div class="cta-row">
+      <a class="btn" href="/docs#submit">Integration docs</a>
+      <a class="btn ghost" href="/explorer">See live rebates</a>
+    </div>
+    <p style="color:#6b7280;font-size:13px;">Not affiliated with Robinhood Markets, Inc.</p>
+  </div>
+</body>
+</html>

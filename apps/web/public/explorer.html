@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrdoFi Explorer — Real-time Robinhood Chain execution</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .ex { padding: 32px 0 80px; }
+    .ex h1 { font-size: 32px; letter-spacing: -0.02em; }
+    .ex .sub { color: var(--muted); margin: 6px 0 28px; }
+    .statgrid { display: grid; grid-template-columns: repeat(6,1fr); gap: 12px; margin-bottom: 28px; }
+    .st { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+    .st .v { font-size: 22px; font-weight: 800; color: var(--accent); font-family: var(--mono); }
+    .st .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .cols { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; }
+    .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .panel h3 { font-size: 15px; margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; }
+    .panel h3 .tag { font-family: var(--mono); font-size: 11px; color: var(--muted); font-weight: 400; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    td { color: var(--text); font-family: var(--mono); font-size: 12px; }
+    td.muted { color: var(--muted); }
+    .feed-row { animation: flash .8s ease-out; }
+    @keyframes flash { from { background: var(--accent-glow); } to { background: transparent; } }
+    .live { display:inline-block; width:8px; height:8px; border-radius:50%; background: var(--accent); margin-right:8px; animation: pulse 2s infinite; vertical-align: middle;}
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .pill { font-family: var(--mono); font-size: 11px; padding: 2px 7px; border-radius: 5px; background: var(--accent-glow); color: var(--accent); }
+    .pilloff { background: #2a1e1e; color: #e0864a; }
+    @media (max-width: 900px){ .statgrid{grid-template-columns:repeat(3,1fr)} .cols{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#43e08f" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#43e08f"/></svg> OrdoFi</a>
+      <div class="nav-links">
+        <a href="/">Home</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
+        <a href="/apps">Apps</a><a href="/operators">Operators</a><a href="/docs">Docs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap ex">
+    <h1><span class="live"></span>OrdoFi Explorer</h1>
+    <div class="sub">Real-time execution activity on Robinhood Chain — arbitrage, searchers, auctions, and on-chain settlement. <span id="updated" class="tag"></span></div>
+
+    <div class="statgrid" id="stats"></div>
+
+    <div class="cols">
+      <div>
+        <div class="panel">
+          <h3>Live arbitrage feed <span class="tag">latest atomic arbs observed</span></h3>
+          <table><thead><tr><th>Block</th><th>Searcher</th><th>Pools</th><th>Profit token</th></tr></thead>
+          <tbody id="feed"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table>
+        </div>
+        <div class="panel">
+          <h3>On-chain settlements <span class="tag" id="settle-tag">reads OrdoSettlement</span></h3>
+          <tbody><table id="settlements"><tr><td class="muted">Loading…</td></tr></table></tbody>
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <h3>Auction <span class="tag" id="auction-state"></span></h3>
+          <table id="auction"><tr><td class="muted">Loading…</td></tr></table>
+        </div>
+        <div class="panel">
+          <h3>Top searchers <span class="tag">by arb count</span></h3>
+          <table><tbody id="searchers"><tr><td class="muted">Loading…</td></tr></tbody></table>
+        </div>
+        <div class="panel">
+          <h3>Most-contested pools <span class="tag">by arb frequency</span></h3>
+          <table><tbody id="pools"><tr><td class="muted">Loading…</td></tr></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const short = a => a ? a.slice(0,8)+'…'+a.slice(-4) : '—';
+    const num = n => Number(n||0).toLocaleString();
+    let lastTop = null;
+
+    function stat(v,l){ return '<div class="st"><div class="v">'+v+'</div><div class="l">'+l+'</div></div>'; }
+
+    async function tick(){
+      let d;
+      try { d = await (await fetch('/api/explorer')).json(); } catch { return; }
+      const t = d.report?.totals ?? {};
+      const oc = d.onchain ?? {};
+      const auc = d.auction?.stats ?? {};
+
+      document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+      document.getElementById('stats').innerHTML =
+        stat(num(t.arbs), 'Atomic arbs observed')
+        + stat(num(t.uniqueSearchers), 'Unique searchers')
+        + stat(num(t.uniquePools), 'Pools tracked')
+        + stat(num(t.swaps), 'Swaps analyzed')
+        + stat(oc.deployed ? '$'+Number(oc.totals.totalSettledEth*2250).toLocaleString(undefined,{maximumFractionDigits:0}) : '—', 'Settled on-chain')
+        + stat(oc.deployed ? Number(oc.totals.totalBondedEth).toFixed(2)+' Ξ' : '—', 'Bonded by searchers');
+
+      // live arb feed
+      const feed = d.recentArbs ?? [];
+      document.getElementById('feed').innerHTML = feed.length ? feed.map(a =>
+        '<tr class="feed-row"><td>'+a.block+'</td><td class="muted">'+short(a.sender)+'</td><td>'+a.poolsTouched.length+'</td><td class="muted">'+(a.profitIsQuote?'<span class="pill">quote</span> ':'')+short(a.profitToken)+'</td></tr>'
+      ).join('') : '<tr><td colspan="4" class="muted">No arbs in data yet — run the watcher.</td></tr>';
+
+      // auction
+      const connected = d.auction?.connectedSearchers ?? 0;
+      document.getElementById('auction-state').innerHTML = d.auction ? '<span class="pill">online · '+connected+' searchers</span>' : '<span class="pill pilloff">offline</span>';
+      document.getElementById('auction').innerHTML = d.auction ?
+        '<tr><td class="muted">Opportunities</td><td>'+num(auc.opportunities)+'</td></tr>'
+        +'<tr><td class="muted">Bids</td><td>'+num(auc.bids)+'</td></tr>'
+        +'<tr><td class="muted">Dispatched</td><td>'+num(auc.dispatched)+'</td></tr>'
+        +'<tr><td class="muted">Backruns landed</td><td>'+num(auc.backruns)+'</td></tr>'
+        : '<tr><td class="muted">Auction service offline</td></tr>';
+
+      // leaderboards from report
+      const searchers = d.report?.topSearchers ?? [];
+      document.getElementById('searchers').innerHTML = searchers.length ? searchers.slice(0,8).map(([a,n],i)=>
+        '<tr><td class="muted">'+(i+1)+'</td><td>'+short(a)+'</td><td>×'+n+'</td></tr>').join('') : '<tr><td class="muted">—</td></tr>';
+      const pools = d.report?.topPools ?? [];
+      document.getElementById('pools').innerHTML = pools.length ? pools.slice(0,8).map(([a,n],i)=>
+        '<tr><td class="muted">'+(i+1)+'</td><td>'+short(a)+'</td><td>×'+n+'</td></tr>').join('') : '<tr><td class="muted">—</td></tr>';
+
+      // on-chain settlements
+      const s = document.getElementById('settlements');
+      if (oc.deployed && oc.recent?.length) {
+        s.innerHTML = '<tr><th>Block</th><th>Searcher</th><th>Amount</th><th>User rebate</th></tr>' + oc.recent.map(r=>
+          '<tr><td>'+r.block+'</td><td class="muted">'+short(r.searcher)+'</td><td>'+Number(r.amountEth).toFixed(5)+' Ξ</td><td class="muted">'+Number(r.userEth).toFixed(5)+'</td></tr>').join('');
+        document.getElementById('settle-tag').textContent = oc.address.slice(0,10)+'…';
+      } else {
+        s.innerHTML = '<tr><td class="muted">'+(oc.deployed ? 'No settlements in scanned window.' : 'Settlement contract not deployed yet — deploy to see live rebates here.')+'</td></tr>';
+      }
+    }
+    tick(); setInterval(tick, 4000);
+  </script>
+</body>
+</html>

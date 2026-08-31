@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrdoFi for Searchers</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#43e08f" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#43e08f"/></svg> OrdoFi</a>
+      <div class="nav-links">
+        <a href="/">Home</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
+        <a href="/apps">Apps</a><a href="/operators">Operators</a><a href="/docs">Docs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap doc">
+    <h1>OrdoFi for Searchers</h1>
+    <p class="lead">Bid on backrun opportunities across Robinhood Chain's DEXs through a single sealed-bid auction — instead of racing raw latency to the sequencer.</p>
+
+    <div class="callout">
+      Robinhood Chain orders transactions first-come-first-served with no public mempool. Today MEV is a pure latency race won by whoever is closest to the sequencer in Ashburn/Ohio. OrdoFi turns it into a fair auction: you bid for the backrun right, and the winner's transaction is dispatched immediately after the user's — no colocation arms race required.
+    </div>
+
+    <h2>How it works</h2>
+    <ol>
+      <li>Connect to the auction over WebSocket and receive redacted opportunity hints (which pools a pending user tx will touch).</li>
+      <li>Simulate the backrun, decide your max bid, and submit a sealed bid with an EIP-712 signature authorizing payment up to that amount.</li>
+      <li>Highest bidder wins and pays the <em>second</em>-highest price. Your backrun is dispatched right after the user transaction.</li>
+      <li>The clearing price is debited from your on-chain bond; 90% is rebated to the user, 5% to the originating app, 5% to the protocol.</li>
+    </ol>
+
+    <h2>Quick start <span class="pill">2 minutes</span></h2>
+    <div class="code">
+<span class="c"># run the reference bot against the auction</span>
+git clone https://github.com/OrdoFi/ordofi &amp;&amp; cd ordofi &amp;&amp; npm install
+SEARCHER_KEY=0xYOUR_KEY \
+ORDO_AUCTION_WS=wss://auction.ordofi.xyz/searcher \
+ORDO_SETTLEMENT_ADDRESS=0xCONTRACT \
+npm run searcher-bot
+    </div>
+
+    <h2>Build your own with the SDK</h2>
+    <div class="code">
+<span class="k">import</span> { OrdoSearcher } <span class="k">from</span> <span class="s">"@ordofi/sdk"</span>;
+
+<span class="k">const</span> searcher = <span class="k">new</span> OrdoSearcher({
+  auctionWsUrl: <span class="s">"wss://auction.ordofi.xyz/searcher"</span>,
+  privateKey: process.env.SEARCHER_KEY,
+  settlementAddress: process.env.ORDO_SETTLEMENT_ADDRESS,
+  onOpportunity: <span class="k">async</span> (opp) =&gt; {
+    <span class="c">// simulate the backrun on opp.hint.poolsTouched,</span>
+    <span class="c">// compute expected profit, bid up to it:</span>
+    <span class="k">return</span> { maxBidWei: 10n ** 15n, backrunRawTx };
+  },
+});
+searcher.connect();
+    </div>
+
+    <h2>Bonding</h2>
+    <p>Bids are backed by an on-chain bond so settlement is trustless. Deposit once; the contract debits winning clearing prices and lets you withdraw the rest anytime.</p>
+    <div class="code">
+<span class="k">import</span> { OrdoBond } <span class="k">from</span> <span class="s">"@ordofi/sdk"</span>;
+<span class="k">const</span> bond = <span class="k">new</span> OrdoBond(SEARCHER_KEY, SETTLEMENT_ADDRESS);
+<span class="k">await</span> bond.deposit(<span class="s">"1.0"</span>);   <span class="c">// bond 1 ETH</span>
+<span class="k">await</span> bond.bondOf(address); <span class="c">// check balance</span>
+    </div>
+
+    <div class="callout">
+      <strong>You can never be overcharged.</strong> Every settlement requires your own EIP-712 signature over your bid. The auctioneer can debit at most the amount you signed, and only for an opportunity you actually bid on — enforced on-chain in <code>OrdoSettlement</code>.
+    </div>
+
+    <div class="cta-row">
+      <a class="btn" href="/docs#searcher">Full searcher API</a>
+      <a class="btn ghost" href="/explorer">See live auction activity</a>
+    </div>
+    <p style="color:#6b7280;font-size:13px;">Not affiliated with Robinhood Markets, Inc.</p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrdoFi for Node Operators</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#43e08f" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#43e08f"/></svg> OrdoFi</a>
+      <div class="nav-links">
+        <a href="/">Home</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
+        <a href="/apps">Apps</a><a href="/operators">Operators</a><a href="/docs">Docs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap doc">
+    <h1>OrdoFi for Node Operators</h1>
+    <p class="lead">OrdoFi runs on its own Robinhood Chain infrastructure. Node operators provide the low-latency, trace-capable nodes that power measurement, serving, and — in Phase 3 — verifiable sequencing.</p>
+
+    <h2>Phase 1 — Run an OrdoFi Nitro node <span class="pill">available now</span></h2>
+    <p>A dedicated full node is the backbone of the execution layer. It removes public-RPC rate limits, exposes <code>debug_traceTransaction</code> for honest MEV accounting, and — colocated in AWS us-east-2 next to the sequencer — provides the latency to win first-come-first-served backrun races.</p>
+
+    <h3>Requirements</h3>
+    <ul>
+      <li>AWS us-east-2 (the sequencer's region), recommended r6i.xlarge + gp3 SSD</li>
+      <li>An Ethereum L1 RPC + beacon endpoint (parent chain)</li>
+      <li>Robinhood Chain chain-info JSON (published in their "Run a full node" docs)</li>
+    </ul>
+
+    <h3>Build &amp; run</h3>
+    <div class="code">
+git clone https://github.com/OrdoFi/ordofi &amp;&amp; cd ordofi/deploy/nitro-node
+<span class="c"># drop Robinhood's chain-info.json here, then:</span>
+L1_RPC_URL=&lt;l1-rpc&gt; L1_BEACON_URL=&lt;l1-beacon&gt; docker compose up -d
+
+<span class="c"># verify RPC + tracing are live</span>
+curl -s -X POST localhost:8547 -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+    </div>
+    <p>The node runs <code>offchainlabs/nitro-node</code> in archive mode with <code>--http.api=net,web3,eth,debug,arb</code>. Point the gateway, auction, watcher, and trace analyzer at it via <code>ORDO_RPC_URL</code>.</p>
+
+    <div class="callout">
+      Once your node exposes <code>debug_traceTransaction</code>, run <code>npm run trace</code> to compute true per-transaction MEV profit via prestate-diff — the honest USD numbers the public RPC can't provide.
+    </div>
+
+    <h2>Phase 3 — Verifiable sequencing operators <span class="pill">waitlist</span></h2>
+    <p>The endgame mirrors what makes execution layers credible: operators running Trusted Execution Environments (TEEs) that keep transaction ordering private until execution and produce cryptographic attestations that sequencing followed the rules. This requires integration with Robinhood's sequencing infrastructure and is on the Phase 3 roadmap.</p>
+    <ul>
+      <li>Operate secure enclaves on specialized hardware</li>
+      <li>Maintain pre-execution privacy with verifiable, attestable ordering</li>
+      <li>Contribute to a geographically distributed, trust-minimized network</li>
+      <li>Earn fees for providing secure sequencing/computation</li>
+    </ul>
+
+    <div class="cta-row">
+      <a class="btn" href="mailto:operators@ordofi.xyz?subject=OrdoFi%20Node%20Operator%20Waitlist">Join the operator waitlist</a>
+      <a class="btn ghost" href="/docs">Read the docs</a>
+    </div>
+    <p style="color:#6b7280;font-size:13px;">Not affiliated with Robinhood Markets, Inc.</p>
+  </div>
+</body>
+</html>
