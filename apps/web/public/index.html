@@ -4,16 +4,17 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OrdoFi — The Execution Layer for Robinhood Chain</title>
-  <meta name="description" content="Private transaction submission, revert protection, backrun auctions, and MEV revenue sharing for Robinhood Chain." />
+  <meta name="description" content="Private submission, revert protection, backrun auctions, and MEV revenue sharing for Robinhood Chain. The execution layer for a single-sequencer Arbitrum L2." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <nav>
     <div class="wrap">
       <a class="logo" href="/">
-        <svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#43e08f" stroke-width="2"/><path d="M16 7v18M9 12l14 8M23 12L9 20" stroke="#43e08f" stroke-width="1.6" opacity="0.5"/><circle cx="16" cy="16" r="3.5" fill="#43e08f"/></svg>
+        <svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#4ee6a0" stroke-width="2"/><path d="M16 7v18M9 12l14 8M23 12L9 20" stroke="#4ee6a0" stroke-width="1.6" opacity="0.45"/><circle cx="16" cy="16" r="3.5" fill="#4ee6a0"/></svg>
         OrdoFi
       </a>
       <div class="nav-links">
@@ -33,8 +34,8 @@
       <h1>The execution layer for<br /><span class="grad">Robinhood Chain</span></h1>
       <p class="sub">Robinhood Chain has the markets. OrdoFi is the missing execution layer — private submission, revert protection, backrun auctions, and MEV revenue routed back to the apps and users who create it.</p>
       <div class="cta">
-        <a class="btn" href="/docs#quickstart">Start building</a>
-        <a class="btn ghost" href="#data">See live MEV data</a>
+        <a class="btn" href="/explorer">View live Explorer</a>
+        <a class="btn ghost" href="/docs#quickstart">Start building</a>
       </div>
     </div>
   </header>
@@ -51,55 +52,33 @@
   <section id="product">
     <div class="wrap">
       <div class="section-head">
-        <h2>Built for a sequencer chain</h2>
-        <p>Robinhood Chain has no public mempool and orders transactions first-come-first-served. MEV here is a latency race, not a fee auction. OrdoFi is built for exactly that.</p>
+        <div class="eyebrow">Built for a sequencer chain</div>
+        <h2>Execution infrastructure, not a Solana copy</h2>
+        <p>Robinhood Chain has no public mempool and orders transactions first-come-first-served. MEV here is a latency race, not a fee auction — and OrdoFi is built for exactly that.</p>
       </div>
       <div class="grid3">
-        <div class="feature">
-          <div class="ico">🛡️</div>
-          <h3>Revert protection</h3>
-          <p>Every transaction is simulated from the recovered sender before it reaches the sequencer. Guaranteed reverts never burn gas.</p>
-        </div>
-        <div class="feature">
-          <div class="ico">🔗</div>
-          <h3>Best-effort bundles</h3>
-          <p>Submit multiple transactions to be sequenced back-to-back from colocated infrastructure. Honest about FCFS limits until sequencer integration.</p>
-        </div>
-        <div class="feature">
-          <div class="ico">⚡</div>
-          <h3>Backrun auctions</h3>
-          <p>Order flow is auctioned to searchers in a sealed-bid, second-price auction. The value your users create comes back to you.</p>
-        </div>
-        <div class="feature">
-          <div class="ico">💸</div>
-          <h3>Revenue sharing</h3>
-          <p>Auction proceeds split between users, the app that routed the flow, and the protocol. Rebates attributed per API key.</p>
-        </div>
-        <div class="feature">
-          <div class="ico">🔍</div>
-          <h3>Searcher infrastructure</h3>
-          <p>A live opportunity feed and simulation APIs for searchers already racing this chain. Colocated in the sequencer's region.</p>
-        </div>
-        <div class="feature">
-          <div class="ico">📊</div>
-          <h3>Verifiable measurement</h3>
-          <p>We measure extractable value from public chain data continuously — so pricing and revenue share rest on real numbers.</p>
-        </div>
+        <div class="feature"><div class="ico">🛡️</div><h3>Revert protection</h3><p>Every transaction is simulated from the recovered sender before it reaches the sequencer. Guaranteed reverts never burn gas.</p></div>
+        <div class="feature"><div class="ico">🔗</div><h3>Transaction bundles</h3><p>Submit multiple transactions to be sequenced back-to-back from colocated infrastructure — with honest FCFS semantics until sequencer integration.</p></div>
+        <div class="feature"><div class="ico">⚡</div><h3>Backrun auctions</h3><p>Order flow is auctioned to searchers in a sealed-bid, second-price auction. The value your users create comes back to you.</p></div>
+        <div class="feature"><div class="ico">💸</div><h3>MEV revenue sharing</h3><p>Auction proceeds split on-chain between the user, the app that routed the flow, and the protocol — trustlessly, via the settlement contract.</p></div>
+        <div class="feature"><div class="ico">🔎</div><h3>Searcher infrastructure</h3><p>A live opportunity feed, simulation APIs, and an SDK for searchers already racing this chain. Colocated in the sequencer's region.</p></div>
+        <div class="feature"><div class="ico">📊</div><h3>Verifiable measurement</h3><p>Extractable value measured continuously from chain data, with settlements verifiable on-chain in the Explorer. Real numbers, not promises.</p></div>
       </div>
     </div>
   </section>
 
-  <section id="how" style="background: var(--bg-elev); border-block: 1px solid var(--border);">
+  <section id="how" class="section-alt">
     <div class="wrap">
       <div class="section-head">
-        <h2>How the auction works</h2>
-        <p>A MEV-Share-style order-flow auction adapted for a single-sequencer chain.</p>
+        <div class="eyebrow">How it works</div>
+        <h2>A sealed-bid order-flow auction</h2>
+        <p>MEV-Share-style order flow, adapted for a single-sequencer chain — the user's transaction is never delayed.</p>
       </div>
       <div class="steps">
-        <div class="step"><div class="n">1</div><h4>Submit</h4><p>A wallet or app sends a user transaction to the OrdoFi gateway instead of the raw sequencer.</p></div>
+        <div class="step"><div class="n">1</div><h4>Submit</h4><p>A wallet or app routes a user transaction to OrdoFi instead of the raw sequencer.</p></div>
         <div class="step"><div class="n">2</div><h4>Auction</h4><p>A redacted hint is broadcast to searchers, who bid sealed for the right to backrun it.</p></div>
-        <div class="step"><div class="n">3</div><h4>Dispatch</h4><p>The user tx and the winning backrun fire back-to-back from colocated infra. The user tx is never delayed.</p></div>
-        <div class="step"><div class="n">4</div><h4>Rebate</h4><p>The winning bid is split between the user, the app, and the protocol, attributed automatically.</p></div>
+        <div class="step"><div class="n">3</div><h4>Dispatch</h4><p>The user tx and the winning backrun fire back-to-back from colocated infra.</p></div>
+        <div class="step"><div class="n">4</div><h4>Rebate</h4><p>The clearing price is split on-chain: 90% to the user, 5% to the app, 5% to the protocol.</p></div>
       </div>
     </div>
   </section>
@@ -107,37 +86,92 @@
   <section id="data">
     <div class="wrap">
       <div class="section-head">
-        <h2>Live MEV on Robinhood Chain</h2>
-        <p>Measured directly from mainnet by the OrdoFi watcher. This is the value being extracted today — none of it currently shared with users.</p>
+        <div class="eyebrow">Live from mainnet</div>
+        <h2>MEV on Robinhood Chain, right now</h2>
+        <p>Measured directly from mainnet by the OrdoFi watcher — the value being extracted today, none of it currently shared with users.</p>
       </div>
       <div class="code" id="report-box">Loading live measurement…</div>
+      <div style="text-align:center; margin-top:24px;"><a class="btn ghost" href="/explorer">Open the live Explorer →</a></div>
     </div>
   </section>
 
-  <section id="roadmap" style="background: var(--bg-elev); border-block: 1px solid var(--border);">
+  <section id="ecosystem" class="section-alt">
     <div class="wrap">
       <div class="section-head">
-        <h2>Roadmap</h2>
-        <p>Start permissionless. Integrate with the sequencer over time.</p>
+        <div class="eyebrow">The order flow</div>
+        <h2>Built for the Robinhood Chain ecosystem</h2>
+        <p>Wallets, DEXs, and apps whose users generate the flow OrdoFi routes and rewards.</p>
+      </div>
+      <div class="eco">
+        <div class="chip"><span class="dot"></span>Arcus</div>
+        <div class="chip"><span class="dot"></span>Lighter</div>
+        <div class="chip"><span class="dot"></span>Uniswap</div>
+        <div class="chip"><span class="dot"></span>v4.fun</div>
+        <div class="chip"><span class="dot"></span>Scalar</div>
+        <div class="chip"><span class="dot"></span>Your app</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="roadmap">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Roadmap</div>
+        <h2>Start permissionless. Integrate with the sequencer.</h2>
       </div>
       <div class="roadmap">
-        <div class="phase live"><span class="badge">LIVE</span><div><h4>Phase 1 — Execution services</h4><p>Smart RPC gateway with revert protection, best-effort bundles, MEV measurement, and the backrun order-flow auction. No permission required.</p></div></div>
-        <div class="phase next"><span class="badge">NEXT</span><div><h4>Phase 2 — Colocation & settlement</h4><p>Own Nitro node colocated in us-east-2, sub-block latency from the sequencer feed, and an on-chain settlement contract for trustless rebates.</p></div></div>
+        <div class="phase live"><span class="badge">LIVE</span><div><h4>Phase 1 — Execution services</h4><p>Smart RPC gateway with revert protection, transaction bundles, MEV measurement, the backrun order-flow auction, and an on-chain settlement contract. No permission required.</p></div></div>
+        <div class="phase next"><span class="badge">NEXT</span><div><h4>Phase 2 — Colocation &amp; scale</h4><p>Own Nitro node colocated in us-east-2, sub-block latency from the sequencer feed, call-trace MEV accounting, and searcher/app onboarding at scale.</p></div></div>
         <div class="phase future"><span class="badge">FUTURE</span><div><h4>Phase 3 — Sequencer integration</h4><p>Verifiable ordering attestations and programmable sequencing with Robinhood. Timeboost-style express lanes and true atomic bundles.</p></div></div>
       </div>
     </div>
   </section>
 
-  <footer>
+  <section>
     <div class="wrap">
-      <div>
-        <div class="logo" style="font-size:16px;">OrdoFi</div>
-        <div class="disclaimer">OrdoFi Labs. Not affiliated with Robinhood Markets, Inc. Ordo — Latin: order, sequence. Measurement figures are derived from public on-chain data and are indicative, not audited.</div>
+      <div class="cta-banner">
+        <h2>Build the execution layer with us</h2>
+        <p>Route order flow, run a searcher, or operate a node. OrdoFi is open and permissionless.</p>
+        <div class="cta" style="justify-content:center;">
+          <a class="btn" href="/docs#quickstart">Start building</a>
+          <a class="btn ghost" href="/explorer">See it live</a>
+        </div>
       </div>
-      <div class="nav-links" style="display:flex;">
-        <a href="/docs">Docs</a>
-        <a href="#data">Data</a>
-        <a href="https://www.jito.network/bam/" target="_blank" rel="noopener">Inspiration</a>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#4ee6a0" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#4ee6a0"/></svg> OrdoFi</div>
+          <p>The execution layer for Robinhood Chain. Private transactions, backrun auctions, and MEV revenue back to the apps and users who create it.</p>
+        </div>
+        <div class="footer-col">
+          <h5>Product</h5>
+          <a href="/explorer">Explorer</a>
+          <a href="/dashboard">Settlement dashboard</a>
+          <a href="/docs">Documentation</a>
+        </div>
+        <div class="footer-col">
+          <h5>Participate</h5>
+          <a href="/searchers">For searchers</a>
+          <a href="/apps">For apps &amp; wallets</a>
+          <a href="/operators">For node operators</a>
+        </div>
+        <div class="footer-col">
+          <h5>Resources</h5>
+          <a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a>
+          <a href="/docs#quickstart">Quickstart</a>
+          <a href="/docs#searcher">API reference</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <div class="disclaimer">© 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc. <em>Ordo</em> — Latin: order, sequence. Measurement figures are derived from public on-chain data and are indicative, not audited.</div>
+        <div class="socials">
+          <a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a>
+          <a href="/docs">Docs</a>
+        </div>
       </div>
     </div>
   </footer>
@@ -145,7 +179,7 @@
   <script>
     fetch('/api/report').then(r => r.json()).then(rep => {
       if (rep.error || !rep.totals) { document.getElementById('report-box').textContent = 'No measurement data yet — run: npm run watcher && npm run report'; return; }
-      const t = rep.totals, fmt = n => n.toLocaleString();
+      const t = rep.totals, fmt = n => Number(n).toLocaleString();
       document.getElementById('s-arbs').textContent = fmt(t.arbs);
       document.getElementById('s-searchers').textContent = fmt(t.uniqueSearchers);
       document.getElementById('s-pools').textContent = fmt(t.uniquePools);
@@ -161,10 +195,9 @@
         '<span class="k">swaps_analyzed</span>         ' + fmt(t.swaps),
         '',
         '<span class="k">arbs_per_day</span>           <span class="s">' + num(rep.perDay.arbs) + '</span> <span class="c">extrapolated</span>',
-        '<span class="k">swaps_per_day</span>          <span class="s">' + num(rep.perDay.arbs && rep.window.spanHours ? t.swaps / rep.window.spanHours * 24 : 0) + '</span> <span class="c">extrapolated</span>',
         '',
-        '<span class="c"># extractable value in USD requires call-trace attribution</span>',
-        '<span class="c"># (Phase 1b). Arb count and competition above are exact.</span>',
+        '<span class="c"># USD extractable value requires call-trace attribution (Phase 1b).</span>',
+        '<span class="c"># Arb count and competition above are exact, measured on-chain.</span>',
       ];
       document.getElementById('report-box').innerHTML = lines.join('\n');
     }).catch(() => { document.getElementById('report-box').textContent = 'Measurement endpoint unavailable.'; });
