@@ -7,14 +7,14 @@
   <meta name="description" content="Private submission, revert protection, backrun auctions, and MEV revenue sharing for Robinhood Chain." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <nav>
     <div class="wrap">
       <a class="logo" href="/">
-        <svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="13" stroke="#ffffff" stroke-width="1.5"/><circle cx="16" cy="16" r="3" fill="#4ade80"/></svg>
+        <svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="13" stroke="#e2622e" stroke-width="2"/><circle cx="16" cy="16" r="4" fill="#e2622e"/></svg>
         OrdoFi
       </a>
       <div class="nav-links">
@@ -30,15 +30,71 @@
 
   <header class="hero">
     <div class="wrap">
-      <div class="tag">Robinhood Chain · Arbitrum L2 · Chain ID 4663</div>
-      <h1>The execution layer for Robinhood Chain</h1>
+      <a class="badge-link" href="/explorer">Live on Robinhood Chain · Chain ID 4663 <span class="arrow">→</span></a>
+      <h1>The Execution Layer for Robinhood Chain</h1>
       <p class="sub">Private submission, backrun auctions, and MEV revenue routed back to the apps and users who create it.</p>
       <div class="cta">
-        <a class="btn" href="/explorer">Open Explorer</a>
-        <a class="btn ghost" href="/docs#quickstart">Read the docs</a>
+        <a class="btn" href="/docs#quickstart">Start building</a>
+        <a class="btn ghost" href="/explorer">See it live</a>
+      </div>
+
+      <div class="frame">
+        <span class="ctl"></span><span class="ctr"></span>
+        <svg viewBox="0 0 880 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Isometric diagram of ordered transaction blocks with an auctioned backrun">
+          <g stroke="#e2622e" stroke-width="1.6" stroke-linejoin="round">
+            <!-- bottom plate -->
+            <path d="M160 420 L440 490 L440 506 L160 436 Z" fill="#f7ded1"/>
+            <path d="M720 420 L440 490 L440 506 L720 436 Z" fill="#efd0bf"/>
+            <path d="M440 350 L720 420 L440 490 L160 420 Z" fill="#fffdfa"/>
+            <!-- middle plate -->
+            <path d="M160 260 L440 330 L440 346 L160 276 Z" fill="#f7ded1"/>
+            <path d="M720 260 L440 330 L440 346 L720 276 Z" fill="#efd0bf"/>
+            <path d="M440 190 L720 260 L440 330 L160 260 Z" fill="#fffdfa"/>
+            <!-- top plate -->
+            <path d="M160 100 L440 170 L440 186 L160 116 Z" fill="#f7ded1"/>
+            <path d="M720 100 L440 170 L440 186 L720 116 Z" fill="#efd0bf"/>
+            <path d="M440 30 L720 100 L440 170 L160 100 Z" fill="#fffdfa"/>
+
+            <!-- transaction cubes on the top plate -->
+            <g>
+              <path d="M334 35 L360 50 L334 65 L308 50 Z" fill="#ffffff"/>
+              <path d="M308 50 L334 65 L334 87 L308 72 Z" fill="#f7ded1"/>
+              <path d="M360 50 L334 65 L334 87 L360 72 Z" fill="#efd0bf"/>
+            </g>
+            <g>
+              <path d="M382 59 L408 74 L382 89 L356 74 Z" fill="#ffffff"/>
+              <path d="M356 74 L382 89 L382 111 L356 96 Z" fill="#f7ded1"/>
+              <path d="M408 74 L382 89 L382 111 L408 96 Z" fill="#efd0bf"/>
+            </g>
+            <!-- auctioned backrun (highlighted) -->
+            <g stroke="#c8511f">
+              <path d="M430 83 L456 98 L430 113 L404 98 Z" fill="#e2622e"/>
+              <path d="M404 98 L430 113 L430 135 L404 120 Z" fill="#c8511f"/>
+              <path d="M456 98 L430 113 L430 135 L456 120 Z" fill="#a8410f"/>
+            </g>
+            <g>
+              <path d="M478 107 L504 122 L478 137 L452 122 Z" fill="#ffffff"/>
+              <path d="M452 122 L478 137 L478 159 L452 144 Z" fill="#f7ded1"/>
+              <path d="M504 122 L478 137 L478 159 L504 144 Z" fill="#efd0bf"/>
+            </g>
+          </g>
+          <!-- flow connectors -->
+          <g stroke="#e2622e" stroke-width="1.4" stroke-dasharray="5 7" opacity="0.65">
+            <path d="M440 186 L440 190" />
+            <path d="M440 346 L440 350" />
+            <path d="M770 150 L810 150 L810 300 L770 300" fill="none"/>
+          </g>
+          <g font-family="JetBrains Mono, monospace" font-size="13" fill="#8d857a">
+            <text x="748" y="112">block n</text>
+            <text x="748" y="272">n+1</text>
+            <text x="748" y="432">n+2</text>
+          </g>
+        </svg>
       </div>
     </div>
   </header>
+
+  <div class="ticker"><div class="track" id="ticker-track"><span class="item">connecting to the Robinhood Chain sequencer feed</span></div></div>
 
   <div class="wrap">
     <div class="stats" id="stats">
@@ -49,14 +105,55 @@
     </div>
   </div>
 
-  <div class="ticker"><div class="track" id="ticker-track"><span class="item">connecting to the Robinhood Chain sequencer feed</span></div></div>
+  <section class="section-alt">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">The problem</div>
+        <h2>Your users' trades are being harvested right now</h2>
+        <p>Every price-moving swap on Robinhood Chain creates a backrun opportunity. A crowd of colocated bots competes to capture it — and none of that value reaches the people who created it.</p>
+      </div>
+      <div class="problems">
+        <div class="problem">
+          <div class="pnum">250+</div>
+          <h4>Bots racing the same trade</h4>
+          <p>Hundreds of distinct searcher addresses compete for identical arbitrage, measured live on mainnet. Proximity to the sequencer decides the winner.</p>
+        </div>
+        <div class="problem">
+          <div class="pnum">100%</div>
+          <h4>Captured by the fastest</h4>
+          <p>With first-come-first-served ordering and no public mempool, MEV is a pure latency race. Whoever is closest to the sequencer takes the entire prize.</p>
+        </div>
+        <div class="problem">
+          <div class="pnum">0%</div>
+          <h4>Returned to users</h4>
+          <p>None of the extracted value flows back to the trader whose order created it, or to the app that routed it. OrdoFi changes where that value lands.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
-  <section id="product">
+  <section id="how">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">How it works</div>
+        <h2>Order flow in, rebates out</h2>
+        <p>A sealed-bid auction replaces the latency race. The user's transaction is never delayed.</p>
+      </div>
+      <div class="steps">
+        <div class="step"><div class="n">01</div><h4>Submit</h4><p>A wallet or app routes a signed user transaction to OrdoFi instead of the raw sequencer.</p></div>
+        <div class="step"><div class="n">02</div><h4>Auction</h4><p>A redacted hint goes to searchers, who bid sealed for the right to backrun it.</p></div>
+        <div class="step"><div class="n">03</div><h4>Dispatch</h4><p>The user transaction and the winning backrun fire back-to-back from colocated infrastructure.</p></div>
+        <div class="step"><div class="n">04</div><h4>Settle</h4><p>The clearing price is debited on-chain and split between the user, the app, and the protocol.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="product" class="section-alt">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Products</div>
-        <h2>Execution infrastructure for a single-sequencer chain</h2>
-        <p>Robinhood Chain has no public mempool and orders transactions first-come-first-served. MEV here is a latency race, not a fee auction. OrdoFi is built for that.</p>
+        <h2>Everything the execution layer needs</h2>
+        <p>Four services, all live and permissionless — no cooperation from the sequencer required.</p>
       </div>
       <div class="products">
         <a class="product" href="/docs#rpc">
@@ -87,53 +184,19 @@
     </div>
   </section>
 
-  <section class="section-alt">
-    <div class="wrap">
-      <div class="values">
-        <div class="value">
-          <h4>Better execution.</h4>
-          <p>Transactions that would revert never reach the sequencer, and never cost gas.</p>
-        </div>
-        <div class="value">
-          <h4>Fairer ordering.</h4>
-          <p>A sealed-bid auction replaces the raw latency race that currently decides who captures value.</p>
-        </div>
-        <div class="value">
-          <h4>Shared revenue.</h4>
-          <p>The value your users create is returned to them, instead of kept by the fastest bot.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="how">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="eyebrow">How it works</div>
-        <h2>Order flow in, rebates out</h2>
-      </div>
-      <div class="steps">
-        <div class="step"><div class="n">01</div><h4>Submit</h4><p>A wallet or app routes a user transaction to OrdoFi instead of the raw sequencer.</p></div>
-        <div class="step"><div class="n">02</div><h4>Auction</h4><p>A redacted hint goes to searchers, who bid sealed for the right to backrun it.</p></div>
-        <div class="step"><div class="n">03</div><h4>Dispatch</h4><p>The user transaction and the winning backrun fire back-to-back from colocated infrastructure.</p></div>
-        <div class="step"><div class="n">04</div><h4>Settle</h4><p>The clearing price is debited on-chain and split between the user, the app, and the protocol.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <section id="data" class="section-alt">
+  <section id="data">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Live from mainnet</div>
-        <h2>MEV on Robinhood Chain, right now</h2>
-        <p>Measured directly from mainnet by the OrdoFi watcher — value being extracted today, none of it currently shared with users.</p>
+        <h2>Measured, not marketed</h2>
+        <p>Read directly from Robinhood Chain by the OrdoFi watcher. These are exact on-chain counts, not estimates.</p>
       </div>
       <div class="code" id="report-box">Loading live measurement…</div>
-      <div style="margin-top:28px;"><a class="btn ghost" href="/explorer">Open the live Explorer →</a></div>
+      <div style="text-align:center; margin-top:30px;"><a class="btn ghost" href="/explorer">Open the live Explorer →</a></div>
     </div>
   </section>
 
-  <section id="ecosystem">
+  <section class="section-alt">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Ecosystem</div>
@@ -150,16 +213,51 @@
     </div>
   </section>
 
-  <section id="roadmap" class="section-alt">
+  <section id="roadmap">
     <div class="wrap">
       <div class="section-head">
         <div class="eyebrow">Roadmap</div>
         <h2>Start permissionless. Integrate with the sequencer.</h2>
       </div>
       <div class="roadmap">
-        <div class="phase live"><span class="badge">LIVE</span><div><h4>Execution services</h4><p>Smart RPC gateway with revert protection, transaction bundles, MEV measurement, the backrun order-flow auction, and an on-chain settlement contract. No permission required.</p></div></div>
+        <div class="phase live"><span class="badge">LIVE</span><div><h4>Execution services</h4><p>Smart RPC gateway with revert protection, transaction bundles, MEV measurement, the backrun order-flow auction, and an on-chain settlement contract.</p></div></div>
         <div class="phase next"><span class="badge">NEXT</span><div><h4>Colocation &amp; scale</h4><p>Own Nitro node colocated in us-east-2, sub-block latency from the sequencer feed, call-trace MEV accounting, and searcher and app onboarding at scale.</p></div></div>
         <div class="phase future"><span class="badge">FUTURE</span><div><h4>Sequencer integration</h4><p>Verifiable ordering attestations and programmable sequencing with Robinhood. Timeboost-style express lanes and true atomic bundles.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section-alt">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">FAQ</div>
+        <h2>Everything you need to know</h2>
+      </div>
+      <div class="faq">
+        <details open>
+          <summary>Does routing through OrdoFi delay my users' transactions?</summary>
+          <p>No. The user's transaction is dispatched immediately. The auction runs in parallel inside a 200ms window and never holds the transaction back — the winning backrun simply follows it.</p>
+        </details>
+        <details>
+          <summary>Can OrdoFi or its searchers front-run my transaction?</summary>
+          <p>No. Searchers receive only a redacted hint describing which pools a pending transaction touches — never the raw calldata. Only <em>backrun</em> rights are auctioned, so sandwiches and front-runs aren't possible through OrdoFi.</p>
+        </details>
+        <details>
+          <summary>How do searchers actually pay, and can they be overcharged?</summary>
+          <p>Searchers bond ETH into the OrdoSettlement contract. Every settlement carries the searcher's own EIP-712 signature over their bid, so the auctioneer can debit at most what they authorized, only once per opportunity — enforced on-chain, not by trust.</p>
+        </details>
+        <details>
+          <summary>What happens if the winning backrun fails or reverts?</summary>
+          <p>Nothing changes for the user. The two transactions are independent, so a failed backrun has no effect on the user's trade. Searchers absorb their own failures.</p>
+        </details>
+        <details>
+          <summary>Does this require permission from Robinhood?</summary>
+          <p>Not for what's live today. Phase 1 runs entirely off-sequencer. Deeper integration — verifiable ordering and express lanes — is a later phase that would be built with Robinhood.</p>
+        </details>
+        <details>
+          <summary>What does OrdoFi charge?</summary>
+          <p>5% of auction proceeds. 90% goes to the user whose order created the value and 5% to the app that routed it. The split is enforced by the settlement contract and configurable per deployment.</p>
+        </details>
       </div>
     </div>
   </section>
@@ -181,7 +279,7 @@
     <div class="wrap">
       <div class="footer-grid">
         <div class="footer-brand">
-          <div class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="13" stroke="#ffffff" stroke-width="1.5"/><circle cx="16" cy="16" r="3" fill="#4ade80"/></svg> OrdoFi</div>
+          <div class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="13" stroke="#e2622e" stroke-width="2"/><circle cx="16" cy="16" r="4" fill="#e2622e"/></svg> OrdoFi</div>
           <p>The execution layer for Robinhood Chain. Private transactions, backrun auctions, and MEV revenue back to the apps and users who create it.</p>
         </div>
         <div class="footer-col">
