@@ -7,7 +7,7 @@
   <meta name="description" content="Private submission, revert protection, backrun auctions, and MEV revenue sharing for Robinhood Chain. The execution layer for a single-sequencer Arbitrum L2." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -40,6 +40,8 @@
     </div>
   </header>
 
+  <div class="ticker"><div class="track" id="ticker-track"><span class="item">connecting to Robinhood Chain sequencer feed…</span></div></div>
+
   <div class="wrap">
     <div class="stats" id="stats">
       <div class="stat"><div class="num" id="s-arbs">—</div><div class="lbl">Atomic arbs observed</div></div>
@@ -57,12 +59,12 @@
         <p>Robinhood Chain has no public mempool and orders transactions first-come-first-served. MEV here is a latency race, not a fee auction — and OrdoFi is built for exactly that.</p>
       </div>
       <div class="grid3">
-        <div class="feature deepgreen"><div class="ico">🛡️</div><h3>Revert protection</h3><p>Every transaction is simulated from the recovered sender before it reaches the sequencer. Guaranteed reverts never burn gas.</p></div>
-        <div class="feature mint"><div class="ico">🔗</div><h3>Transaction bundles</h3><p>Submit multiple transactions to be sequenced back-to-back from colocated infrastructure — with honest FCFS semantics until sequencer integration.</p></div>
-        <div class="feature peach"><div class="ico">⚡</div><h3>Backrun auctions</h3><p>Order flow is auctioned to searchers in a sealed-bid, second-price auction. The value your users create comes back to you.</p></div>
-        <div class="feature orange"><div class="ico">💸</div><h3>MEV revenue sharing</h3><p>Auction proceeds split on-chain between the user, the app that routed the flow, and the protocol — trustlessly, via the settlement contract.</p></div>
-        <div class="feature slate"><div class="ico">🔎</div><h3>Searcher infrastructure</h3><p>A live opportunity feed, simulation APIs, and an SDK for searchers already racing this chain. Colocated in the sequencer's region.</p></div>
-        <div class="feature lilac"><div class="ico">📊</div><h3>Verifiable measurement</h3><p>Extractable value measured continuously from chain data, with settlements verifiable on-chain in the Explorer. Real numbers, not promises.</p></div>
+        <div class="feature"><div class="ico">🛡️</div><h3>Revert protection</h3><p>Every transaction is simulated from the recovered sender before it reaches the sequencer. Guaranteed reverts never burn gas.</p></div>
+        <div class="feature"><div class="ico">🔗</div><h3>Transaction bundles</h3><p>Submit multiple transactions to be sequenced back-to-back from colocated infrastructure — with honest FCFS semantics until sequencer integration.</p></div>
+        <div class="feature"><div class="ico">⚡</div><h3>Backrun auctions</h3><p>Order flow is auctioned to searchers in a sealed-bid, second-price auction. The value your users create comes back to you.</p></div>
+        <div class="feature"><div class="ico">💸</div><h3>MEV revenue sharing</h3><p>Auction proceeds split on-chain between the user, the app that routed the flow, and the protocol — trustlessly, via the settlement contract.</p></div>
+        <div class="feature"><div class="ico">🔎</div><h3>Searcher infrastructure</h3><p>A live opportunity feed, simulation APIs, and an SDK for searchers already racing this chain. Colocated in the sequencer's region.</p></div>
+        <div class="feature"><div class="ico">📊</div><h3>Verifiable measurement</h3><p>Extractable value measured continuously from chain data, with settlements verifiable on-chain in the Explorer. Real numbers, not promises.</p></div>
       </div>
     </div>
   </section>
@@ -201,6 +203,19 @@
       ];
       document.getElementById('report-box').innerHTML = lines.join('\n');
     }).catch(() => { document.getElementById('report-box').textContent = 'Measurement endpoint unavailable.'; });
+
+    // Live MEV ticker — recent atomic arbs scrolling under the hero.
+    fetch('/api/explorer').then(r => r.json()).then(d => {
+      const arbs = d.recentArbs || [];
+      const track = document.getElementById('ticker-track');
+      if (!arbs.length) { track.innerHTML = '<span class="item">awaiting live arbitrage from the sequencer feed…</span>'; return; }
+      const short = a => a ? a.slice(0,6)+'…'+a.slice(-4) : '—';
+      const items = arbs.map(a =>
+        '<span class="item">block <b>' + a.block + '</b> · searcher <i>' + short(a.sender) + '</i> · <b>' + a.poolsTouched.length + '</b> pools' + (a.profitIsQuote ? ' · <b>quote profit</b>' : '') + '</span>'
+      );
+      // duplicate the list so the marquee loops seamlessly
+      track.innerHTML = items.join('') + items.join('');
+    }).catch(() => {});
   </script>
 </body>
 </html>
