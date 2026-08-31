@@ -4,3 +4,6 @@ dist/
 .env
 data/
 .DS_Store
+contracts/lib/
+contracts/out/
+contracts/cache/

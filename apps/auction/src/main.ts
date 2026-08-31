@@ -4,14 +4,17 @@ import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseTransaction, type TransactionSerialized } from "viem";
 import { ENDPOINTS, SWAP_TOPICS } from "@ordofi/core";
+import { appendFileSync } from "node:fs";
 import { Auction, toResult } from "./auctioneer.js";
 import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
-import type { Bid, Opportunity } from "./types.js";
+import type { Bid, Opportunity, SettlementRecord } from "./types.js";
 
 const PORT = Number(process.env.ORDO_AUCTION_PORT ?? 8548);
 const UPSTREAM = ENDPOINTS.rpc;
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data");
 const ledger = new RebateLedger(join(DATA_DIR, "rebates.ndjson"));
+const settlementsFile = join(DATA_DIR, "settlements.ndjson");
+const SETTLEMENT_ADDRESS = process.env.ORDO_SETTLEMENT_ADDRESS ?? "";
 
 let upstreamId = 0;
 async function upstream(method: string, params: unknown[]): Promise<any> {
@@ -129,11 +132,34 @@ async function handleSubmit(body: any): Promise<any> {
   const result = toResult(opp, outcome, auction.bidCount, { userTxHash, backrunTxHash });
 
   let ledgerEntry;
+  let settlementRecord: SettlementRecord | null = null;
   if (outcome.winner && outcome.clearingPriceWei > 0n) {
     ledgerEntry = ledger.record(result, outcome.winner, originRebateAddress);
+
+    // Produce a settlement-ready record. Once ORDO_SETTLEMENT_ADDRESS points at
+    // a deployed OrdoSettlement contract and an auctioneer key is configured,
+    // these records are what get submitted on-chain (settle()) to debit the
+    // searcher's bond and credit the user/app/protocol rebate splits.
+    settlementRecord = {
+      opportunityId: opp.id,
+      searcher: outcome.winner.searcher,
+      maxAmountWei: outcome.winner.bidWei,
+      chargeWei: outcome.clearingPriceWei.toString(),
+      user: userTxHash ? opp.originLabel : opp.originLabel, // end-user attribution refined at integration
+      app: originRebateAddress ?? "0x0000000000000000000000000000000000000000",
+      searcherSig: outcome.winner.bidSig,
+      createdAt: Date.now(),
+    };
+    appendFileSync(settlementsFile, JSON.stringify(settlementRecord) + "\n");
   }
 
-  return { result, rebate: ledgerEntry ?? null, userError: userError ?? null };
+  return {
+    result,
+    rebate: ledgerEntry ?? null,
+    settlement: settlementRecord,
+    settlementContract: SETTLEMENT_ADDRESS || null,
+    userError: userError ?? null,
+  };
 }
 
 const server = createServer((req, res) => {
@@ -193,6 +219,7 @@ wss.on("connection", (ws) => {
         searcher: msg.searcher ?? "anon",
         bidWei: String(msg.bidWei ?? "0"),
         backrunRawTx: msg.backrunRawTx ?? "",
+        bidSig: msg.bidSig,
         receivedAt: Date.now(),
       };
       const auction = activeAuctions.get(bid.opportunityId);

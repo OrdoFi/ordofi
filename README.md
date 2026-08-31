@@ -32,6 +32,7 @@ current numbers against your own data.
 | `apps/gateway` | 8547 | Smart JSON-RPC: `eth_*` passthrough, revert-protected sends, `ordo_simulate`, `ordo_sendBundle`, API keys, rate limits, `/health` + `/metrics` |
 | `apps/auction` | 8548 | Backrun order-flow auction: user `/submit`, searcher WS feed, sealed-bid second-price auctioneer, rebate ledger |
 | `apps/web` | 3000 | Landing page + docs, wired to the live report |
+| `contracts` | — | `OrdoSettlement.sol` — on-chain bonded settlement for the auction (Foundry) |
 
 ## Quickstart
 
@@ -77,6 +78,28 @@ curl localhost:8548/stats     # throughput + accrued rebates
 ```
 
 See `apps/web/public/docs.html` (served at `/docs`) for the full API.
+
+## Settlement contract
+
+`contracts/OrdoSettlement.sol` makes the auction economically real: searchers
+bond native ETH, and each winning auction is settled on-chain, debiting the
+searcher's bond and crediting claimable rebates to the user, the app, and the
+protocol. It's **trust-minimized** — every settlement carries the searcher's own
+EIP-712 signature over their bid, so the off-chain auctioneer can never
+over-charge. Second-price aware (searcher signs a max bid, is charged the lower
+clearing price), with replay protection, high-s signature-malleability rejection,
+and reentrancy guards.
+
+```bash
+cd contracts
+forge test              # 18 tests incl. fuzz value-conservation + security guards
+forge script script/Deploy.s.sol --rpc-url robinhood --broadcast \
+  --private-key $DEPLOYER_KEY \
+  --sig "run(address,address,uint16,uint16)" $AUCTIONEER $TREASURY 500 500
+```
+
+The auction service writes settlement-ready records (`data/settlements.ndjson`)
+for every winning auction; set `ORDO_SETTLEMENT_ADDRESS` to submit them on-chain.
 
 ## Design honesty (Phase 1 trade-offs)
 

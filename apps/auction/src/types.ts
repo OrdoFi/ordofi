@@ -28,7 +28,30 @@ export interface Bid {
   bidWei: string;
   /** The signed backrun transaction to run immediately after the user tx. */
   backrunRawTx: string;
+  /**
+   * EIP-712 signature over the OrdoSettlement Bid struct
+   * (searcher, opportunityId, maxAmountWei = bidWei). Makes the bid
+   * settlement-ready: the on-chain contract debits the clearing price from the
+   * searcher's bond using this signature as proof of authorization. Optional
+   * until on-chain settlement is enabled.
+   */
+  bidSig?: string;
   receivedAt: number;
+}
+
+/** A settlement-ready record produced when an auction has a winner. */
+export interface SettlementRecord {
+  opportunityId: string;
+  searcher: string;
+  /** Winner's signed max bid (wei). */
+  maxAmountWei: string;
+  /** Clearing (second) price actually owed (wei). */
+  chargeWei: string;
+  user: string;
+  app: string;
+  /** Searcher's EIP-712 signature authorizing up to maxAmountWei. */
+  searcherSig?: string;
+  createdAt: number;
 }
 
 export interface AuctionResult {
