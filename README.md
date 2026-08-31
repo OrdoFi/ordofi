@@ -160,6 +160,48 @@ ORDO_RPC_URL=http://nitro:8547 docker compose -f deploy/docker-compose.prod.yml 
 - CI workflow provided at `deploy/github-ci.yml` — move to `.github/workflows/`
   to run typecheck, unit tests, and forge tests on every push.
 
+## The revenue loop (closed)
+
+With `ORDO_SETTLEMENT_ADDRESS` and `ORDO_AUCTIONEER_KEY` configured, the auction
+collects real money end to end:
+
+1. Searchers bond ETH into `OrdoSettlement`.
+2. **Bond gating** — the auction rejects any bid the searcher can't cover
+   on-chain, so it never sells something it can't collect.
+3. On a win, the auctioneer submits `settle()` automatically. The contract
+   verifies the searcher's own EIP-712 signature, debits the bond, and credits
+   claimable balances.
+4. The rebate is credited to the **recovered sender of the user transaction**,
+   the originating app, and the protocol.
+
+Verified end to end against a local chain: a bonded searcher signed a 0.01 ETH
+bid, won, and settlement landed on-chain — `0.009 ETH` claimable by the user and
+`0.0005 ETH` by the app. An over-sized bid from the same searcher was rejected
+with `insufficient bond`.
+
+```bash
+npm run auction    # logs: bond gating=on · on-chain settlement=on
+node apps/auction/test-settlement.mjs   # end-to-end proof
+```
+
+## Public API (for the marketing site)
+
+All `/api/*` endpoints are CORS-open so an external site (e.g. a Framer build)
+can embed live numbers directly.
+
+```js
+const s = await fetch("https://app.ordofi.xyz/api/stats").then(r => r.json());
+// { arbs, searchers, pools, swaps, arbsPerDay,
+//   settlement: { deployed, settlements, totalSettledEth, rebatesToUsersEth, totalBondedEth } }
+```
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /api/stats` | Compact, embed-friendly headline numbers |
+| `GET /api/explorer` | Full feed: report, recent arbs, auction stats, on-chain |
+| `GET /api/arbs/recent?n=40` | Recent atomic arbitrages |
+| `GET /api/onchain` | Settlement contract state and recent settlements |
+
 ## Design honesty (Phase 1 trade-offs)
 
 - **No true bundle atomicity.** Impossible on an FCFS chain without sequencer

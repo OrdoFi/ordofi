@@ -110,6 +110,53 @@ createServer(async (req, res) => {
   let path = (req.url ?? "/").split("?")[0];
   const url = new URL(req.url ?? "/", "http://x");
 
+  // Public API: CORS-open so external sites (e.g. the Framer marketing site)
+  // can embed live OrdoFi numbers directly.
+  if (path.startsWith("/api/")) {
+    res.setHeader("access-control-allow-origin", "*");
+    res.setHeader("access-control-allow-headers", "content-type");
+    res.setHeader("cache-control", "public, max-age=15");
+    if (req.method === "OPTIONS") {
+      res.writeHead(204).end();
+      return;
+    }
+  }
+
+  // Compact, embed-friendly stats for the marketing site.
+  if (path === "/api/stats") {
+    const f = join(DATA_DIR, "report.json");
+    const rep = existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : null;
+    let onchain = { deployed: false };
+    try {
+      onchain = await onchainStats(SETTLEMENT);
+    } catch {
+      /* ignore */
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        chain: { name: "Robinhood Chain", chainId: 4663 },
+        arbs: rep?.totals?.arbs ?? 0,
+        searchers: rep?.totals?.uniqueSearchers ?? 0,
+        pools: rep?.totals?.uniquePools ?? 0,
+        swaps: rep?.totals?.swaps ?? 0,
+        arbsPerDay: Math.round(rep?.perDay?.arbs ?? 0),
+        settlement: onchain.deployed
+          ? {
+              deployed: true,
+              address: onchain.address,
+              settlements: onchain.totals.settlements,
+              totalSettledEth: onchain.totals.totalSettledEth,
+              rebatesToUsersEth: onchain.totals.rebatesToUsersEth,
+              totalBondedEth: onchain.totals.totalBondedEth,
+            }
+          : { deployed: false },
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
   if (path === "/api/report") {
     const f = join(DATA_DIR, "report.json");
     res.writeHead(200, { "content-type": "application/json" });

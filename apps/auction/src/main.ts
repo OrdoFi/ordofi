@@ -2,11 +2,13 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
-import { parseTransaction, type TransactionSerialized } from "viem";
+import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { ENDPOINTS, SWAP_TOPICS } from "@ordofi/core";
 import { appendFileSync } from "node:fs";
 import { Auction, toResult } from "./auctioneer.js";
+import { bondingEnabled, checkBond } from "./bonds.js";
 import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
+import { settlementEnabled, submitSettlement } from "./settle.js";
 import type { Bid, Opportunity, SettlementRecord } from "./types.js";
 
 const PORT = Number(process.env.ORDO_AUCTION_PORT ?? 8548);
@@ -30,7 +32,7 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
 
 const searchers = new Set<WebSocket>();
 const activeAuctions = new Map<string, Auction>();
-const stats = { opportunities: 0, bids: 0, dispatched: 0, backruns: 0 };
+const stats = { opportunities: 0, bids: 0, rejectedBids: 0, dispatched: 0, backruns: 0, settled: 0 };
 
 function broadcastHint(opp: Opportunity): void {
   const msg = JSON.stringify({ type: "opportunity", opportunity: opp });
@@ -133,6 +135,7 @@ async function handleSubmit(body: any): Promise<any> {
 
   let ledgerEntry;
   let settlementRecord: SettlementRecord | null = null;
+  let settlementTxHash: string | undefined;
   if (outcome.winner && outcome.clearingPriceWei > 0n) {
     ledgerEntry = ledger.record(result, outcome.winner, originRebateAddress);
 
@@ -140,23 +143,47 @@ async function handleSubmit(body: any): Promise<any> {
     // a deployed OrdoSettlement contract and an auctioneer key is configured,
     // these records are what get submitted on-chain (settle()) to debit the
     // searcher's bond and credit the user/app/protocol rebate splits.
+    // The rebate belongs to the trader who signed the order, so credit the
+    // recovered sender of the user transaction rather than an app label.
+    let userAddress = "0x0000000000000000000000000000000000000000";
+    try {
+      userAddress = await recoverTransactionAddress({ serializedTransaction: rawTx as TransactionSerialized });
+    } catch {
+      /* fall back to the zero address; the app/protocol split still settles */
+    }
+
     settlementRecord = {
       opportunityId: opp.id,
       searcher: outcome.winner.searcher,
       maxAmountWei: outcome.winner.bidWei,
       chargeWei: outcome.clearingPriceWei.toString(),
-      user: userTxHash ? opp.originLabel : opp.originLabel, // end-user attribution refined at integration
+      user: userAddress,
       app: originRebateAddress ?? "0x0000000000000000000000000000000000000000",
       searcherSig: outcome.winner.bidSig,
       createdAt: Date.now(),
     };
     appendFileSync(settlementsFile, JSON.stringify(settlementRecord) + "\n");
+
+    // Close the loop on-chain when a deployed contract + auctioneer key exist.
+    if (settlementEnabled()) {
+      try {
+        const txHash = await submitSettlement(settlementRecord);
+        if (txHash) {
+          settlementTxHash = txHash;
+          stats.settled++;
+          console.log(`[settle] ${opp.id.slice(0, 8)} charged ${outcome.clearingPriceWei} wei — ${txHash}`);
+        }
+      } catch (e) {
+        console.error(`[settle] failed for ${opp.id.slice(0, 8)}: ${(e as Error).message}`);
+      }
+    }
   }
 
   return {
     result,
     rebate: ledgerEntry ?? null,
     settlement: settlementRecord,
+    settlementTxHash: settlementTxHash ?? null,
     settlementContract: SETTLEMENT_ADDRESS || null,
     userError: userError ?? null,
   };
@@ -227,9 +254,18 @@ wss.on("connection", (ws) => {
         ws.send(JSON.stringify({ type: "bid_ack", accepted: false, reason: "unknown or closed auction" }));
         return;
       }
-      const r = auction.submitBid(bid);
-      if (r.accepted) stats.bids++;
-      ws.send(JSON.stringify({ type: "bid_ack", opportunityId: bid.opportunityId, ...r }));
+
+      // Only accept bids the searcher can actually pay for on-chain.
+      void checkBond(bid.searcher, bid.bidWei).then((reason) => {
+        if (reason) {
+          stats.rejectedBids++;
+          ws.send(JSON.stringify({ type: "bid_ack", opportunityId: bid.opportunityId, accepted: false, reason }));
+          return;
+        }
+        const r = auction.submitBid(bid);
+        if (r.accepted) stats.bids++;
+        ws.send(JSON.stringify({ type: "bid_ack", opportunityId: bid.opportunityId, ...r }));
+      });
     }
   });
 
@@ -241,4 +277,8 @@ server.listen(PORT, () => {
   console.log(`OrdoFi auction | listening on :${PORT} | upstream=${UPSTREAM}`);
   console.log(`OrdoFi auction | POST /submit  GET /health /stats  WS /searcher`);
   console.log(`OrdoFi auction | rebate split user=${REBATE_SPLIT.user} app=${REBATE_SPLIT.app} protocol=${REBATE_SPLIT.protocol}`);
+  console.log(
+    `OrdoFi auction | bond gating=${bondingEnabled() ? "on" : "off (no ORDO_SETTLEMENT_ADDRESS)"} · ` +
+      `on-chain settlement=${settlementEnabled() ? "on" : "off (needs ORDO_SETTLEMENT_ADDRESS + ORDO_AUCTIONEER_KEY)"}`,
+  );
 });
