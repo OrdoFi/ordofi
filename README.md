@@ -31,8 +31,30 @@ current numbers against your own data.
 | `apps/watcher` | — | Follows the head, detects swaps + atomic arbs, writes NDJSON, and generates a USD-denominated MEV report |
 | `apps/gateway` | 8547 | Smart JSON-RPC: `eth_*` passthrough, revert-protected sends, `ordo_simulate`, `ordo_sendBundle`, API keys, rate limits, `/health` + `/metrics` |
 | `apps/auction` | 8548 | Backrun order-flow auction: user `/submit`, searcher WS feed, sealed-bid second-price auctioneer, rebate ledger |
-| `apps/web` | 3000 | Landing page + docs, wired to the live report |
+| `apps/web` | 3000 | Landing page, docs, and live on-chain settlement **dashboard** (`/dashboard`) |
+| `apps/searcher-bot` | — | Reference searcher bot: connects to the auction, signs EIP-712 bids, submits backruns |
+| `packages/sdk` | — | `@ordofi/sdk` — searcher/app SDK (bid signing, bond management, order-flow submission) |
 | `contracts` | — | `OrdoSettlement.sol` — on-chain bonded settlement for the auction (Foundry) |
+
+### Searcher SDK
+
+```ts
+import { OrdoSearcher } from "@ordofi/sdk";
+
+const searcher = new OrdoSearcher({
+  auctionWsUrl: "wss://auction.ordofi.xyz/searcher",
+  privateKey: process.env.SEARCHER_KEY,
+  settlementAddress: process.env.ORDO_SETTLEMENT_ADDRESS,
+  onOpportunity: async (opp) => {
+    // simulate the backrun, decide a max bid; return null to skip
+    return { maxBidWei: 10n ** 15n, backrunRawTx };
+  },
+});
+searcher.connect();
+```
+
+Run the reference bot: `npm run searcher-bot`. Honest USD MEV numbers:
+`npm run trace` (requires a trace-enabled node — see below).
 
 ## Quickstart
 
@@ -100,6 +122,43 @@ forge script script/Deploy.s.sol --rpc-url robinhood --broadcast \
 
 The auction service writes settlement-ready records (`data/settlements.ndjson`)
 for every winning auction; set `ORDO_SETTLEMENT_ADDRESS` to submit them on-chain.
+
+**Verified against real mainnet state:** the contract deploys and runs a full
+deposit → signed-bid → second-price settle → claim lifecycle on a fork of
+Robinhood Chain (`forge test --match-contract Fork --fork-url robinhood`), and
+the live dashboard reads settlement events straight from the contract.
+
+### Deploying to Robinhood Chain
+
+Deploy costs **well under $1**. Uses a Foundry encrypted keystore — your key is
+never on the command line:
+
+```bash
+cast wallet import ordo-deployer --interactive   # paste key + set password once
+# fund the printed deployer address with a little ETH on Robinhood Chain
+cd contracts
+AUCTIONEER=0x... TREASURY=0x... ./deploy.sh
+```
+
+## Production deployment
+
+- **Own Nitro node** (`deploy/nitro-node/`) — full node for Robinhood Chain with
+  `--http.api` including `debug` (enables `debug_traceTransaction` for honest MEV
+  numbers) and archive mode. Colocate in AWS us-east-2 (the sequencer's region).
+- **Edge + services** (`deploy/docker-compose.prod.yml` + `deploy/Caddyfile`) —
+  gateway, auction, web, and watcher behind Caddy with automatic TLS at
+  `rpc.ordofi.xyz`, `auction.ordofi.xyz`, `ordofi.xyz`.
+
+```bash
+ORDO_RPC_URL=http://nitro:8547 docker compose -f deploy/docker-compose.prod.yml up -d
+```
+
+## Tests & CI
+
+- `npm test` — unit tests for detection, auction resolution, rebate math, rate limiting.
+- `cd contracts && forge test` — 19 contract tests incl. fuzz + fork + security guards.
+- CI workflow provided at `deploy/github-ci.yml` — move to `.github/workflows/`
+  to run typecheck, unit tests, and forge tests on every push.
 
 ## Design honesty (Phase 1 trade-offs)
 

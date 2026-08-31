@@ -1,0 +1,18 @@
+# OrdoFi edge — automatic TLS via Caddy. Point DNS A records at the host.
+# Usage: caddy run --config deploy/Caddyfile
+
+ordofi.xyz, www.ordofi.xyz {
+	reverse_proxy web:3000
+	encode gzip
+}
+
+rpc.ordofi.xyz {
+	reverse_proxy gateway:8547
+	# gateway enforces API keys + per-key rate limits itself.
+	encode gzip
+}
+
+auction.ordofi.xyz {
+	# WebSocket (searcher feed) + HTTP (/submit, /stats) on the same host.
+	reverse_proxy auction:8548
+}

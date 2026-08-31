@@ -4,6 +4,9 @@ dist/
 .env
 data/
 .DS_Store
+
+# Foundry
 contracts/lib/
 contracts/out/
 contracts/cache/
+contracts/broadcast/

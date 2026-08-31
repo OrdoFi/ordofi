@@ -1,0 +1,41 @@
+# OrdoFi Nitro full node for Robinhood Chain.
+#
+# This is the single highest-leverage piece of infrastructure:
+#   1. No public-RPC rate limits (sustained measurement + serving).
+#   2. --http.api includes `debug`, enabling debug_traceTransaction — the
+#      prestate diff our trace analyzer needs for honest USD MEV numbers.
+#   3. Colocated in AWS us-east-2 (the sequencer's region) for the latency
+#      needed to actually WIN first-come-first-served backrun races.
+#
+# Deploy on an AWS us-east-2 instance (recommend r6i.xlarge + gp3 SSD).
+# The chain info JSON is published by Robinhood ("Run a full node" docs);
+# drop it at ./chain-info.json before starting.
+services:
+  nitro:
+    image: offchainlabs/nitro-node:v3.2.1-d81324d
+    restart: unless-stopped
+    ports:
+      - "8547:8547" # http rpc
+      - "8548:8548" # ws rpc
+    volumes:
+      - nitro-data:/home/user/.arbitrum
+      - ./chain-info.json:/chain-info.json:ro
+    command:
+      - --parent-chain.connection.url=${L1_RPC_URL}
+      - --parent-chain.blob-client.beacon-url=${L1_BEACON_URL}
+      - --chain.id=4663
+      - --chain.info-json=/chain-info.json
+      - --http.addr=0.0.0.0
+      - --http.port=8547
+      - --http.api=net,web3,eth,debug,arb
+      - --http.corsdomain=*
+      - --http.vhosts=*
+      - --ws.addr=0.0.0.0
+      - --ws.port=8548
+      - --ws.api=net,web3,eth
+      - --node.feed.input.url=wss://feed.mainnet.chain.robinhood.com
+      - --execution.caching.archive # archive mode: required for historical traces
+    stop_grace_period: 2m
+
+volumes:
+  nitro-data:

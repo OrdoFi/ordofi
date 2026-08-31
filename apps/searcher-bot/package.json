@@ -1,14 +1,13 @@
 {
-  "name": "@ordofi/web",
+  "name": "@ordofi/searcher-bot",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node serve.mjs",
-    "start": "node serve.mjs"
+    "start": "tsx src/main.ts"
   },
   "dependencies": {
     "@ordofi/core": "*",
+    "@ordofi/sdk": "*",
     "viem": "^2.21.0"
   }
 }

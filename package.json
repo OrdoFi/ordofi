@@ -11,10 +11,13 @@
   "scripts": {
     "watcher": "npm run start -w @ordofi/watcher",
     "report": "npm run report -w @ordofi/watcher",
+    "trace": "npm run trace -w @ordofi/watcher",
     "gateway": "npm run start -w @ordofi/gateway",
     "auction": "npm run start -w @ordofi/auction",
+    "searcher-bot": "npm run start -w @ordofi/searcher-bot",
     "web": "npm run dev -w @ordofi/web",
-    "typecheck": "tsc -p apps/watcher/tsconfig.json && tsc -p apps/gateway/tsconfig.json && tsc -p apps/auction/tsconfig.json"
+    "typecheck": "tsc -p apps/watcher/tsconfig.json && tsc -p apps/gateway/tsconfig.json && tsc -p apps/auction/tsconfig.json && tsc -p apps/searcher-bot/tsconfig.json",
+    "test": "node --import tsx --test apps/gateway/test/*.test.ts apps/auction/test/*.test.ts apps/watcher/test/*.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
