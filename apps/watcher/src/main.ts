@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ENDPOINTS, RPC_HEADERS } from "@ordofi/core";
+import { ENDPOINTS, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { analyzeBlock } from "./detect.js";
 
@@ -32,17 +32,8 @@ function saveCheckpoint(nextBlock: number): void {
   writeFileSync(checkpointFile, JSON.stringify({ nextBlock, savedAt: new Date().toISOString() }));
 }
 
-let rpcId = 0;
 async function rpc<T = any>(method: string, params: unknown[] = []): Promise<T> {
-  const res = await fetch(RPC, {
-    method: "POST",
-    headers: RPC_HEADERS,
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
-  });
-  if (!res.ok) throw new Error(`RPC HTTP ${res.status}`);
-  const body = (await res.json()) as { result?: T; error?: { message: string } };
-  if (body.error) throw new Error(`RPC ${method}: ${body.error.message}`);
-  return body.result as T;
+  return (await rpcFetch(method, params)) as T;
 }
 
 async function getReceipts(blockHex: string): Promise<any[] | null> {

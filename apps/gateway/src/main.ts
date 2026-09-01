@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { ENDPOINTS, RPC_HEADERS } from "@ordofi/core";
+import { ENDPOINTS, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
@@ -43,32 +43,18 @@ function storeBackedKey(presented: string): ApiKey | null {
 }
 const metrics = new Metrics();
 
-let upstreamId = 0;
 async function upstream(method: string, params: unknown[]): Promise<any> {
   const started = Date.now();
   try {
-    const res = await fetch(UPSTREAM, {
-      method: "POST",
-      headers: RPC_HEADERS,
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++upstreamId, method, params }),
-    });
-    // The public upstream sits behind bot detection and sometimes answers
-    // with an HTML challenge page. Parsing that as JSON used to surface as
-    // `Unexpected token '<'` to the caller, which reads like our bug — say
-    // what actually happened instead.
-    const text = await res.text();
-    let body: any;
-    try {
-      body = JSON.parse(text);
-    } catch {
-      metrics.inc("upstream_challenge_total");
-      throw new RpcError(
-        -32000,
-        `upstream RPC refused the request (HTTP ${res.status}, non-JSON body) — public endpoint rate limit or bot challenge; retry shortly`,
-      );
-    }
-    if (body.error) throw new RpcError(body.error.code ?? -32000, body.error.message);
-    return body.result;
+    // rpcFetch rotates across ORDO_RPC_URLS on transport failures (403
+    // challenge pages, timeouts) and rethrows genuine JSON-RPC errors with
+    // their code — those come from a healthy upstream and must not rotate.
+    return await rpcFetch(method, params);
+  } catch (e) {
+    const code = (e as { code?: number }).code;
+    if (typeof code === "number") throw new RpcError(code, (e as Error).message);
+    metrics.inc("upstream_challenge_total");
+    throw new RpcError(-32000, `all RPC upstreams refused the request — ${(e as Error).message}`);
   } finally {
     metrics.observe("upstream_latency_ms", Date.now() - started);
   }

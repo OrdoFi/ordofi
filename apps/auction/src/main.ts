@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
-import { ENDPOINTS, SWAP_TOPICS } from "@ordofi/core";
+import { ENDPOINTS, SWAP_TOPICS, rpcFetch } from "@ordofi/core";
 import { extractSwapHints, hintLevelFromEnv, simulateTx } from "@ordofi/core/simulate";
 import { appendFileSync } from "node:fs";
 import { Auction, toResult } from "./auctioneer.js";
@@ -34,14 +34,9 @@ const HINT_LEVEL = hintLevelFromEnv();
 
 let upstreamId = 0;
 async function upstream(method: string, params: unknown[]): Promise<any> {
-  const res = await fetch(UPSTREAM, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++upstreamId, method, params }),
-  });
-  const body = (await res.json()) as any;
-  if (body.error) throw new Error(body.error.message);
-  return body.result;
+  // Failover matters most here: this path dispatches user transactions, and a
+  // bot challenge on the primary must not eat someone's trade.
+  return rpcFetch(method, params);
 }
 
 const searchers = new Set<WebSocket>();

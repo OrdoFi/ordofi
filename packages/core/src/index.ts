@@ -42,6 +42,74 @@ export const RPC_HEADERS = {
   "user-agent": "OrdoFi/0.1 (+https://app.ordofi.network)",
 } as const;
 
+/**
+ * Ordered upstream list. The official endpoint leads because it is the
+ * sequencer operator's own; the others are the registry-listed public
+ * fallbacks that keep the stack alive while Cloudflare challenges us.
+ */
+export function rpcUrls(): string[] {
+  const raw =
+    process.env.ORDO_RPC_URLS ??
+    process.env.ORDO_RPC_URL ??
+    "https://rpc.mainnet.chain.robinhood.com";
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+let rpcId = 0;
+let cursor = 0; // sticky: keep using whichever upstream last answered
+
+class UpstreamRpcError extends Error {
+  constructor(message: string, public code: number) {
+    super(message);
+  }
+  readonly isRpcLevel = true;
+}
+
+/**
+ * JSON-RPC over whichever upstream is currently healthy.
+ *
+ * Transport failures — 403 challenge pages, timeouts, dead hosts — rotate to
+ * the next URL. A JSON-RPC *error* does not: that is a healthy upstream giving
+ * a real answer ("intrinsic gas too low" is not a reason to ask someone else),
+ * and it is rethrown with `code` intact.
+ */
+export async function rpcFetch(
+  method: string,
+  params: unknown[],
+  opts?: { timeoutMs?: number },
+): Promise<unknown> {
+  const urls = rpcUrls();
+  let lastErr: Error | null = null;
+  for (let i = 0; i < urls.length; i++) {
+    const idx = (cursor + i) % urls.length;
+    const url = urls[idx];
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: RPC_HEADERS,
+        body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
+        signal: AbortSignal.timeout(opts?.timeoutMs ?? 20_000),
+      });
+      const text = await res.text();
+      let body: any;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new Error(`HTTP ${res.status} non-JSON from ${new URL(url).host} (rate limit or bot challenge)`);
+      }
+      cursor = idx;
+      if (body.error) {
+        throw new UpstreamRpcError(body.error.message ?? "upstream error", body.error.code ?? -32000);
+      }
+      return body.result;
+    } catch (e) {
+      if ((e as UpstreamRpcError).isRpcLevel) throw e;
+      lastErr = e as Error;
+    }
+  }
+  throw lastErr ?? new Error("no RPC upstream configured");
+}
+
 export const ENDPOINTS = {
   rpc: process.env.ORDO_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
   sequencerFeed:

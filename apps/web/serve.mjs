@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
-import { createPublicClient, http, parseAbiItem, formatEther } from "viem";
-import { RPC_HEADERS } from "@ordofi/core";
+import { createPublicClient, fallback, http, parseAbiItem, formatEther } from "viem";
+import { RPC_HEADERS, rpcUrls } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 
 /**
@@ -133,6 +133,9 @@ const DEPOSITED_EVENT = parseAbiItem(
 );
 const CLAIMED_EVENT = parseAbiItem("event Claimed(address indexed beneficiary, uint256 amount)");
 
+const fallbackTransport = () =>
+  fallback(rpcUrls().map((u) => http(u, { fetchOptions: { headers: RPC_HEADERS } })));
+
 let lastOnchain = null; // { data, at } — survives upstream challenges
 
 async function onchainStats(address) {
@@ -153,7 +156,7 @@ async function onchainStats(address) {
 }
 
 async function onchainStatsFresh(address) {
-  const client = createPublicClient({ transport: http(RPC, { fetchOptions: { headers: RPC_HEADERS } }) });
+  const client = createPublicClient({ transport: fallbackTransport() });
   const head = await client.getBlockNumber();
   // Scan a recent window; a production indexer would persist a cursor.
   const fromBlock = head > 500000n ? head - 500000n : 0n;
@@ -211,7 +214,7 @@ const VIEW_ABI = [
 ];
 
 async function accountView(address) {
-  const client = createPublicClient({ transport: http(RPC, { fetchOptions: { headers: RPC_HEADERS } }) });
+  const client = createPublicClient({ transport: fallbackTransport() });
   const [bond, claimable] = SETTLEMENT
     ? await Promise.all([
         client.readContract({ address: SETTLEMENT, abi: VIEW_ABI, functionName: "bond", args: [address] }),
