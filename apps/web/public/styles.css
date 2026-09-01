@@ -290,7 +290,7 @@ section { padding: 96px 0; position: relative; }
 }
 
 /* ---------- Sidebar layout (docs and other long reference pages) ---------- */
-.side-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 60px; align-items: start; padding: 48px 0 110px; }
+.side-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 60px; align-items: start; padding-top: 48px; padding-bottom: 110px; }
 .sidenav { position: sticky; top: 84px; max-height: calc(100vh - 104px); overflow-y: auto; padding-right: 10px; scrollbar-width: thin; }
 .sidenav .sn-search { width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--card); font-family: var(--mono); font-size: 12px; color: var(--text); outline: none; margin-bottom: 16px; }
 .sidenav .sn-search:focus { border-color: var(--accent); }
