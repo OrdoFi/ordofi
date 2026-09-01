@@ -512,8 +512,20 @@
         if (seq !== chartSeq) return;
         candles1m = []; renderChart();
         $("sb-tape").textContent = "tape: " + (e.message ?? "unavailable");
+        // Quoted in the wrong money: flip to the other one once, if the token
+        // has a pool there (unknown tiers → try it and let the server decide).
+        if (/no direct/.test(e.message ?? "") && moneyRank(quoteTok) > 1 && !retriedQuote) {
+          const alt = otherMoney(quoteTok.address);
+          if (alt.address !== baseTok.address && hasPoolVs(baseTok, alt.address) !== false) {
+            retriedQuote = true;
+            quoteTok = alt;
+            pairChanged();
+            return;
+          }
+        }
       }
     }
+    let retriedQuote = false;
     function setDelta(id, v) {
       const el = $(id);
       if (v == null || !Number.isFinite(v)) { el.textContent = "—"; el.className = "v"; return; }
@@ -607,11 +619,26 @@
       $("tok-out-sym").textContent = tokOut().symbol; setIcon("tok-out-icon", tokOut());
     }
 
+    // Which money asset a token actually has a pool against, when known.
+    const hasPoolVs = (t, quoteAddr) => {
+      if (!t.tiers) return null;
+      const tiers = quoteAddr === NATIVE ? t.tiers.eth : quoteAddr === USDG_ADDR ? t.tiers.usdg : null;
+      return tiers ? tiers.length > 0 : null;
+    };
+    const otherMoney = (addr) => tokenByAddr.get(addr === NATIVE ? USDG_ADDR : NATIVE) ?? (addr === NATIVE ? quoteTok : { address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: null });
+
     // Any token object can become the base/quote; keep money on the quote side.
     function setPair(base, quoteT, keepSide = false) {
       if (base.address === quoteT.address) return;
+      retriedQuote = false;
       baseTok = base; quoteTok = quoteT;
       if (moneyRank(baseTok) > moneyRank(quoteTok)) { const x = baseTok; baseTok = quoteTok; quoteTok = x; if (!keepSide) side = side === "buy" ? "sell" : "buy"; }
+      // A token that only trades against ETH has no USDG chart to show (and
+      // vice versa): quote it in the money it actually has a pool with.
+      if (moneyRank(quoteTok) > 1 && hasPoolVs(baseTok, quoteTok.address) === false) {
+        const alt = otherMoney(quoteTok.address);
+        if (alt.address !== baseTok.address && hasPoolVs(baseTok, alt.address)) quoteTok = alt;
+      }
       pushRecent(baseTok);
       setSide(side);
       pairChanged();

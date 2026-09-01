@@ -108,33 +108,65 @@ export async function rpcFetch(
     const idx = (cursor + i) % urls.length;
     const url = urls[idx];
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: RPC_HEADERS,
-        body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
-        signal: AbortSignal.timeout(opts?.timeoutMs ?? 20_000),
-      });
-      const text = await res.text();
-      let body: any;
-      try {
-        body = JSON.parse(text);
-      } catch {
-        throw new Error(`HTTP ${res.status} non-JSON from ${new URL(url).host} (rate limit or bot challenge)`);
-      }
-      if (body.error) {
-        throw new UpstreamRpcError(body.error.message ?? "upstream error", body.error.code ?? -32000);
-      }
+      const result = await rpcOnce(url, method, params, opts?.timeoutMs);
       // Only a genuine answer makes an upstream sticky. Setting this before
       // checking body.error pinned the cursor to whichever endpoint was busy
       // throttling us.
       cursor = idx;
-      return body.result;
+      return result;
     } catch (e) {
       if ((e as UpstreamRpcError).isRpcLevel && !isRetryableRpcError(e)) throw e;
       lastErr = e as Error;
     }
   }
   throw lastErr ?? new Error("no RPC upstream configured");
+}
+
+/** One JSON-RPC call to one URL; throws UpstreamRpcError for RPC-level errors. */
+export async function rpcOnce(url: string, method: string, params: unknown[], timeoutMs = 20_000): Promise<unknown> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: RPC_HEADERS,
+    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await res.text();
+  let body: any;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error(`HTTP ${res.status} non-JSON from ${new URL(url).host} (rate limit or bot challenge)`);
+  }
+  if (body.error) {
+    throw new UpstreamRpcError(body.error.message ?? "upstream error", body.error.code ?? -32000);
+  }
+  return body.result;
+}
+
+/**
+ * Where signed transactions go. Reads may fan out across any provider, but a
+ * raw transaction is the one thing a third party should never see before the
+ * sequencer does, so sends go to the sequencer operator's own endpoint and
+ * nowhere else unless that endpoint is unreachable — in which case the caller
+ * is told, so the fallback is visible rather than silent.
+ */
+export function sequencerUrl(): string {
+  return process.env.ORDO_SEQUENCER_URL ?? "https://rpc.mainnet.chain.robinhood.com";
+}
+
+export async function sendRawTransaction(
+  rawTx: string,
+  opts?: { timeoutMs?: number; onFallback?: (reason: string) => void },
+): Promise<string> {
+  try {
+    return (await rpcOnce(sequencerUrl(), "eth_sendRawTransaction", [rawTx], opts?.timeoutMs)) as string;
+  } catch (e) {
+    // A real answer from the sequencer (bad nonce, underpriced, insufficient
+    // funds) is final. Only transport failures and throttling fall through.
+    if ((e as UpstreamRpcError).isRpcLevel && !isRetryableRpcError(e)) throw e;
+    opts?.onFallback?.((e as Error).message);
+    return (await rpcFetch("eth_sendRawTransaction", [rawTx], opts)) as string;
+  }
 }
 
 export const ENDPOINTS = {

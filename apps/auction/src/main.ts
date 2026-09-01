@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
-import { ENDPOINTS, SWAP_TOPICS, rpcFetch } from "@ordofi/core";
+import { ENDPOINTS, SWAP_TOPICS, rpcFetch, sendRawTransaction } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { extractSwapHints, hintLevelFromEnv, simulateTx } from "@ordofi/core/simulate";
 import { appendFileSync } from "node:fs";
@@ -35,8 +35,15 @@ const HINT_LEVEL = hintLevelFromEnv();
 
 let upstreamId = 0;
 async function upstream(method: string, params: unknown[]): Promise<any> {
-  // Failover matters most here: this path dispatches user transactions, and a
-  // bot challenge on the primary must not eat someone's trade.
+  // Dispatch goes to the sequencer operator's endpoint directly: the user's
+  // transaction and the winning backrun must not pass through a third-party
+  // provider on the way. Failover still exists — a bot challenge on the
+  // primary must not eat someone's trade — but it is logged, not silent.
+  if (method === "eth_sendRawTransaction") {
+    return sendRawTransaction(params[0] as string, {
+      onFallback: (reason) => console.warn(`auction | sequencer endpoint unavailable (${reason}) — dispatch fell back to the provider list`),
+    });
+  }
   return rpcFetch(method, params);
 }
 

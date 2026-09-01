@@ -316,19 +316,22 @@ async function explorerTokenPages(pages) {
 // Token list: everything the router can reach, ranked by evidence of trading
 // ---------------------------------------------------------------------------
 
-let tokenCache = null; // { at, list }
+const TOKEN_LIST_FILE = join(DATA_DIR, "token-list.json");
+// The last list we built, restored stale so a restart answers instantly and
+// rebuilds behind the first request instead of making it wait.
+let tokenCache = (() => { const saved = loadJson(TOKEN_LIST_FILE, null); return Array.isArray(saved) && saved.length ? { at: 0, list: saved } : null; })();
 let tokenRefreshing = null;
 
 /**
  * Stale-while-revalidate: the list takes dozens of round-trips to build, so a
  * cold cache must never block the page. Serve whatever we have and rebuild in
- * the background; only the very first call ever waits.
+ * the background; only the very first call on a fresh install ever waits.
  */
 export async function tradeTokens(store) {
   const stale = !tokenCache || Date.now() - tokenCache.at >= 300_000;
   if (stale && !tokenRefreshing) {
     tokenRefreshing = buildTokenList(store)
-      .then((list) => { tokenCache = { at: Date.now(), list }; })
+      .then((list) => { tokenCache = { at: Date.now(), list }; saveJson(TOKEN_LIST_FILE, list); })
       .catch(() => { /* keep the stale list */ })
       .finally(() => { tokenRefreshing = null; });
   }
@@ -396,27 +399,33 @@ async function buildTokenList(store) {
 
   // 3. Active tokens, busiest first, from cached metadata.
   const active = [...activity.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+  const ACTIVE_MIN_SWAPS = 5; // one launchpad swap is not "trading"
   for (const tok of active) {
     if (seen.has(tok)) continue;
     const m = meta.get(tok);
     if (!m) { meta.enqueue(tok); continue; }
     if (m.miss) continue;
-    seen.set(tok, tokenRow(tok, m, { active: true }));
+    seen.set(tok, tokenRow(tok, m, { active: (activity.get(tok) ?? 0) >= ACTIVE_MIN_SWAPS }));
   }
   // The busiest few get the chain-derived price, which beats the explorer's.
-  for (const tok of active.slice(0, 40)) {
-    const row = seen.get(tok);
-    if (!row) continue;
-    try {
-      const info = await getTokenInfo(tok);
-      if (info.usdPerToken) row.usdPerToken = info.usdPerToken;
-    } catch { /* keep the explorer's number */ }
+  {
+    const top = active.slice(0, 40).filter((t) => seen.has(t));
+    let i = 0;
+    await Promise.all(Array.from({ length: 5 }, async () => {
+      while (i < top.length) {
+        const tok = top[i++];
+        try {
+          const info = await getTokenInfo(tok);
+          if (info.usdPerToken) seen.get(tok).usdPerToken = info.usdPerToken;
+        } catch { /* keep the explorer's number */ }
+      }
+    }));
   }
 
   // 4. The explorer's most-held tokens: names, icons, prices, holder counts,
   //    and the long tail of listed-but-quiet assets for the search box.
   try {
-    for (const t of await explorerTokenPages(20)) {
+    for (const t of await explorerTokenPages(12)) {
       meta.cache.set(t.address, t);
       meta.dirty = true;
       const hit = seen.get(t.address);
@@ -442,12 +451,17 @@ async function buildTokenList(store) {
   }
 
   // Routability: certain from pool evidence, otherwise from the route cache.
+  // Tiers tell the terminal which quote asset actually has a pool.
   for (const t of seen.values()) {
     t.swaps24h = activity.get(t.address) ?? 0;
     t.tradable = moneyPaired.has(t.address) ? true : routable(t.address);
+    const r = routes.get(t.address);
+    if (r && !r.miss) t.tiers = { eth: r.weth, usdg: r.usdg };
   }
 
-  const rebuild = () => { tokenCache = null; };
+  // Mark stale rather than drop: the next caller gets the current list at
+  // once and the rebuild happens behind it.
+  const rebuild = () => { if (tokenCache) tokenCache.at = 0; };
   if (pools.pending) pools.onDrained = rebuild;
   if (meta.pending) meta.onDrained = rebuild;
   if (routes.pending) routes.onDrained = rebuild;
@@ -477,7 +491,7 @@ export async function tradeToken(store, address) {
   if (tradable && !imported.has(a)) {
     imported.add(a);
     saveJson(IMPORTED_FILE, [...imported]);
-    tokenCache = null;
+    if (tokenCache) tokenCache.at = 0;
   }
   return tokenRow(a, m, { active: Boolean(listed?.active), tradable, swaps24h: listed?.swaps24h ?? 0, tiers: r && !r.miss ? { weth: r.weth, usdg: r.usdg } : null });
 }
@@ -554,9 +568,12 @@ export async function tradeMarkets(store) {
     const cur = byPair.get(k);
     if (!cur || m.swaps > cur.swaps) byPair.set(k, m);
   }
-  const markets = [...byPair.values()].sort((a, b) => (b.volumeUsd ?? 0) - (a.volumeUsd ?? 0) || b.swaps - a.swaps);
+  const markets = [...byPair.values()]
+    .sort((a, b) => (b.volumeUsd ?? 0) - (a.volumeUsd ?? 0) || b.swaps - a.swaps)
+    .slice(0, 800);
   const data = {
     markets,
+    pairsTotal: byPair.size,
     coverage: { poolsTraded: day.length, poolsUnknown: unknownPools, tapeSince: day.length ? Math.min(...day.map((r) => r.firstBucket)) : null },
     resolvers: resolverStats(),
     at: new Date().toISOString(),
@@ -728,14 +745,27 @@ async function bestPool(base, quote) {
   const hit = poolAddrCache.get(key);
   if (hit && Date.now() - hit.at < 600_000) return hit;
 
-  const found = [];
-  for (const fee of FEES) {
-    try {
-      const p = (await call(V3_FACTORY, FACTORY_ABI, "getPool", [base, quote, fee])).toLowerCase();
-      if (p !== "0x0000000000000000000000000000000000000000") found.push({ pool: p, fee });
-    } catch {
-      /* no pool at this tier */
-    }
+  // The pool cache already knows every pool that traded recently; only ask
+  // the factory for pairs it has never seen, and ask all tiers at once.
+  const b = base.toLowerCase(), q = quote.toLowerCase();
+  let found = [];
+  for (const p of pools.cache.values()) {
+    if (p.miss || !p.v3) continue;
+    if ((p.token0 === b && p.token1 === q) || (p.token0 === q && p.token1 === b)) found.push({ pool: p.pool, fee: p.fee });
+  }
+  if (found.length === 0) {
+    found = (
+      await Promise.all(
+        FEES.map(async (fee) => {
+          try {
+            const p = (await call(V3_FACTORY, FACTORY_ABI, "getPool", [base, quote, fee])).toLowerCase();
+            return p !== "0x0000000000000000000000000000000000000000" ? { pool: p, fee } : null;
+          } catch {
+            return null;
+          }
+        }),
+      )
+    ).filter(Boolean);
   }
   if (found.length === 0) return null;
   const withLiq = await Promise.all(

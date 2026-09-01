@@ -335,7 +335,7 @@ function issueAllowed(ip) {
   return true;
 }
 
-createServer(async (req, res) => {
+async function handle(req, res) {
   let path = (req.url ?? "/").split("?")[0];
   const url = new URL(req.url ?? "/", "http://x");
 
@@ -441,11 +441,10 @@ createServer(async (req, res) => {
       return;
     }
     try {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(await accountView(address)));
+      const view = await accountView(address);
+      sendJson(req, res, 200, view);
     } catch (e) {
-      res.writeHead(502, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: e.message }));
+      sendJson(req, res, 502, { error: e.message });
     }
     return;
   }
@@ -578,13 +577,13 @@ createServer(async (req, res) => {
   }
 
   if (path === "/api/onchain") {
-    res.writeHead(200, { "content-type": "application/json" });
+    let body;
     try {
-      const addr = url.searchParams.get("address") || SETTLEMENT;
-      res.end(JSON.stringify(await onchainStats(addr)));
+      body = await onchainStats(url.searchParams.get("address") || SETTLEMENT);
     } catch (e) {
-      res.end(JSON.stringify({ deployed: false, error: e.message }));
+      body = { deployed: false, error: e.message };
     }
+    sendJson(req, res, 200, body);
     return;
   }
 
@@ -596,8 +595,7 @@ createServer(async (req, res) => {
   }
 
   if (path === "/api/auction") {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(await auctionStats()));
+    sendJson(req, res, 200, await auctionStats().catch(() => null));
     return;
   }
 
@@ -639,7 +637,19 @@ createServer(async (req, res) => {
   }
   res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
   res.end(readFileSync(file));
+}
+
+createServer((req, res) => {
+  handle(req, res).catch((e) => {
+    console.error(`web | ${req.method} ${req.url}: ${e?.stack ?? e}`);
+    if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
+    if (!res.writableEnded) res.end(JSON.stringify({ error: "internal error" }));
+  });
 }).listen(PORT, () => console.log(`OrdoFi web | http://localhost:${PORT}  (dashboard at /dashboard)`));
+
+// A background refresh that rejects must never become a process exit.
+process.on("unhandledRejection", (e) => console.error(`web | unhandled rejection: ${e?.stack ?? e}`));
+process.on("uncaughtException", (e) => console.error(`web | uncaught exception: ${e?.stack ?? e}`));
 
 // Warm the trade caches at boot: pool composition for today's busiest pools
 // and the token list. Building them takes dozens of round-trips, and the first

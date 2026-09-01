@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { landingHtml } from "./landing.ts";
 import { join } from "node:path";
-import { ENDPOINTS, rpcFetch } from "@ordofi/core";
+import { ENDPOINTS, rpcFetch, sendRawTransaction, sequencerUrl } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
@@ -47,6 +47,16 @@ const metrics = new Metrics();
 async function upstream(method: string, params: unknown[]): Promise<any> {
   const started = Date.now();
   try {
+    // Signed transactions go to the sequencer operator's endpoint and nowhere
+    // else unless it is down; a third-party provider must not see them first.
+    if (method === "eth_sendRawTransaction") {
+      return await sendRawTransaction(params[0] as string, {
+        onFallback: (reason) => {
+          metrics.inc("send_fallback_total");
+          console.warn(`gateway | sequencer endpoint unavailable (${reason}) — send fell back to the provider list`);
+        },
+      });
+    }
     // rpcFetch rotates across ORDO_RPC_URLS on transport failures (403
     // challenge pages, timeouts) and rethrows genuine JSON-RPC errors with
     // their code — those come from a healthy upstream and must not rotate.
@@ -149,7 +159,7 @@ const server = createServer((req, res) => {
   }
   if (req.method === "GET" && url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", upstream: UPSTREAM, uptimeSeconds: metrics.json().uptimeSeconds }));
+    res.end(JSON.stringify({ status: "ok", upstream: UPSTREAM, sequencer: sequencerUrl(), uptimeSeconds: metrics.json().uptimeSeconds }));
     return;
   }
   if (req.method === "GET" && url === "/metrics") {

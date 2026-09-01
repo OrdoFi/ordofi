@@ -114,3 +114,37 @@ test("a host without the history fails over to one that keeps it", async () => {
   assert.deepEqual(await rpcFetch("eth_getLogs", [{}]), []);
   assert.deepEqual(calls, [A, B], "a retention policy is not an answer about the chain");
 });
+
+test("sendRawTransaction: the sequencer's own answer is final, transport failure falls back visibly", async () => {
+  const { sendRawTransaction } = await import("../src/index.ts");
+  const realFetch = globalThis.fetch;
+  const calls: string[] = [];
+  process.env.ORDO_SEQUENCER_URL = "https://sequencer.test";
+  process.env.ORDO_RPC_URLS = "https://provider-a.test,https://provider-b.test";
+  try {
+    // 1. sequencer answers with a real RPC error → thrown as-is, no fallback
+    globalThis.fetch = (async (url: any) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "nonce too low" } }));
+    }) as any;
+    await assert.rejects(sendRawTransaction("0x01"), /nonce too low/);
+    assert.deepEqual(calls, ["https://sequencer.test"], "a definitive answer never reaches a third party");
+
+    // 2. sequencer unreachable → fallback to the provider list, and the caller is told
+    calls.length = 0;
+    let fallbackReason = "";
+    globalThis.fetch = (async (url: any) => {
+      calls.push(String(url));
+      if (String(url).includes("sequencer")) return new Response("<html>cloudflare</html>", { status: 403 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0xhash" }));
+    }) as any;
+    const hash = await sendRawTransaction("0x01", { onFallback: (r) => (fallbackReason = r) });
+    assert.equal(hash, "0xhash");
+    assert.match(fallbackReason, /403/);
+    assert.equal(calls[0], "https://sequencer.test");
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.ORDO_SEQUENCER_URL;
+    delete process.env.ORDO_RPC_URLS;
+  }
+});
