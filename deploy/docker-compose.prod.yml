@@ -93,6 +93,22 @@ services:
     depends_on: [auction]
     restart: unless-stopped
 
+  # The house arbitrage bot: trades its own capital on cross-fee-tier cycles,
+  # simulating every candidate for free and only sending when the edge clears
+  # gas plus a margin. Its own wallet (ORDO_ARB_KEY), so nonces never collide
+  # with the bidding bot above. No key => it logs and exits, harmless.
+  arb:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    environment:
+      SERVICE: arb-bot
+      ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
+      ORDO_ARB_KEY: ${ORDO_ARB_KEY:-}
+      ORDO_ARB_MIN_PROFIT_ETH: ${ORDO_ARB_MIN_PROFIT_ETH:-0.000004}
+      ORDO_ARB_GAS_RESERVE_ETH: ${ORDO_ARB_GAS_RESERVE_ETH:-0.0008}
+      ORDO_ARB_MAX_NOTIONAL_ETH: ${ORDO_ARB_MAX_NOTIONAL_ETH:-}
+    restart: unless-stopped
+
   watcher:
     build: { context: .., dockerfile: deploy/Dockerfile }
     environment:

@@ -15,6 +15,7 @@
     "gateway": "npm run start -w @ordofi/gateway",
     "auction": "npm run start -w @ordofi/auction",
     "searcher-bot": "npm run start -w @ordofi/searcher-bot",
+    "arb-bot": "npm run start -w @ordofi/arb-bot",
     "web": "npm run dev -w @ordofi/web",
     "fork-proxy": "node scripts/fork-proxy.mjs",
     "node-check": "node scripts/node-check.mjs",
@@ -22,7 +23,7 @@
     "leakage-venues": "node --import tsx scripts/leakage-venues.mjs",
     "reset-index": "node --import tsx scripts/reset-index.mjs",
     "hints": "node --import tsx apps/auction/test-hints.mjs",
-    "typecheck": "tsc -p apps/watcher/tsconfig.json && tsc -p apps/gateway/tsconfig.json && tsc -p apps/auction/tsconfig.json && tsc -p apps/searcher-bot/tsconfig.json",
+    "typecheck": "tsc -p apps/watcher/tsconfig.json && tsc -p apps/gateway/tsconfig.json && tsc -p apps/auction/tsconfig.json && tsc -p apps/searcher-bot/tsconfig.json && tsc -p apps/arb-bot/tsconfig.json",
     "test": "node --import tsx --test apps/gateway/test/*.test.ts apps/auction/test/*.test.ts apps/watcher/test/*.test.ts packages/store/test/*.test.ts packages/core/test/*.test.ts"
   },
   "dependencies": {

@@ -18,6 +18,7 @@ COPY apps/gateway/package.json apps/gateway/
 COPY apps/auction/package.json apps/auction/
 COPY apps/web/package.json apps/web/
 COPY apps/searcher-bot/package.json apps/searcher-bot/
+COPY apps/arb-bot/package.json apps/arb-bot/
 RUN npm install --omit=dev --no-audit --no-fund
 
 COPY . .
