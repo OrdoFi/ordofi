@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
 import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
+import { ethUsd } from "@ordofi/core/pricing";
 import { OrdoStore } from "@ordofi/store";
 import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
@@ -140,6 +141,59 @@ async function auctionStats() {
   } catch {
     return null;
   }
+}
+
+/**
+ * The house arb desk. The bot serves its own status; we proxy it so the page
+ * can show live scans, and fall back to the fill ledger on the shared volume
+ * when the bot is down so the money history never disappears from the page.
+ */
+const ARB_URL = process.env.ORDO_ARB_URL ?? "http://localhost:8549";
+let deskCache = null;
+
+function deskFromLedger() {
+  const f = join(DATA_DIR, "arb-ledger.ndjson");
+  const events = [];
+  if (existsSync(f)) {
+    for (const line of readFileSync(f, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try { events.push(JSON.parse(line)); } catch { /* torn tail */ }
+    }
+  }
+  let fires = 0, won = 0, reverted = 0, gasWei = 0n, grossWei = 0n, gas24h = 0n;
+  const cutoff = Date.now() - 86_400_000;
+  for (const e of events) {
+    if (e.kind === "fire") fires++;
+    if (e.kind === "won") { won++; gasWei += BigInt(e.gasWei); grossWei += BigInt(e.returnedWei) - BigInt(e.sizeWei); if (e.t > cutoff) gas24h += BigInt(e.gasWei); }
+    if (e.kind === "reverted") { reverted++; gasWei += BigInt(e.gasWei); if (e.t > cutoff) gas24h += BigInt(e.gasWei); }
+  }
+  return {
+    ok: true,
+    live: false,
+    now: Date.now(),
+    totals: {
+      fires, won, reverted,
+      gasEth: formatEther(gasWei), grossEth: formatEther(grossWei), netEth: formatEther(grossWei - gasWei),
+      gas24hEth: formatEther(gas24h), dailyGasCapEth: null, breaker: false,
+    },
+    events: events.slice(-80).reverse(),
+    scans: { count: 0, quotesTotal: 0, lastAt: null, last: null, history: [] },
+  };
+}
+
+async function deskStatus() {
+  if (deskCache && Date.now() - deskCache.at < 2000) return deskCache.data;
+  let data;
+  try {
+    const r = await fetch(`${ARB_URL}/status`, { signal: AbortSignal.timeout(1500) });
+    if (!r.ok) throw new Error(`arb ${r.status}`);
+    data = await r.json();
+  } catch {
+    data = deskFromLedger();
+  }
+  data.ethUsd = await ethUsd().catch(() => null);
+  deskCache = { at: Date.now(), data };
+  return data;
 }
 
 const SETTLED_EVENT = parseAbiItem(
@@ -601,6 +655,17 @@ async function handle(req, res) {
     return;
   }
 
+  if (path === "/api/desk") {
+    let body;
+    try {
+      body = await deskStatus();
+    } catch (e) {
+      body = { ok: false, live: false, error: e.message };
+    }
+    sendJson(req, res, 200, body, { "cache-control": "public, max-age=2" });
+    return;
+  }
+
   if (path === "/api/explorer") {
     res.writeHead(200, { "content-type": "application/json" });
     const report = loadReport();
@@ -626,6 +691,7 @@ async function handle(req, res) {
   if (path === "/favicon.ico") path = "/favicon-32.png";
   if (path === "/portal") path = "/portal.html";
   if (path === "/trade") path = "/trade.html";
+  if (path === "/desk") path = "/desk.html";
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";

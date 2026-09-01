@@ -7,7 +7,9 @@ import {
   parseEther,
   type Hex,
 } from "viem";
+import { join } from "node:path";
 import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
+import { Telemetry, edgeBps, wethReturned } from "./telemetry.js";
 
 /**
  * OrdoFi house arbitrage bot — the profit engine that seeds the loop.
@@ -37,7 +39,9 @@ import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
  *   ORDO_ARB_GAS_RESERVE_ETH  ETH kept back for gas, never traded (default 0.0008)
  *   ORDO_ARB_MAX_NOTIONAL_ETH cap per trade (default: whole tradable balance)
  *   ORDO_ARB_DAILY_GAS_CAP_ETH stop firing once gas burned in a rolling day passes this (default 0.01)
- *   ORDO_ARB_INTERVAL_MS      scan cadence (default 4000)
+ *   ORDO_ARB_INTERVAL_MS      scan cadence (default 12000)
+ *   ORDO_ARB_PORT             read-only status endpoint the web app proxies as /api/desk (default 8549)
+ *   ORDO_DATA_DIR             where the money ledger (arb-ledger.ndjson) lives
  */
 
 const KEY = normalizePrivateKey(process.env.ORDO_ARB_KEY, "ORDO_ARB_KEY");
@@ -77,6 +81,18 @@ function gasBurnedToday(): bigint {
 }
 let breakerLogged = false;
 const MAX_CYCLES = Number(process.env.ORDO_ARB_MAX_CYCLES ?? 160);
+
+const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data");
+const STATUS_PORT = Number(process.env.ORDO_ARB_PORT ?? 8549);
+const tele = new Telemetry(join(DATA_DIR, "arb-ledger.ndjson"));
+// Past fills seed the breaker, so a restart cannot reset the daily gas budget.
+for (const e of tele.replay()) {
+  if ((e.kind === "won" || e.kind === "reverted") && e.t > Date.now() - 86_400_000) gasLedger.push({ at: e.t, wei: BigInt(e.gasWei) });
+}
+gasLedger.sort((a, b) => a.at - b.at);
+const STARTED_AT = Date.now();
+let lastBalance: bigint | null = null;
+let lastBudget: bigint | null = null;
 
 const FACTORY_ABI = [
   { type: "function", name: "getPool", stateMutability: "view", inputs: [{ type: "address" }, { type: "address" }, { type: "uint24" }], outputs: [{ type: "address" }] },
@@ -224,7 +240,10 @@ async function refreshGas(): Promise<void> {
 async function tradableBalance(): Promise<bigint> {
   const bal = BigInt((await rpcFetch("eth_getBalance", [account.address, "latest"])) as string);
   const free = bal > GAS_RESERVE ? bal - GAS_RESERVE : 0n;
-  return MAX_NOTIONAL && free > MAX_NOTIONAL ? MAX_NOTIONAL : free;
+  const budget = MAX_NOTIONAL && free > MAX_NOTIONAL ? MAX_NOTIONAL : free;
+  lastBalance = bal;
+  lastBudget = budget;
+  return budget;
 }
 
 /** Two sizes — a third and the whole budget; price impact makes the best interior. */
@@ -274,16 +293,24 @@ async function scan(cycles: Cycle[]): Promise<void> {
   const budget = await tradableBalance();
   if (budget < parseEther("0.0002")) {
     console.log(`[arb] idle — tradable ${formatEther(budget)} ETH is below the dust floor; fund ${account.address}`);
+    tele.note("idle", `tradable ${formatEther(budget)} ETH is below the dust floor`);
     return;
   }
 
   const sizes = sizeLadder(budget);
   const tasks = cycles.flatMap((c) => sizes.map((amountIn) => ({ c, amountIn })));
   const found: { c: Cycle; amountIn: bigint; out: bigint; gross: bigint }[] = [];
+  // The closest edge, profitable or not: the honest picture of how far the
+  // market is from paying us, sampled every scan for the public desk page.
+  const closest = { bps: -Infinity, label: null as string | null };
   await pooled(tasks, 8, async ({ c, amountIn }) => {
     const out = await quoteCycle(c, amountIn);
-    if (out != null && out > amountIn) found.push({ c, amountIn, out, gross: out - amountIn });
+    if (out == null) return;
+    const bps = edgeBps(amountIn, out);
+    if (bps > closest.bps) { closest.bps = bps; closest.label = c.label; }
+    if (out > amountIn) found.push({ c, amountIn, out, gross: out - amountIn });
   });
+  tele.scan({ t: Date.now(), quotes: tasks.length, bestBps: closest.label ? closest.bps : null, bestLabel: closest.label, positive: found.length });
 
   if (found.length === 0) {
     console.log(`[arb] scanned ${tasks.length} quotes · no positive round trip · budget ${formatEther(budget)} ETH`);
@@ -302,18 +329,24 @@ async function scan(cycles: Cycle[]): Promise<void> {
     const g = (await rpcFetch("eth_estimateGas", [{ from: account.address, to: ROUTER, data, value }])) as string;
     gas = (BigInt(g) * 5n) / 4n; // 25% headroom over the estimate
   } catch {
-    return; // would revert — edge taken, or too thin for the min-return guard
+    // would revert — edge taken, or too thin for the min-return guard
+    tele.note("gone", `edge on ${best.c.label} (+${formatEther(best.gross)} ETH gross) vanished before we could price it`, best.c.label);
+    return;
   }
   const gasCost = gas * maxFeePerGas;
   const net = best.gross - gasCost;
   if (net < MIN_PROFIT) {
     console.log(`[arb] pass ${best.c.label}: gross ${formatEther(best.gross)} ETH < gas ${formatEther(gasCost)} + floor`);
+    tele.note("pass", `gross +${formatEther(best.gross)} ETH does not clear gas ${formatEther(gasCost)} ETH + floor`, best.c.label);
     return;
   }
 
   const burned = gasBurnedToday();
   if (burned >= DAILY_GAS_CAP) {
-    if (!breakerLogged) console.warn(`[arb] circuit breaker: ${formatEther(burned)} ETH of gas burned in 24h ≥ cap ${formatEther(DAILY_GAS_CAP)} — scanning only until it rolls off`);
+    if (!breakerLogged) {
+      console.warn(`[arb] circuit breaker: ${formatEther(burned)} ETH of gas burned in 24h ≥ cap ${formatEther(DAILY_GAS_CAP)} — scanning only until it rolls off`);
+      tele.note("breaker", `daily gas cap reached (${formatEther(burned)} ETH) — scanning only until it rolls off`);
+    }
     breakerLogged = true;
     return;
   }
@@ -326,27 +359,35 @@ async function scan(cycles: Cycle[]): Promise<void> {
   });
   const hash = (await rpcFetch("eth_sendRawTransaction", [raw])) as string;
   console.log(`[arb] FIRING ${best.c.label} size ${formatEther(best.amountIn)} ETH · sim net ${formatEther(net)} ETH · ${hash}`);
-  await confirm(hash);
+  tele.record({ kind: "fire", t: Date.now(), cycle: best.c.label, sizeWei: best.amountIn.toString(), simNetWei: net.toString(), hash });
+  await confirm(hash, best.c.label, best.amountIn, minReturn);
 }
 
-async function confirm(hash: string): Promise<void> {
+async function confirm(hash: string, cycle: string, amountIn: bigint, minReturn: bigint): Promise<void> {
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 1000));
     const rec = (await rpcFetch("eth_getTransactionReceipt", [hash]).catch(() => null)) as
-      | { status: string; gasUsed: string; effectiveGasPrice?: string }
+      | { status: string; gasUsed: string; effectiveGasPrice?: string; logs?: { address: string; topics: string[]; data: string }[] }
       | null;
     if (!rec) continue;
     const gasUsed = BigInt(rec.gasUsed);
     const gasPrice = BigInt(rec.effectiveGasPrice ?? maxFeePerGas);
-    gasLedger.push({ at: Date.now(), wei: gasUsed * gasPrice });
+    const gasWei = gasUsed * gasPrice;
+    gasLedger.push({ at: Date.now(), wei: gasWei });
     if (rec.status === "0x1") {
-      console.log(`[arb] WON ${hash} — round trip cleared (gas ${formatEther(gasUsed * gasPrice)} ETH)`);
+      // Exact proceeds from the WETH Withdrawal event; the min-return guard is
+      // a floor if the log is ever missing, never an overstatement.
+      const returned = wethReturned(rec.logs, WETH, ROUTER);
+      console.log(`[arb] WON ${hash} — round trip cleared, +${formatEther((returned ?? minReturn) - amountIn)} ETH gross (gas ${formatEther(gasWei)} ETH)`);
+      tele.record({ kind: "won", t: Date.now(), cycle, sizeWei: amountIn.toString(), returnedWei: (returned ?? minReturn).toString(), estimated: returned == null, gasWei: gasWei.toString(), hash });
     } else {
-      console.log(`[arb] reverted ${hash} — edge taken first, cost gas ${formatEther(gasUsed * gasPrice)} ETH (principal safe)`);
+      console.log(`[arb] reverted ${hash} — edge taken first, cost gas ${formatEther(gasWei)} ETH (principal safe)`);
+      tele.record({ kind: "reverted", t: Date.now(), cycle, sizeWei: amountIn.toString(), gasWei: gasWei.toString(), hash });
     }
     return;
   }
   console.warn(`[arb] ${hash} unconfirmed in 30s`);
+  tele.note("info", `${hash} unconfirmed after 30s`, cycle);
 }
 
 // --- main --------------------------------------------------------------------
@@ -359,6 +400,33 @@ let cycles = rankCycles(await discoverCycles());
 const midCount = new Set(cycles.map((c) => c.tokens.join(">"))).size;
 console.log(`OrdoFi arb bot | ${cycles.length} cycles (cross-tier + triangular) across ${midCount} routes`);
 console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas reserve ${formatEther(GAS_RESERVE)} ETH · per-trade cap ${MAX_NOTIONAL ? formatEther(MAX_NOTIONAL) + " ETH" : "none"} · daily gas cap ${formatEther(DAILY_GAS_CAP)} ETH · scan ${INTERVAL_MS}ms`);
+
+tele.serve(STATUS_PORT, {
+  address: account.address,
+  chainId: CHAIN_ID,
+  startedAt: STARTED_AT,
+  config: {
+    minProfitEth: formatEther(MIN_PROFIT),
+    gasReserveEth: formatEther(GAS_RESERVE),
+    maxNotionalEth: MAX_NOTIONAL ? formatEther(MAX_NOTIONAL) : null,
+    dailyGasCapEth: formatEther(DAILY_GAS_CAP),
+    intervalMs: INTERVAL_MS,
+    maxCycles: MAX_CYCLES,
+    router: ROUTER,
+    quoter: QUOTER_V2,
+  },
+  universe: () => ({
+    cycles: cycles.length,
+    routes: new Set(cycles.map((c) => c.tokens.join(">"))).size,
+    crossTier: cycles.filter((c) => c.fees.length === 2).length,
+    triangular: cycles.filter((c) => c.fees.length === 3).length,
+    labels: cycles.map((c) => c.label),
+  }),
+  chain: () => ({ balanceWei: lastBalance, budgetWei: lastBudget, maxFeePerGas }),
+  gas24h: gasBurnedToday,
+  dailyGasCap: DAILY_GAS_CAP,
+  breaker: () => gasBurnedToday() >= DAILY_GAS_CAP,
+});
 
 await refreshGas();
 setInterval(() => { refreshGas().catch(() => {}); }, 20_000);

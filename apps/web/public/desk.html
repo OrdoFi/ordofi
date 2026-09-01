@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" content="#ff6414" />
+  <title>OrdoFi — Desk · the house arbitrage bot, live</title>
+  <meta name="description" content="OrdoFi's own arbitrage bot on Robinhood Chain, in public: every scan, every fill, every reverted race, with the on-chain proof." />
+  <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .desk { padding: 40px 0 90px; }
+    .desk h1 { font-size: 40px; letter-spacing: -0.02em; margin-bottom: 8px; display: flex; align-items: center; gap: 14px; }
+    .desk .sub { color: var(--muted); max-width: 820px; margin-bottom: 26px; font-size: 15px; }
+    .chip { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; padding: 5px 10px; border: 1px solid var(--border-light); color: var(--text-dim); text-transform: uppercase; }
+    .chip.on { border-color: var(--accent); color: var(--accent); }
+    .chip.off { border-color: var(--danger); color: var(--danger); }
+    .live { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+    .live.off { background: var(--danger); animation: none; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+    .idline { display: flex; flex-wrap: wrap; gap: 10px 28px; font-family: var(--mono); font-size: 12px; color: var(--muted); border: 1px solid var(--border); padding: 14px 18px; margin-bottom: 0; background: var(--card); }
+    .idline b { color: var(--text); font-weight: 500; }
+    .idline a { color: var(--accent); }
+
+    .tiles { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid var(--border); border-top: none; margin-bottom: 28px; }
+    .tile { padding: 22px 20px 18px; border-right: 1px solid var(--border); background: var(--card); min-width: 0; }
+    .tile:last-child { border-right: none; }
+    .tile .v { font-family: var(--mono); font-size: 24px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tile .v.acc { color: var(--accent); }
+    .tile .v.neg { color: var(--danger); }
+    .tile .l { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .tile .s { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 8px; }
+    .bar { height: 3px; background: var(--bg-elev); margin-top: 10px; position: relative; }
+    .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); }
+
+    .cols { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 24px; margin-bottom: 28px; align-items: start; }
+    .panel { border: 1px solid var(--border); background: var(--card); }
+    .panel .ph { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+    .panel .ph h3 { font-size: 16px; }
+    .panel .ph span { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .panel .pb { padding: 16px 18px; }
+
+    canvas#edge { width: 100%; height: 170px; display: block; }
+    .edge-note { display: flex; justify-content: space-between; gap: 12px; font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
+    .edge-note b { color: var(--text); font-weight: 500; }
+
+    .feed { list-style: none; max-height: 420px; overflow-y: auto; }
+    .feed li { display: grid; grid-template-columns: 62px 78px minmax(0, 1fr); gap: 12px; padding: 9px 18px; border-bottom: 1px solid var(--border); font-size: 13px; align-items: baseline; }
+    .feed li:last-child { border-bottom: none; }
+    .feed time { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .feed .k { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+    .k-won { color: var(--accent); } .k-fire { color: var(--accent-dim); } .k-reverted { color: var(--danger); }
+    .k-pass, .k-gone, .k-idle, .k-info { color: var(--muted); } .k-breaker { color: var(--danger); }
+    .feed .t { color: var(--text-dim); min-width: 0; overflow-wrap: anywhere; }
+    .feed .t code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+    .feed .t a { color: var(--accent); font-family: var(--mono); font-size: 12px; }
+    .empty { padding: 26px 18px; color: var(--muted); font-size: 13px; }
+
+    .routes { font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; max-height: 420px; overflow-y: auto; }
+    .routes span { border: 1px solid var(--border); padding: 3px 7px; white-space: nowrap; }
+    .routes span.tri { border-style: dashed; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); white-space: nowrap; }
+    th { color: var(--text); font-family: var(--sans); font-size: 12px; font-weight: 600; }
+    td { color: var(--muted); } td.pos { color: var(--accent); } td.neg { color: var(--danger); }
+    td a { color: var(--accent); }
+    .tablewrap { overflow-x: auto; }
+
+    .how { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--border); margin-top: 8px; }
+    .how div { padding: 22px 20px; border-right: 1px solid var(--border); background: var(--card); }
+    .how div:last-child { border-right: none; }
+    .how .n { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .08em; margin-bottom: 8px; }
+    .how h4 { font-size: 16px; margin-bottom: 6px; }
+    .how p { font-size: 13px; color: var(--muted); line-height: 1.55; }
+    .knobs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--border); border-top: none; }
+    .knobs div { padding: 14px 20px; border-right: 1px solid var(--border); font-family: var(--mono); font-size: 12px; color: var(--muted); background: var(--bg); }
+    .knobs div:last-child { border-right: none; }
+    .knobs b { display: block; color: var(--text); font-weight: 500; font-size: 14px; margin-bottom: 2px; }
+    .honest { border: 1px solid var(--border); border-top: none; padding: 16px 20px; font-size: 13px; color: var(--muted); background: var(--card); }
+    .honest b { color: var(--text); font-weight: 600; }
+    h2.sec { font-size: 22px; margin: 34px 0 12px; letter-spacing: -0.01em; }
+
+    @media (max-width: 1100px) { .tiles { grid-template-columns: repeat(3, 1fr); } .tile:nth-child(3) { border-right: none; } .tile:nth-child(-n+3) { border-bottom: 1px solid var(--border); } .cols { grid-template-columns: 1fr; } .how, .knobs { grid-template-columns: 1fr 1fr; } .how div:nth-child(2), .knobs div:nth-child(2) { border-right: none; } .how div:nth-child(-n+2), .knobs div:nth-child(-n+2) { border-bottom: 1px solid var(--border); } }
+    @media (max-width: 640px) { .tiles { grid-template-columns: 1fr 1fr; } .tile { border-bottom: 1px solid var(--border); } .tile:nth-child(odd) { border-right: 1px solid var(--border); } .tile:nth-child(even) { border-right: none; } .desk h1 { font-size: 30px; } .how, .knobs { grid-template-columns: 1fr; } .how div, .knobs div { border-right: none; border-bottom: 1px solid var(--border); } .feed li { grid-template-columns: 56px 1fr; } .feed li .t { grid-column: 1 / -1; } }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
+      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/desk" class="here">Desk</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a><a href="/apps">Apps</a><a href="/portal">Portal</a><a href="/operators">Operators</a><a href="/docs">Docs</a></div>
+    </div>
+  </nav>
+
+  <div class="wrap desk">
+    <h1><span class="live" id="dot"></span>Desk <span class="chip" id="chip">connecting</span></h1>
+    <div class="sub">OrdoFi's own arbitrage bot, trading its own capital on Robinhood Chain — in public. Every scan, every shot it takes, every race it loses, with the transaction hash to check it against the chain. This is the same infrastructure searchers get through the RPC and the auction, run by the house.</div>
+
+    <div class="idline" id="idline">
+      <span>wallet <b id="addr">—</b></span>
+      <span>balance <b id="bal">—</b></span>
+      <span>working budget <b id="budget">—</b></span>
+      <span>up <b id="up">—</b></span>
+      <span>last scan <b id="lastscan">—</b></span>
+      <span>gas <b id="gas">—</b></span>
+    </div>
+    <div class="tiles" id="tiles">
+      <div class="tile"><div class="v" id="t-net">—</div><div class="l">Net P&amp;L, all time</div><div class="s" id="t-net-s">gross − gas</div></div>
+      <div class="tile"><div class="v" id="t-gross">—</div><div class="l">Gross captured</div><div class="s" id="t-gross-s">from winning round trips</div></div>
+      <div class="tile"><div class="v" id="t-fills">—</div><div class="l">Won / reverted</div><div class="s" id="t-fills-s">shots fired</div></div>
+      <div class="tile"><div class="v" id="t-gas24">—</div><div class="l">Gas burned, 24h</div><div class="bar"><i id="t-gas-bar" style="width:0%"></i></div><div class="s" id="t-gas24-s">circuit breaker</div></div>
+      <div class="tile"><div class="v" id="t-quotes">—</div><div class="l">Quotes simulated</div><div class="s" id="t-quotes-s">per scan</div></div>
+      <div class="tile"><div class="v" id="t-cycles">—</div><div class="l">Cycles watched</div><div class="s" id="t-cycles-s">cross-tier · triangular</div></div>
+    </div>
+
+    <div class="cols">
+      <div class="panel">
+        <div class="ph"><h3>Edge monitor</h3><span id="edge-span">closest round trip per scan, basis points</span></div>
+        <div class="pb">
+          <canvas id="edge" height="170"></canvas>
+          <div class="edge-note"><span>closest now: <b id="edge-now">—</b></span><span id="edge-hint">above the line a cycle returns more than it started with; it still has to clear gas</span></div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="ph"><h3>Live feed</h3><span id="feed-span">newest first</span></div>
+        <ul class="feed" id="feed"><li class="empty">Waiting for the bot…</li></ul>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div class="panel">
+        <div class="ph"><h3>Fills</h3><span id="fills-span">every transaction the desk has sent</span></div>
+        <div class="tablewrap"><table><thead><tr><th>When</th><th>Cycle</th><th>Size</th><th>Result</th><th>Gross</th><th>Gas</th><th>Tx</th></tr></thead><tbody id="fills"><tr><td colspan="7" class="empty">No fills yet. The bot only sends when a simulated round trip clears gas plus its margin.</td></tr></tbody></table></div>
+      </div>
+      <div class="panel">
+        <div class="ph"><h3>What it watches</h3><span id="routes-span">solid = cross-tier · dashed = triangular</span></div>
+        <div class="pb"><div class="routes" id="routes"><span>—</span></div></div>
+      </div>
+    </div>
+
+    <h2 class="sec">How it works</h2>
+    <div class="how">
+      <div><div class="n">01 · DISCOVER</div><h4>Find closed loops</h4><p>Every token that traded on Robinhood Chain in the last day is checked against the Uniswap V3 factory. A loop is a path that starts and ends in ETH: the same pair across two fee tiers, or a triangle through USDG where the tokenised stocks have depth.</p></div>
+      <div><div class="n">02 · SIMULATE</div><h4>Quote everything, for free</h4><p>Each loop is priced with QuoterV2 by <code>eth_call</code> — no gas, no state change — at two sizes, every few seconds. The chart above is the best of those quotes. Most of the time it is negative: fees and price impact eat the spread.</p></div>
+      <div><div class="n">03 · FIRE</div><h4>One atomic transaction</h4><p>When a loop returns more than it started with, plus gas, plus a margin, the desk sends one SwapRouter02 <code>multicall</code> with <code>amountOutMinimum</code> set to principal + margin. If the edge is gone by the time the sequencer includes it, the whole thing reverts. Principal is never at risk; the cost of a lost race is gas.</p></div>
+      <div><div class="n">04 · PROVE</div><h4>Settle in public</h4><p>Wins are read from the WETH <code>Withdrawal</code> event in the receipt, not from a simulation. Losses are the gas on reverted transactions. Both go into an append-only ledger and onto this page, hash by hash.</p></div>
+    </div>
+    <div class="knobs" id="knobs">
+      <div><b id="k-cap">—</b>max per trade</div>
+      <div><b id="k-gascap">—</b>gas cap per rolling day</div>
+      <div><b id="k-floor">—</b>minimum net profit to fire</div>
+      <div><b id="k-int">—</b>scan cadence</div>
+    </div>
+    <div class="honest"><b>Why the numbers are small.</b> Robinhood Chain has no public mempool and a first-come-first-served sequencer, so an arbitrage is a latency race, not a fee auction. Bots colocated next to the sequencer see the same dislocation and land first; our shots from a data centre in San Jose mostly arrive to a market that has already corrected, which shows up here as reverts. Our own Robinhood Chain node is syncing to close that gap. The point of publishing this is not the P&amp;L — it is that every claim OrdoFi makes about execution on this chain is backed by a wallet you can watch.</div>
+  </div>
+
+  <script>
+    var EXPLORER = 'https://robinhoodchain.blockscout.com';
+    var $ = function (id) { return document.getElementById(id); };
+    var state = null;
+
+    function trim(s) { return s.indexOf('.') >= 0 ? s.replace(/0+$/, '').replace(/\.$/, '') : s; }
+    function fmtEth(x, dp) { var n = Number(x); if (!isFinite(n)) return '—'; return (n > 0 ? '+' : '') + trim(n.toFixed(dp == null ? 5 : dp)) + ' ETH'; }
+    function fmtEthAbs(x, dp) { var n = Number(x); if (!isFinite(n)) return '—'; return trim(n.toFixed(dp == null ? 5 : dp)) + ' ETH'; }
+    function usd(x) { if (!state || !state.ethUsd) return ''; var n = Number(x) * state.ethUsd; if (!isFinite(n)) return ''; return (n < 0 ? '−' : '') + '$' + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: Math.abs(n) < 10 ? 3 : 2 }); }
+    function ago(t) { if (!t) return '—'; var s = Math.max(0, Math.round((Date.now() - t) / 1000)); if (s < 60) return s + 's ago'; if (s < 3600) return Math.floor(s / 60) + 'm ago'; return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago'; }
+    function dur(s) { if (s == null) return '—'; if (s < 3600) return Math.floor(s / 60) + 'm'; if (s < 86400) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm'; return Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h'; }
+    function hhmm(t) { var d = new Date(t); return d.toTimeString().slice(0, 8); }
+    function short(h) { return h ? h.slice(0, 10) + '…' + h.slice(-4) : ''; }
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+    function txlink(h) { return '<a href="' + EXPLORER + '/tx/' + h + '" target="_blank" rel="noopener">' + short(h) + '</a>'; }
+
+    function render(d) {
+      state = d;
+      var live = !!d.live;
+      $('dot').className = 'live' + (live ? '' : ' off');
+      $('chip').className = 'chip ' + (live ? 'on' : 'off');
+      $('chip').textContent = live ? 'live' : 'offline · ledger only';
+
+      if (d.address) $('addr').innerHTML = '<a href="' + EXPLORER + '/address/' + d.address + '" target="_blank" rel="noopener">' + d.address.slice(0, 8) + '…' + d.address.slice(-6) + '</a>';
+      $('bal').textContent = d.balanceEth != null ? fmtEthAbs(d.balanceEth, 4) + (usd(d.balanceEth) ? ' · ' + usd(d.balanceEth) : '') : '—';
+      $('budget').textContent = d.budgetEth != null ? fmtEthAbs(d.budgetEth, 4) : '—';
+      $('up').textContent = dur(d.uptimeSec);
+      $('lastscan').textContent = d.scans && d.scans.lastAt ? ago(d.scans.lastAt) : (live ? 'warming up' : '—');
+      $('gas').textContent = d.gasPriceGwei != null ? d.gasPriceGwei.toFixed(3) + ' gwei' : '—';
+
+      var t = d.totals || {};
+      var net = Number(t.netEth || 0), gross = Number(t.grossEth || 0);
+      var nv = $('t-net'); nv.textContent = fmtEth(net); nv.className = 'v ' + (net > 0 ? 'acc' : net < 0 ? 'neg' : '');
+      $('t-net-s').textContent = (usd(net) ? usd(net) + ' · ' : '') + 'gross ' + fmtEth(gross, 5) + ' − gas ' + fmtEthAbs(t.gasEth || 0, 5);
+      $('t-gross').textContent = fmtEth(gross); $('t-gross').className = 'v ' + (gross > 0 ? 'acc' : '');
+      $('t-gross-s').textContent = (usd(gross) ? usd(gross) + ' · ' : '') + (t.won || 0) + ' winning round trip' + (t.won === 1 ? '' : 's');
+      $('t-fills').textContent = (t.won || 0) + ' / ' + (t.reverted || 0);
+      $('t-fills-s').textContent = (t.fires || 0) + ' shot' + (t.fires === 1 ? '' : 's') + ' fired' + (t.fires ? ' · ' + Math.round(100 * (t.won || 0) / t.fires) + '% won' : '');
+      var g24 = Number(t.gas24hEth || 0), cap = t.dailyGasCapEth != null ? Number(t.dailyGasCapEth) : (d.config && d.config.dailyGasCapEth ? Number(d.config.dailyGasCapEth) : null);
+      $('t-gas24').textContent = fmtEthAbs(g24, 5);
+      $('t-gas-bar').style.width = cap ? Math.min(100, 100 * g24 / cap).toFixed(1) + '%' : '0%';
+      $('t-gas24-s').textContent = t.breaker ? 'breaker tripped — scanning only' : (cap ? 'of ' + fmtEthAbs(cap, 3) + ' cap · ' + (100 * g24 / cap).toFixed(1) + '% used' : 'circuit breaker');
+      var sc = d.scans || {};
+      $('t-quotes').textContent = (sc.quotesTotal || 0).toLocaleString();
+      $('t-quotes-s').textContent = sc.last ? sc.last.quotes + ' per scan · ' + (sc.count || 0).toLocaleString() + ' scans this session' : (live ? 'first scan pending' : 'bot offline');
+      var u = d.universe || {};
+      $('t-cycles').textContent = u.cycles != null ? u.cycles : '—';
+      $('t-cycles-s').textContent = u.cycles != null ? (u.crossTier || 0) + ' cross-tier · ' + (u.triangular || 0) + ' triangular · ' + (u.routes || 0) + ' routes' : 'cross-tier · triangular';
+
+      var c = d.config || {};
+      $('k-cap').textContent = c.maxNotionalEth ? fmtEthAbs(c.maxNotionalEth, 3) : (live ? 'whole free balance' : '—');
+      $('k-gascap').textContent = c.dailyGasCapEth ? fmtEthAbs(c.dailyGasCapEth, 3) : '—';
+      $('k-floor').textContent = c.minProfitEth ? fmtEthAbs(c.minProfitEth, 6) : '—';
+      $('k-int').textContent = c.intervalMs ? 'every ' + (c.intervalMs / 1000) + 's' : '—';
+
+      drawEdge(sc.history || []);
+      var last = sc.last;
+      $('edge-now').textContent = last && last.bestBps != null ? (last.bestBps > 0 ? '+' : '') + last.bestBps.toFixed(2) + ' bps on ' + last.bestLabel : (live ? 'no quote yet' : '—');
+
+      renderFeed(d.events || []);
+      renderFills(d.events || []);
+      renderRoutes(u.labels || []);
+    }
+
+    function drawEdge(h) {
+      var cv = $('edge'), dpr = window.devicePixelRatio || 1;
+      var W = cv.clientWidth || 600, H = 170;
+      cv.width = W * dpr; cv.height = H * dpr;
+      var ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
+      ctx.clearRect(0, 0, W, H);
+      var pts = h.filter(function (s) { return s.bestBps != null; });
+      var padL = 44, padR = 8, padT = 10, padB = 18;
+      var iw = W - padL - padR, ih = H - padT - padB;
+      var vals = pts.map(function (s) { return s.bestBps; });
+      var lo = Math.min(-1, Math.min.apply(null, vals.length ? vals : [-1])), hi = Math.max(1, Math.max.apply(null, vals.length ? vals : [1]));
+      var span = hi - lo; lo -= span * 0.08; hi += span * 0.08;
+      var y = function (v) { return padT + ih * (1 - (v - lo) / (hi - lo)); };
+      var css = getComputedStyle(document.documentElement);
+      var border = css.getPropertyValue('--border').trim(), muted = css.getPropertyValue('--muted').trim(), accent = css.getPropertyValue('--accent').trim(), danger = css.getPropertyValue('--danger').trim();
+
+      ctx.strokeStyle = border; ctx.lineWidth = 1;
+      [lo + (hi - lo) * 0.25, lo + (hi - lo) * 0.5, lo + (hi - lo) * 0.75].forEach(function (v) { ctx.beginPath(); ctx.moveTo(padL, y(v)); ctx.lineTo(W - padR, y(v)); ctx.stroke(); });
+      ctx.fillStyle = muted; ctx.font = '10px "Fira Code", monospace'; ctx.textAlign = 'right';
+      [lo + (hi - lo) * 0.08, 0, hi - (hi - lo) * 0.08].forEach(function (v) { ctx.fillText((v > 0 ? '+' : '') + v.toFixed(1), padL - 6, y(v) + 3); });
+
+      ctx.strokeStyle = muted; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(padL, y(0)); ctx.lineTo(W - padR, y(0)); ctx.stroke(); ctx.setLineDash([]);
+
+      if (!pts.length) { ctx.fillStyle = muted; ctx.textAlign = 'center'; ctx.font = '12px Inter, sans-serif'; ctx.fillText(state && state.live ? 'first scan pending…' : 'no live scans — bot offline', padL + iw / 2, padT + ih / 2); return; }
+      var n = Math.max(pts.length, 40), bw = iw / n;
+      pts.forEach(function (s, i) {
+        var x = padL + (n - pts.length + i) * bw;
+        var v = s.bestBps, y0 = y(0), y1 = y(v);
+        ctx.fillStyle = v >= 0 ? accent : danger;
+        ctx.globalAlpha = v >= 0 ? 1 : 0.55;
+        ctx.fillRect(x + bw * 0.15, Math.min(y0, y1), Math.max(1, bw * 0.7), Math.max(1, Math.abs(y1 - y0)));
+      });
+      ctx.globalAlpha = 1;
+      var first = pts[0].t, last = pts[pts.length - 1].t;
+      ctx.fillStyle = muted; ctx.font = '10px "Fira Code", monospace'; ctx.textAlign = 'left'; ctx.fillText(hhmm(first), padL, H - 4); ctx.textAlign = 'right'; ctx.fillText(hhmm(last), W - padR, H - 4);
+      $('edge-span').textContent = pts.length + ' scans · ' + Math.round((last - first) / 60000) + ' min';
+    }
+
+    function renderFeed(ev) {
+      var ul = $('feed');
+      if (!ev.length) { ul.innerHTML = '<li class="empty">' + (state.live ? 'Scanning. Notes appear here when an edge is found, passed on, or fired at.' : 'Nothing recorded yet.') + '</li>'; return; }
+      ul.innerHTML = ev.slice(0, 60).map(function (e) {
+        var txt;
+        if (e.kind === 'fire') txt = 'fired <code>' + esc(e.cycle) + '</code> at ' + fmtEthAbs(Number(e.sizeWei) / 1e18, 4) + ' · sim net ' + fmtEth(Number(e.simNetWei) / 1e18, 6) + ' · ' + txlink(e.hash);
+        else if (e.kind === 'won') txt = 'won <code>' + esc(e.cycle) + '</code> · ' + fmtEth((Number(e.returnedWei) - Number(e.sizeWei)) / 1e18, 6) + ' gross, gas ' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + (e.estimated ? ' (proceeds at guard floor)' : '') + ' · ' + txlink(e.hash);
+        else if (e.kind === 'reverted') txt = 'lost the race on <code>' + esc(e.cycle) + '</code> · cost gas ' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + ', principal safe · ' + txlink(e.hash);
+        else txt = (e.cycle ? '<code>' + esc(e.cycle) + '</code> · ' : '') + esc(e.text);
+        return '<li><time>' + hhmm(e.t) + '</time><span class="k k-' + e.kind + '">' + e.kind + '</span><span class="t">' + txt + '</span></li>';
+      }).join('');
+      $('feed-span').textContent = ev.length + ' entries · newest first';
+    }
+
+    function renderFills(ev) {
+      var fills = ev.filter(function (e) { return e.kind === 'won' || e.kind === 'reverted'; });
+      var tb = $('fills');
+      if (!fills.length) return;
+      tb.innerHTML = fills.slice(0, 40).map(function (e) {
+        var won = e.kind === 'won';
+        var gross = won ? (Number(e.returnedWei) - Number(e.sizeWei)) / 1e18 : 0;
+        return '<tr><td>' + new Date(e.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + '</td><td>' + esc(e.cycle) + '</td><td>' + fmtEthAbs(Number(e.sizeWei) / 1e18, 4) + '</td><td class="' + (won ? 'pos' : 'neg') + '">' + (won ? 'won' : 'reverted') + '</td><td class="' + (won ? 'pos' : '') + '">' + (won ? fmtEth(gross, 6) : '—') + '</td><td>' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + '</td><td>' + txlink(e.hash) + '</td></tr>';
+      }).join('');
+      $('fills-span').textContent = fills.length + ' on record';
+    }
+
+    var routesKey = '';
+    function renderRoutes(labels) {
+      var key = labels.length + ':' + (labels[0] || '') + ':' + (labels[labels.length - 1] || '');
+      if (key === routesKey) return; routesKey = key;
+      var el = $('routes');
+      if (!labels.length) { el.innerHTML = '<span>' + (state.live ? 'discovering…' : '—') + '</span>'; return; }
+      el.innerHTML = labels.map(function (l) { return '<span class="' + (l.indexOf('>') >= 0 ? 'tri' : '') + '">' + esc(l) + '</span>'; }).join('');
+    }
+
+    function tick() {
+      fetch('/api/desk', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(render).catch(function () {
+        $('chip').className = 'chip off'; $('chip').textContent = 'unreachable'; $('dot').className = 'live off';
+      });
+    }
+    tick(); setInterval(tick, 5000);
+    window.addEventListener('resize', function () { if (state) drawEdge((state.scans || {}).history || []); });
+  </script>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="logo">ordo<span class="logo-app">app</span></div>
+          <p>The execution layer for Robinhood Chain.</p>
+        </div>
+        <div class="footer-col"><h5>Product</h5><a href="/trade">Trade</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/dashboard">Settlement dashboard</a><a href="/portal">Portal</a><a href="/docs">Documentation</a></div>
+        <div class="footer-col"><h5>Participate</h5><a href="/searchers">For searchers</a><a href="/apps">For apps &amp; wallets</a><a href="/operators">For node operators</a></div>
+        <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs#quickstart">Quickstart</a><a href="/docs#searcher">API reference</a></div>
+      </div>
+      <div class="footer-bottom">
+        <div class="disclaimer">© 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc.</div>
+        <div class="socials"><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs">Docs</a></div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

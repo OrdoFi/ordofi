@@ -73,6 +73,7 @@ services:
       # Same reason as the gateway: the explorer's auction panel goes blank
       # without it.
       ORDO_AUCTION_URL: http://auction:8548
+      ORDO_ARB_URL: http://arb:8549
     depends_on: [auction]
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
@@ -108,6 +109,10 @@ services:
       ORDO_ARB_GAS_RESERVE_ETH: ${ORDO_ARB_GAS_RESERVE_ETH:-0.0008}
       ORDO_ARB_MAX_NOTIONAL_ETH: ${ORDO_ARB_MAX_NOTIONAL_ETH:-}
       ORDO_ARB_DAILY_GAS_CAP_ETH: ${ORDO_ARB_DAILY_GAS_CAP_ETH:-0.01}
+      # Read-only status the web app publishes at /desk; the fill ledger goes
+      # on the shared volume so totals survive restarts.
+      ORDO_ARB_PORT: 8549
+    volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
 
   watcher:
