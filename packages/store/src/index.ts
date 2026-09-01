@@ -273,6 +273,21 @@ export class OrdoStore {
       );
   }
 
+  /**
+   * Drop everything re-derivable from the chain, keeping everything that is
+   * not. Correcting an attribution rule invalidates every arb already
+   * recorded, but settlements and API keys were never measurements — deleting
+   * the database file to rebuild the index took them with it and the site went
+   * back to reporting no settlements at all.
+   */
+  clearMeasurements(): void {
+    this.db.exec(`
+      DELETE FROM arb_pools;
+      DELETE FROM arbs;
+      DELETE FROM meta WHERE k = 'swaps';
+    `);
+  }
+
   /** Exact totals over on-chain settlements this auction has submitted. */
   settlementTotals(): { settlements: number; totalChargeWei: bigint } {
     const r = this.db

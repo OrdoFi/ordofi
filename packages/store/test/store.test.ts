@@ -150,3 +150,36 @@ test("leakage: wei totals beyond double precision stay exact", () => {
   assert.equal(s.poolLeakage().profitByToken[0].wei, 9007199254740993000000001n);
   s.close();
 });
+
+test("clearing measurements keeps what the chain cannot re-derive", () => {
+  const s = new OrdoStore(":memory:");
+
+  s.insertArbs([arb("0x1", 100, "0xalice", ["0xpoolA", "0xpoolB"])]);
+  s.addSwaps(42);
+  s.insertSettlement({
+    opportunityId: "0xopp",
+    searcher: "0xsearcher",
+    chargeWei: "200000000000000",
+    userAddress: "0xuser",
+    appAddress: "0xapp",
+    txHash: "0xsettletx",
+    createdAt: 1,
+  });
+  const issued = s.issueApiKey({ label: "keep me" });
+  assert.equal(s.totals().arbs, 1);
+
+  s.clearMeasurements();
+
+  assert.equal(s.totals().arbs, 0, "arbs are re-derivable from the chain, so they go");
+  assert.equal(s.totals().pools, 0);
+  assert.equal(s.swapCount(), 0);
+
+  // These are the ones that cost real money to establish and cannot be
+  // measured again: deleting the database file to rebuild the index took them
+  // with it, and the site went back to reporting no settlements at all.
+  assert.equal(s.settlementTotals().settlements, 1);
+  assert.equal(s.settlementTotals().totalChargeWei, 200000000000000n);
+  assert.ok(s.findApiKey(issued.key), "issued keys must survive an index rebuild");
+
+  s.close();
+});
