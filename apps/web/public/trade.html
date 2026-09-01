@@ -453,9 +453,13 @@
         layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "Fira Code, monospace", fontSize: 11 },
         grid: { vertLines: { color: "rgba(0,0,0,0.045)" }, horzLines: { color: "rgba(0,0,0,0.045)" } },
         rightPriceScale: { borderColor: "#dedad1", scaleMargins: { top: 0.06, bottom: 0.22 } },
-        timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: false },
+        timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: false, rightOffset: 4, barSpacing: 7, minBarSpacing: 1.5 },
         crosshair: { mode: 0 },
         autoSize: true,
+      });
+      // Scrolling into the empty left edge asks the server for more history.
+      chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+        if (r && r.from < 12 && !settingRange) loadOlder();
       });
       series = chart.addCandlestickSeries({
         upColor: "#1e9e6a", downColor: "#c0392b", borderVisible: false,
@@ -478,34 +482,83 @@
       return [...out.values()].sort((a, b) => a.time - b.time);
     }
 
-    function renderChart() {
+    let chartMeta = { coverage: null, backfill: null, prevLen: 0, prevFirst: null };
+    let settingRange = false; // our own range sets must not read as the user scrolling left
+    function setRange(from, to) {
+      settingRange = true;
+      try { chart.timeScale().setVisibleLogicalRange({ from, to }); } finally { settingRange = false; }
+    }
+    /**
+     * mode "fresh"   new pair or timeframe: show the latest ~150 bars at natural width
+     *      "refresh" periodic tick: keep exactly the view the trader has, follow the live edge if they were on it
+     *      "older"   history prepended: keep the same bars on screen, shifted by what was added
+     */
+    function renderChart(mode = "fresh") {
       const cs = candles1m;
+      const ts = chart.timeScale();
+      const before = ts.getVisibleLogicalRange();
+      const prevLen = chartMeta.prevLen;
       // Sub-cent assets need more precision than the default four decimals.
       const last = cs.length ? cs[cs.length - 1].close : 1;
       const precision = last >= 100 ? 2 : last >= 1 ? 4 : last >= 0.01 ? 6 : 9;
       series.applyOptions({ priceFormat: { type: "price", precision, minMove: 10 ** -precision } });
       series.setData(cs.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
       volSeries.setData(cs.map((c) => ({ time: c.time, value: c.vol ?? 0, color: c.close >= c.open ? "rgba(30,158,106,.45)" : "rgba(192,57,43,.45)" })));
-      chart.timeScale().fitContent();
+
+      if (mode === "fresh" || !before || !prevLen) {
+        const show = Math.min(Math.max(cs.length, 40), 150);
+        setRange(cs.length - show, cs.length + 4);
+      } else if (mode === "older") {
+        const added = cs.length - prevLen;
+        setRange(before.from + added, before.to + added);
+      } else {
+        const atEdge = before.to >= prevLen - 1;
+        const shift = atEdge ? cs.length - prevLen : 0;
+        setRange(before.from + shift, before.to + shift);
+      }
+
+      // Where recorded history genuinely starts, say so on the chart itself.
+      const cov = chartMeta.coverage;
+      const first = cs[0];
+      const atStart = first && cov && first.time <= cov.from + tfMin * 60;
+      series.setMarkers(atStart && !(chartMeta.backfill && !chartMeta.backfill.done) ? [{ time: first.time, position: "belowBar", color: "#ff6414", shape: "arrowUp", text: "tape begins" }] : []);
+      chartMeta.prevLen = cs.length;
+      chartMeta.prevFirst = first?.time ?? null;
     }
 
     let chartSeq = 0;
-    async function loadChart() {
+    let hoursLoaded = 0;   // how far back the current pair/timeframe has been pulled
+    let chartKey = "";     // pair+tf the loaded hours belong to
+    let olderBusy = false;
+    const MAX_BARS = 6000; // per response; 1m caps at ~4 days, 1d at the server's 400-day limit
+    const maxHours = () => Math.min(24 * 400, Math.floor((MAX_BARS * tfMin) / 60));
+
+    function coverageCopy(d) {
+      const cov = d.coverage, bf = d.backfill;
+      if (!cov) return `pool tape — no oracles · source: ${d.source}`;
+      const since = new Date(cov.from * 1000).toLocaleDateString([], { month: "short", day: "numeric" });
+      if (bf && !bf.done) return `pool tape — no oracles · history since ${since} · loading older history from chain…`;
+      return `pool tape — no oracles · history since ${since} · ${d.candles.length} candles`;
+    }
+
+    async function loadChart(mode = "fresh") {
       const seq = ++chartSeq;
       renderPairHeader();
+      const key = `${baseTok.address}/${quoteTok.address}/${tfMin}`;
+      if (key !== chartKey) { chartKey = key; hoursLoaded = 0; mode = "fresh"; }
+      const hours = hoursLoaded || (TF_HOURS[tfMin] ?? 48);
       try {
-        const d = await jfetch(`/api/trade/candles?base=${baseTok.address}&quote=${quoteTok.address}&bucketSec=${tfMin * 60}&hours=${TF_HOURS[tfMin] ?? 48}`, 45_000);
+        const d = await jfetch(`/api/trade/candles?base=${baseTok.address}&quote=${quoteTok.address}&bucketSec=${tfMin * 60}&hours=${hours}`, 45_000);
         if (seq !== chartSeq) return;
+        hoursLoaded = hours;
         candles1m = d.candles;
-        renderChart();
+        chartMeta.coverage = d.coverage; chartMeta.backfill = d.backfill;
+        renderChart(mode);
         setPx(d.last);
         const hourAgo = Math.floor(Date.now() / 1000) - 3600;
         const c1h = d.candles.filter((c) => c.time <= hourAgo).pop();
         if (tfMin <= 15) setDelta("chg1h", c1h && d.last ? d.last / c1h.close - 1 : null);
-        const cov = d.coverage;
-        $("cf-src").textContent = cov
-          ? `pool tape — no oracles · history since ${new Date(cov.from * 1000).toLocaleDateString([], { month: "short", day: "numeric" })} · ${d.candles.length} candles`
-          : `pool tape — no oracles · source: ${d.source}`;
+        $("cf-src").textContent = coverageCopy(d);
         // 24h figures come from the market list when it has this pair; the
         // chart window is the fallback.
         const m = marketFor(baseTok.address, quoteTok.address);
@@ -533,6 +586,32 @@
       }
     }
     let retriedQuote = false;
+
+    /** Pull a wider window and prepend it, keeping the bars on screen where they are. */
+    async function loadOlder() {
+      if (olderBusy || !candles1m.length) return;
+      const cov = chartMeta.coverage;
+      const first = candles1m[0].time;
+      // Nothing older is recorded (yet): the marker already says where the tape begins.
+      if (!cov || first <= cov.from + tfMin * 60) return;
+      if (hoursLoaded >= maxHours()) return;
+      olderBusy = true;
+      try {
+        const hours = Math.min(maxHours(), Math.max(hoursLoaded * 2, hoursLoaded + 24));
+        const seq = ++chartSeq;
+        const d = await jfetch(`/api/trade/candles?base=${baseTok.address}&quote=${quoteTok.address}&bucketSec=${tfMin * 60}&hours=${hours}`, 45_000);
+        if (seq !== chartSeq) return;
+        hoursLoaded = hours;
+        candles1m = d.candles;
+        chartMeta.coverage = d.coverage; chartMeta.backfill = d.backfill;
+        renderChart("older");
+        $("cf-src").textContent = coverageCopy(d);
+        $("sb-tape").textContent = `tape: ${d.source} · ${d.swaps.toLocaleString()} swaps in view · ${d.hours}h`;
+      } catch { /* keep what we have */ } finally {
+        olderBusy = false;
+      }
+    }
+
     function setDelta(id, v) {
       const el = $(id);
       if (v == null || !Number.isFinite(v)) { el.textContent = "—"; el.className = "v"; return; }
@@ -1152,7 +1231,7 @@
       }
       if (qp.get("amt")) { $("amt-in").value = qp.get("amt"); requestQuote(); }
     });
-    setInterval(loadChart, 30_000);
+    setInterval(() => loadChart("refresh"), 30_000);
     setInterval(loadPair, 60_000);
     setInterval(loadMarkets, 20_000);
     setInterval(() => { if (document.visibilityState === "visible") loadTrades(); }, 5_000);

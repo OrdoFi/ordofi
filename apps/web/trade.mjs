@@ -813,6 +813,11 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
       ? store.candlesAgg(found.pool, fromBucket, now, bucketSec)
       : store?.candlesFor?.(found.pool, fromBucket) ?? [];
   const coverage = store?.candleCoverage?.(found.pool) ?? null;
+  // Where the history backfill has reached for this pool, so the chart can say
+  // "history is still being loaded" instead of looking like the market began
+  // yesterday. The checkpoint is the lowest block already walked.
+  const bfBlock = Number(store?.getMeta?.(`backfill:${found.pool}`) ?? NaN);
+  const backfill = Number.isFinite(bfBlock) ? { reachedBlock: bfBlock, done: bfBlock <= 0 } : null;
   const scale = 10 ** (infoBase.decimals - infoQuote.decimals);
   const orient = (p) => (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
   // Inverting swaps the extremes: yesterday's high is today's low.
@@ -855,6 +860,7 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
     spanBlocks,
     hours: hours ?? Math.round(rangeSec / 3600),
     coverage,
+    backfill,
     source,
     truncated,
     swaps: candles.reduce((n, c) => n + (c.swaps ?? 0), 0),

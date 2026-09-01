@@ -132,6 +132,24 @@ services:
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
 
+  # Chart history. Walks every active pool's Swap events back to genesis into
+  # the same candle table the watcher writes, checkpointed per pool. Not part
+  # of the default stack:
+  #
+  #   docker compose --env-file .env -f deploy/docker-compose.prod.yml --profile backfill up -d backfill
+  #
+  # Point ORDO_ARCHIVE_RPC at our own node once it is synced and it simply
+  # continues from where the throttled public endpoint left off.
+  backfill:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    profiles: ["backfill"]
+    command: ["node", "scripts/backfill-candles.mjs", "--all", "--pools", "${ORDO_BACKFILL_POOLS:-60}", "--concurrency", "${ORDO_BACKFILL_CONCURRENCY:-4}", "--pace", "${ORDO_BACKFILL_PACE_MS:-350}"]
+    environment:
+      ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-https://rpc.mainnet.chain.robinhood.com}
+      ORDO_DB: /app/data/ordo.db
+    volumes: ["ordo-data:/app/data"]
+    restart: on-failure
+
 volumes:
   ordo-data:
   caddy-data:
