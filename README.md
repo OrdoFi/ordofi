@@ -10,6 +10,17 @@ order, sequence.
 
 > Not affiliated with Robinhood Markets, Inc.
 
+## Deployed on Robinhood Chain
+
+| Contract | Address |
+| --- | --- |
+| `OrdoSettlement` | `0xbC680922DaF2F65a8B957e5238857f8c68BeDabb` |
+| `OrdoBundler` | `0xc0bccFb3aA4ad9160d272645376a1797a32f3c4a` |
+
+Live at block 51544378 with a 90/5/5 user/app/protocol split. Foundry's receipt
+output labelled these two the wrong way round; the pairing above is the one the
+chain reports, read back from `owner()` and `executorOf()`.
+
 ## Why this chain is different
 
 Robinhood Chain has a single, Robinhood-operated sequencer and orders
