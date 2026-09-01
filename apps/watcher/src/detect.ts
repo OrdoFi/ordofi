@@ -77,23 +77,20 @@ export function analyzeBlock(
 
     if (pools.size < 2) continue;
 
-    // Compute net ERC-20 flows per (address, token) across the whole tx. The
-    // searcher's realized profit is the largest net-positive balance in a quote
-    // asset (WETH/stablecoin) held by any address that is NOT one of the pools
-    // being arbitraged — this captures profit wherever the bot books it (its
-    // EOA, an executor contract, or a tip recipient), which a sender-only
-    // heuristic misses.
-    const perAddr = new Map<string, Map<string, bigint>>();
-    // Sender-centric net flows retained for the record (inventory/token arbs).
+    // Net ERC-20 flows for the parties that could actually be the searcher:
+    // the sender and the contract it called (its executor).
+    //
+    // This deliberately does NOT scan every address in the transaction for a
+    // net-positive quote balance. That reads any multi-pool swap's *recipient*
+    // as a profiting searcher, so an ordinary user routing token -> USDG
+    // through two pools has their entire swap output booked as extracted MEV.
+    // Measured against mainnet that inflated the chain-wide figure to roughly
+    // $150M a day. Profit booked to an address neither sent from nor called is
+    // now missed instead, which undercounts — the right direction for a number
+    // published as a floor.
     const beneficiaries = new Set([r.from.toLowerCase()]);
     if (r.to) beneficiaries.add(r.to.toLowerCase());
     const senderNet = new Map<string, bigint>();
-
-    const bump = (addr: string, token: string, delta: bigint) => {
-      let m = perAddr.get(addr);
-      if (!m) perAddr.set(addr, (m = new Map()));
-      m.set(token, (m.get(token) ?? 0n) + delta);
-    };
 
     for (const log of r.logs) {
       if (log.topics[0]?.toLowerCase() !== TRANSFER_TOPIC) continue;
@@ -107,24 +104,18 @@ export function analyzeBlock(
       } catch {
         continue;
       }
-      bump(to, token, amount);
-      bump(from, token, -amount);
       if (beneficiaries.has(to)) senderNet.set(token, (senderNet.get(token) ?? 0n) + amount);
       if (beneficiaries.has(from)) senderNet.set(token, (senderNet.get(token) ?? 0n) - amount);
     }
 
-    // Best quote-denominated profit across non-pool, non-zero addresses.
-    const ZERO = "0x0000000000000000000000000000000000000000";
+    // Best quote-denominated profit the searcher itself ends up holding.
     let bestQuoteToken: string | undefined;
     let bestQuoteWei = 0n;
-    for (const [addr, tokens] of perAddr) {
-      if (pools.has(addr) || addr === ZERO) continue;
-      for (const [token, v] of tokens) {
-        if (!isQuoteToken(token)) continue;
-        if (v > bestQuoteWei) {
-          bestQuoteWei = v;
-          bestQuoteToken = token;
-        }
+    for (const [token, v] of senderNet) {
+      if (!isQuoteToken(token)) continue;
+      if (v > bestQuoteWei) {
+        bestQuoteWei = v;
+        bestQuoteToken = token;
       }
     }
 

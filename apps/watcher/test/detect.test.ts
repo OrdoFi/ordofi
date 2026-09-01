@@ -67,3 +67,41 @@ test("ignores single-pool swaps (not an arb)", () => {
   const { arbs } = analyzeBlock(101, 1235, receipts as any);
   assert.equal(arbs.length, 0);
 });
+
+test("a user's multi-pool swap is not counted as searcher profit", () => {
+  // The exact shape that inflated the chain-wide figure to ~$150M/day: an
+  // ordinary trade routed through two pools, where the *recipient* ends up
+  // net-positive in a quote token. The recipient is neither the sender nor
+  // the contract it called, so nothing here is the searcher's profit.
+  const user = "0x5555555555555555555555555555555555555555";
+  const router = "0x6666666666666666666666666666666666666666";
+  const recipient = "0x7777777777777777777777777777777777777777";
+
+  const receipts = [
+    {
+      transactionHash: "0xdef",
+      transactionIndex: "0x0",
+      from: user,
+      to: router,
+      gasUsed: "0x5208",
+      effectiveGasPrice: "0x3b9aca00",
+      status: "0x1",
+      logs: [
+        { address: poolA, topics: [UNIV2_SWAP], data: "0x", transactionHash: "0xdef", transactionIndex: "0x0", logIndex: "0x0" },
+        { address: poolB, topics: [UNIV2_SWAP], data: "0x", transactionHash: "0xdef", transactionIndex: "0x0", logIndex: "0x1" },
+        {
+          address: WETH,
+          topics: [TRANSFER_TOPIC, addrTopic(poolB), addrTopic(recipient)],
+          data: amount(5000000000000000000n), // 5 WETH of swap output
+          transactionHash: "0xdef",
+          transactionIndex: "0x0",
+          logIndex: "0x2",
+        },
+      ],
+    },
+  ];
+
+  const { arbs } = analyzeBlock(101, 1235, receipts as any);
+  const quotePriced = arbs.filter((a) => a.profitIsQuote);
+  assert.equal(quotePriced.length, 0, "swap output to a third party is not extracted value");
+});
