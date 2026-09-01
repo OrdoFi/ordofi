@@ -8,7 +8,8 @@
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/site.webmanifest" />
   <meta name="theme-color" content="#ff6414" />
-  <title>OrdoFi Docs</title>
+  <title>OrdoFi Documentation — protocol and API reference</title>
+  <meta name="description" content="Technical reference for OrdoFi, the execution layer for Robinhood Chain: protected RPC gateway, order-flow auction protocol, on-chain settlement, signed receipts, sequencer feed relay, SDK and web API." />
   <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -16,149 +17,521 @@
   <nav>
     <div class="wrap">
       <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
-      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a><a href="/apps">Apps</a><a href="/portal">Portal</a><a href="/operators">Operators</a><a href="#quickstart">Quickstart</a></div>
+      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a><a href="/apps">Apps</a><a href="/docs" class="here">Docs</a></div>
+      <div class="nav-side"><a class="btn ghost" href="/portal" style="padding:7px 16px;font-size:13px">Get a key</a></div>
     </div>
   </nav>
 
-  <div class="wrap doc">
-    <h1>OrdoFi Documentation</h1>
-    <p>The execution layer for Robinhood Chain (Arbitrum Nitro L2, chain ID 4663).</p>
+  <div class="wrap side-layout">
+    <aside class="sidenav" id="sidenav">
+      <input class="sn-search" id="sn-search" placeholder="filter sections" autocomplete="off" />
+      <h6>Start here</h6>
+      <a href="#overview">Overview</a>
+      <a href="#architecture" class="sub">Architecture</a>
+      <a href="#network" class="sub">Network &amp; endpoints</a>
+      <a href="#contracts" class="sub">Deployed contracts</a>
+      <a href="#quickstart">Quickstart</a>
+      <h6>Gateway</h6>
+      <a href="#gateway">rpc.ordofi.network</a>
+      <a href="#gateway-auth" class="sub">Authentication &amp; limits</a>
+      <a href="#gateway-methods" class="sub">Methods</a>
+      <a href="#gateway-bundles" class="sub">Bundles</a>
+      <a href="#gateway-errors" class="sub">Error codes</a>
+      <a href="#gateway-ops" class="sub">Operational endpoints</a>
+      <h6>Auction</h6>
+      <a href="#auction">Order-flow auction</a>
+      <a href="#auction-submit" class="sub">POST /submit</a>
+      <a href="#auction-ws" class="sub">Searcher WebSocket</a>
+      <a href="#auction-hints" class="sub">Hints</a>
+      <a href="#auction-clearing" class="sub">Clearing &amp; bonds</a>
+      <a href="#auction-rebates" class="sub">Rebate split</a>
+      <a href="#auction-http" class="sub">HTTP endpoints</a>
+      <h6>On-chain</h6>
+      <a href="#settlement">OrdoSettlement</a>
+      <a href="#settlement-eip712" class="sub">EIP-712 bid</a>
+      <a href="#bundler">OrdoBundler</a>
+      <a href="#receiptlog">OrdoReceiptLog</a>
+      <h6>Verifiability</h6>
+      <a href="#receipts">Signed receipts</a>
+      <a href="#receipts-merkle" class="sub">Merkle anchoring</a>
+      <a href="#receipts-audit" class="sub">Auditing a round</a>
+      <a href="#feed">Sequencer feed relay</a>
+      <h6>Integrate</h6>
+      <a href="#orderflow">Apps &amp; wallets</a>
+      <a href="#sdk">Searcher SDK</a>
+      <a href="#web-api">Web API</a>
+      <a href="#trade-api" class="sub">Trade endpoints</a>
+      <h6>Reference</h6>
+      <a href="#measurement">MEV measurement</a>
+      <a href="#self-hosting">Self-hosting</a>
+      <a href="#trust">Trust model &amp; limits</a>
+      <div class="sn-foot"><b>Chain</b> 4663 · 0x1237<br /><b>Settlement</b> 0xbC68…Dabb<br /><b>Auctioneer</b> 0x8942…C649</div>
+    </aside>
 
-    <h2 id="quickstart">Quickstart</h2>
-    <div class="code">
-<span class="c"># clone & install</span>
-npm install
+    <main class="doc-main">
+    <button class="btn ghost sn-toggle" id="sn-toggle">Contents</button>
+    <div class="doc">
+      <h1>OrdoFi Documentation</h1>
+      <p class="lead">The execution layer for Robinhood Chain. A protected JSON-RPC gateway, a sealed-bid second-price backrun auction with signed and anchored outcomes, trust-minimised on-chain settlement, a sequencer feed relay, and the measurement that makes the numbers checkable.</p>
+      <div class="meta"><span><b>Chain</b> Robinhood Chain · Arbitrum Nitro L2 · id 4663</span><span><b>Reference</b> v0.1 · 2026-09</span><span><b>Source</b> <a href="https://github.com/OrdoFi/ordofi" style="color:var(--accent)">github.com/OrdoFi/ordofi</a></span></div>
 
-<span class="c"># 1. measure MEV on the chain</span>
-npm run watcher        <span class="c"># follows the head, writes data/*.ndjson</span>
-npm run report         <span class="c"># USD-denominated report → data/report.json</span>
+      <h2 id="overview">Overview<a class="anchor" href="#overview">#</a></h2>
+      <p>Robinhood Chain is an Arbitrum Nitro rollup with a single, first-come-first-served sequencer and no public mempool. Blocks arrive every ~100&nbsp;ms. That combination changes what MEV looks like: nobody can front-run a pending transaction, because there is no pending set to read. What exists instead is a latency race to <em>backrun</em>: the sequencer feed reveals each transaction the instant it is ordered, and bots compete to trade immediately after anything that moves a pool.</p>
+      <p>OrdoFi sits between the user and the sequencer and does three things with that fact:</p>
+      <div class="grid3">
+        <div class="card"><h4>Protect the submission</h4><p>Every raw transaction is simulated from its recovered sender before it is forwarded. A transaction that would revert is refused and never pays gas. Nothing is broadcast to a third-party provider on the way; sends go to the sequencer operator's endpoint.</p></div>
+        <div class="card"><h4>Auction the backrun</h4><p>If a transaction touches a pool, the right to trade right after it is sold in a sealed-bid, second-price auction that closes in 200&nbsp;ms. The user's transaction is dispatched first, then the winner's. The clearing price is charged on-chain and 90% returns as rebates.</p></div>
+        <div class="card"><h4>Make it checkable</h4><p>Bids are acknowledged and rounds are receipted under EIP-712 signatures from the auctioneer; receipts are Merkle-anchored to <code>OrdoReceiptLog</code>. An independent watcher measures backrun extraction across every venue and publishes it.</p></div>
+      </div>
 
-<span class="c"># 2. run the smart RPC gateway</span>
-npm run gateway        <span class="c"># :8547</span>
+      <h3 id="architecture">Architecture<a class="anchor" href="#architecture">#</a></h3>
+<pre class="code diagram">wallet / app ──eth_sendRawTransaction──▶ gateway  rpc.ordofi.network :8547
+                                            │  simulate as sender (eth_call) · reject reverts
+                                            │  key in auction mode → POST /submit
+                                            ▼
+                                        auction  auction.ordofi.network :8548
+                                            │  hold ≤ 200 ms · hints via eth_simulateV1
+                                            │  ws /searcher ──▶ searchers (sealed bids, EIP-712)
+                                            │  second price · dispatch user tx, then backrun
+                                            │  settle(Settlement, sig) · sign receipt
+                                            ▼
+                                 OrdoSettlement   bond debit → user / app / protocol split
+                                 OrdoReceiptLog   Merkle root of receipts, every 25 rounds
 
-<span class="c"># 3. run the order-flow auction</span>
-npm run auction        <span class="c"># :8548</span>
+sequencer feed wss://feed.mainnet.chain.robinhood.com ──▶ relay ws /feed ──▶ searchers
+chain ──▶ watcher (arb attribution, OHLC tape) ──▶ SQLite ──▶ app.ordofi.network/api</pre>
+      <p>Three processes matter operationally: the <strong>gateway</strong> (stateless, keyed), the <strong>auction</strong> (holds the auction window, WebSocket fan-out, settlement and receipts) and the <strong>watcher</strong> (indexes every block into SQLite). The web app is a read layer over the index plus a small set of on-chain reads.</p>
 
-<span class="c"># 4. serve the site</span>
-npm run web            <span class="c"># :3000</span>
+      <h3 id="network">Network &amp; public endpoints<a class="anchor" href="#network">#</a></h3>
+      <table class="compact">
+        <tr><th>Parameter</th><th>Value</th></tr>
+        <tr><td>Chain</td><td>Robinhood Chain — Arbitrum Nitro (Orbit) L2 settling to Ethereum mainnet</td></tr>
+        <tr><td>Chain id</td><td><code>4663</code> · <code>0x1237</code></td></tr>
+        <tr><td>Block time</td><td>~0.1 s · single centralized sequencer, FCFS ordering, no public mempool</td></tr>
+        <tr><td>Gas token</td><td>ETH (18 decimals)</td></tr>
+        <tr><td>Sequencer RPC</td><td><code>https://rpc.mainnet.chain.robinhood.com</code></td></tr>
+        <tr><td>Sequencer feed</td><td><code>wss://feed.mainnet.chain.robinhood.com</code></td></tr>
+        <tr><td>Explorer</td><td><code>https://robinhoodchain.blockscout.com</code></td></tr>
+        <tr><td>WETH</td><td class="wrap"><code>0x0bd7d308f8e1639fab988df18a8011f41eacad73</code></td></tr>
+        <tr><td>USDG</td><td class="wrap"><code>0x5fc5360d0400a0fd4f2af552add042d716f1d168</code> (6 decimals)</td></tr>
+        <tr><td>Uniswap V3 factory / QuoterV2 / SwapRouter02</td><td class="wrap"><code>0x1f7d7550b1b028f7571e69a784071f0205fd2efa</code> · <code>0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7</code> · <code>0xcaf681a66d020601342297493863e78c959e5cb2</code></td></tr>
+      </table>
+      <table class="compact">
+        <tr><th>OrdoFi host</th><th>Service</th><th>Transport</th></tr>
+        <tr><td><code>rpc.ordofi.network</code></td><td>Gateway (JSON-RPC)</td><td>HTTPS POST · GET <code>/</code> <code>/health</code> <code>/metrics</code></td></tr>
+        <tr><td><code>auction.ordofi.network</code></td><td>Auction, receipts, feed relay</td><td>HTTPS · WSS <code>/searcher</code> · WSS <code>/feed</code></td></tr>
+        <tr><td><code>app.ordofi.network</code></td><td>Terminal, explorer, portal, this reference, public API</td><td>HTTPS · <code>/api/*</code> is CORS-open</td></tr>
+      </table>
+
+      <h3 id="contracts">Deployed contracts (chain 4663)<a class="anchor" href="#contracts">#</a></h3>
+      <table class="compact">
+        <tr><th>Contract</th><th>Address</th><th>Role</th></tr>
+        <tr><td>OrdoSettlement</td><td class="wrap"><a href="https://robinhoodchain.blockscout.com/address/0xbC680922DaF2F65a8B957e5238857f8c68BeDabb" target="_blank" rel="noopener"><code>0xbC680922DaF2F65a8B957e5238857f8c68BeDabb</code></a></td><td>Searcher bonds, second-price debit against a signed maximum, rebate accounting</td></tr>
+        <tr><td>OrdoBundler</td><td class="wrap"><a href="https://robinhoodchain.blockscout.com/address/0xc0bccFb3aA4ad9160d272645376a1797a32f3c4a" target="_blank" rel="noopener"><code>0xc0bccFb3aA4ad9160d272645376a1797a32f3c4a</code></a></td><td>Per-owner CREATE2 executors for atomic multi-call bundles</td></tr>
+        <tr><td>OrdoReceiptLog</td><td class="wrap"><a href="https://robinhoodchain.blockscout.com/address/0x89926c06cad403fDDD481C599b2ce709EBC936B9" target="_blank" rel="noopener"><code>0x89926c06cad403fDDD481C599b2ce709EBC936B9</code></a></td><td>Merkle roots over all auction receipts ever issued</td></tr>
+        <tr><td>Auctioneer</td><td class="wrap"><code>0x894255564bBb71585AebDf9337888b4b6E72C649</code></td><td>Signs acks and receipts; the only address allowed to <code>settle()</code> and <code>commit()</code></td></tr>
+        <tr><td>Protocol treasury</td><td class="wrap"><code>0xf5ba571781533aaab9fc155311c93f5b1100affd</code></td><td>Receives the protocol share of each settlement</td></tr>
+      </table>
+      <p>Deployment block <code>51544378</code>. Split constants at deploy: <code>appBps = 500</code>, <code>protocolBps = 500</code>; the user share is the remainder (90%).</p>
+
+      <h2 id="quickstart">Quickstart<a class="anchor" href="#quickstart">#</a></h2>
+      <div class="toc-inline"><a href="#qs-wallet">Wallet user</a><a href="#qs-app">App or wallet developer</a><a href="#qs-searcher">Searcher</a><a href="#self-hosting">Run the stack</a></div>
+      <h3 id="qs-wallet">Wallet user<a class="anchor" href="#qs-wallet">#</a></h3>
+      <p>Add the network with <code>rpc.ordofi.network</code> as its RPC URL. No key is needed: the anonymous tier covers every method a wallet uses, including a revert-protected <code>eth_sendRawTransaction</code>. One click at <a href="https://rpc.ordofi.network/">rpc.ordofi.network</a>, or programmatically:</p>
+<pre class="code">await window.ethereum.request({
+  method: "wallet_addEthereumChain",
+  params: [{
+    chainId: "0x1237",
+    chainName: "Robinhood Chain · OrdoFi protected",
+    rpcUrls: ["https://rpc.ordofi.network"],
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    blockExplorerUrls: ["https://robinhoodchain.blockscout.com"],
+  }],
+});</pre>
+      <h3 id="qs-app">App or wallet developer<a class="anchor" href="#qs-app">#</a></h3>
+      <p>Mint a key with a rebate address so your users' flow goes through the auction and the app share accrues to you. Then send exactly as before, with one header.</p>
+<pre class="code"># 1. a key (returned once; only its SHA-256 is stored)
+curl -X POST https://app.ordofi.network/api/keys \
+  -H 'content-type: application/json' \
+  -d '{"label":"my-wallet","rebateAddress":"0xYourTreasury"}'
+
+# 2. route order flow through the auction
+curl https://rpc.ordofi.network \
+  -H 'x-api-key: ordo_…' -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":["0x02f8…"]}'</pre>
+      <h3 id="qs-searcher">Searcher<a class="anchor" href="#qs-searcher">#</a></h3>
+<pre class="code">import { OrdoSearcher, OrdoBond } from "@ordofi/sdk";
+
+const SETTLEMENT = "0xbC680922DaF2F65a8B957e5238857f8c68BeDabb";
+await new OrdoBond(process.env.SEARCHER_KEY, SETTLEMENT).deposit("0.05"); // bond ≥ your largest bid
+
+new OrdoSearcher({
+  auctionWsUrl: "wss://auction.ordofi.network/searcher",
+  privateKey: process.env.SEARCHER_KEY,
+  settlementAddress: SETTLEMENT,
+  onOpportunity: async (opp, { account }) => {
+    if (!opp.hint.poolsTouched.length) return null;          // nothing to rebalance
+    const backrunRawTx = await buildBackrun(opp, account);    // your strategy
+    return { maxBidWei: 2_000_000_000_000_000n, backrunRawTx }; // 0.002 ETH ceiling
+  },
+}).connect();</pre>
+
+      <h2 id="gateway">Gateway — rpc.ordofi.network<a class="anchor" href="#gateway">#</a></h2>
+      <p>A JSON-RPC 2.0 endpoint on HTTPS <code>POST /</code>. Batches (a JSON array of requests) are accepted and answered as an array. Standard <code>eth_*</code> methods pass through to the chain; the methods below are intercepted. Non-POST requests to paths other than <code>/</code>, <code>/health</code> and <code>/metrics*</code> return a JSON 404. CORS is open (<code>access-control-allow-origin: *</code>, headers <code>content-type, x-api-key, authorization</code>).</p>
+
+      <h3 id="gateway-auth">Authentication &amp; rate limits<a class="anchor" href="#gateway-auth">#</a></h3>
+      <p>Keys travel in <code>x-api-key</code> or <code>Authorization: Bearer &lt;key&gt;</code>. A key carries a <em>mode</em> and an optional rebate address:</p>
+      <table class="compact">
+        <tr><th>Tier</th><th>Who</th><th>Methods</th><th>Limit</th><th><code>eth_sendRawTransaction</code> behaviour</th></tr>
+        <tr><td>Anonymous</td><td>Wallets, anyone</td><td>Full wallet set (see below) + <code>ordo_simulate</code></td><td>600 req/min per source IP</td><td>Protected direct send</td></tr>
+        <tr><td>Key · <code>direct</code></td><td>Apps without a rebate address</td><td>Everything</td><td>Per key, default 600/min</td><td>Protected direct send</td></tr>
+        <tr><td>Key · <code>auction</code></td><td>Apps with a rebate address</td><td>Everything</td><td>Per key, default 600/min</td><td>Auction via <code>POST /submit</code>; falls back to protected direct send if the auction is unreachable, and the fallback is counted</td></tr>
+      </table>
+      <p>Anonymous methods: <code>eth_chainId</code> <code>net_version</code> <code>web3_clientVersion</code> <code>eth_blockNumber</code> <code>eth_syncing</code> <code>eth_gasPrice</code> <code>eth_maxPriorityFeePerGas</code> <code>eth_feeHistory</code> <code>eth_getBalance</code> <code>eth_getCode</code> <code>eth_getStorageAt</code> <code>eth_getTransactionCount</code> <code>eth_call</code> <code>eth_estimateGas</code> <code>eth_getLogs</code> <code>eth_getBlockByNumber</code> <code>eth_getBlockByHash</code> <code>eth_getBlockReceipts</code> <code>eth_getTransactionReceipt</code> <code>eth_getTransactionByHash</code> <code>eth_getTransactionByBlockNumberAndIndex</code> <code>eth_sendRawTransaction</code> <code>ordo_simulate</code>. Anything else without a key returns <code>-32001</code>.</p>
+      <p>Limits are fixed 60-second windows. Exceeding one returns <code>-32005</code> with <code>retry in Ns</code> in the message. Keys minted at the portal are stored as SHA-256 hashes; a lost key is re-issued, never recovered.</p>
+
+      <h3 id="gateway-methods">Methods<a class="anchor" href="#gateway-methods">#</a></h3>
+      <dl>
+        <div><dt><span class="method rpc">RPC</span>eth_sendRawTransaction</dt><dd><code>[rawTx]</code>. The sender is recovered from the signature and the call is simulated as that sender with <code>eth_call</code> against latest state (the transaction's own gas limit is not forwarded into the simulation). A revert yields <code>-32000</code> <code>ordo: transaction would revert, not submitted: &lt;reason&gt;</code> with <code>data.ordoProtected = true</code>. Otherwise the raw transaction is sent to the sequencer operator's endpoint and the hash is returned. Keys in <code>auction</code> mode route through the auction instead and receive <code>result.userTxHash</code>.</dd></div>
+        <div><dt><span class="method rpc">RPC</span>ordo_sendPrivateTransaction</dt><dd><code>[rawTx]</code>. Always the auction path regardless of key mode. Returns the user transaction hash.</dd></div>
+        <div><dt><span class="method rpc">RPC</span>ordo_simulate</dt><dd><code>[rawTx]</code>. Dry run without sending. Returns <code>{ ok, returnData?, revertReason?, from, to }</code>.</dd></div>
+        <div><dt><span class="method rpc">RPC</span>ordo_sendBundle</dt><dd><code>[{ txs: rawTx[], allowRevert?: boolean | number[] }]</code>. Up to 10 transactions. See <a href="#gateway-bundles">Bundles</a>.</dd></div>
+        <div><dt><span class="method rpc">RPC</span>ordo_bundlerInfo</dt><dd><code>[ownerAddress]</code>. Returns <code>{ bundler, executor, deployed, note }</code>: the owner's deterministic <code>OrdoExecutor</code> address and whether it exists yet.</dd></div>
+        <div><dt><span class="method rpc">RPC</span>everything else</dt><dd>Forwarded verbatim. Reads fan out across a failover list of upstreams (rotating on transport failures, HTTP 429/403 and archive-plan refusals); a genuine JSON-RPC error from a healthy upstream is returned with its code intact and does not rotate.</dd></div>
+      </dl>
+
+      <h3 id="gateway-bundles">Bundles<a class="anchor" href="#gateway-bundles">#</a></h3>
+      <p>Every transaction in the bundle is simulated first; if any would revert the whole bundle is refused (<code>-32000</code>, <code>data: { failedIndex, hint }</code>) unless that index is allowed by <code>allowRevert</code>. Accepted bundles are dispatched in the same tick.</p>
+<pre class="code">// response
+{
+  "bundleId": "0x…",            // = txHashes[0]
+  "txHashes": ["0x…", "0x…"],
+  "atomic": false,              // true only when txs.length === 1
+  "note": "…",
+  "atomicAlternative": "…"      // present when !atomic
+}</pre>
+      <div class="callout"><h5>Ordering on a FCFS chain</h5>Robinhood Chain's sequencer orders by arrival. Firing a bundle in one tick minimises the gap between its transactions but cannot make them adjacent or all-or-nothing. For enforced atomicity, deploy an <code>OrdoExecutor</code> through <a href="#bundler">OrdoBundler</a> and execute the legs as one transaction with on-chain preconditions and a <code>minGainWei</code> guard.</div>
+
+      <h3 id="gateway-errors">Error codes<a class="anchor" href="#gateway-errors">#</a></h3>
+      <table class="compact">
+        <tr><th>Code</th><th>Meaning</th><th>Notes</th></tr>
+        <tr><td><code>-32700</code></td><td>parse error</td><td>Body is not JSON</td></tr>
+        <tr><td><code>-32001</code></td><td>unauthorized: valid x-api-key required</td><td>Method outside the anonymous tier and no valid key</td></tr>
+        <tr><td><code>-32005</code></td><td>rate limit exceeded, retry in Ns</td><td>Per key, or per IP for anonymous callers</td></tr>
+        <tr><td><code>-32000</code></td><td>ordo: transaction would revert, not submitted</td><td><code>data.ordoProtected = true</code>; also used for bundle refusals with <code>data.failedIndex</code></td></tr>
+        <tr><td><code>-32602</code></td><td>bundle.txs required · max 10 txs per bundle</td><td>Invalid bundle params</td></tr>
+        <tr><td><code>-32000</code></td><td>all RPC upstreams refused the request</td><td>Every upstream failed at the transport level; retry</td></tr>
+        <tr><td>HTTP 404 / 405</td><td>—</td><td>GET on unknown path / non-POST RPC; JSON body points at the landing page</td></tr>
+      </table>
+
+      <h3 id="gateway-ops">Operational endpoints<a class="anchor" href="#gateway-ops">#</a></h3>
+      <table class="compact">
+        <tr><th>Endpoint</th><th>Returns</th></tr>
+        <tr><td><span class="method get">GET</span><code>/</code></td><td>Landing page with live probe and one-click wallet setup</td></tr>
+        <tr><td><span class="method get">GET</span><code>/health</code></td><td><code>{ status, upstream, sequencer, uptimeSeconds }</code></td></tr>
+        <tr><td><span class="method get">GET</span><code>/metrics</code></td><td>Prometheus text: <code>ordo_uptime_seconds</code>, counters (<code>rpc_requests_total</code>, <code>tx_submitted_total</code>, <code>orderflow_auctioned_total</code>, <code>orderflow_fallback_total</code>, <code>send_fallback_total</code>, <code>rpc_unauthorized_total</code>, <code>rpc_rate_limited_total</code>, <code>upstream_challenge_total</code>…), latency p50/p95/p99</td></tr>
+        <tr><td><span class="method get">GET</span><code>/metrics.json</code></td><td>Same, as <code>{ uptimeSeconds, counters, latency }</code></td></tr>
+      </table>
+
+      <h2 id="auction">Order-flow auction — auction.ordofi.network<a class="anchor" href="#auction">#</a></h2>
+      <p>The auction turns a backrun from something taken to something sold. Lifecycle of one round:</p>
+      <ol>
+        <li>A raw transaction arrives via <code>POST /submit</code> (from the gateway for auction-mode keys, or directly from an app). It is parsed, its sender recovered, and it is simulated with <code>eth_simulateV1</code> to derive a <a href="#auction-hints">hint</a>.</li>
+        <li>An <code>opportunity</code> is broadcast to every connected searcher. The window is <code>ORDO_AUCTION_WINDOW_MS</code> = 200&nbsp;ms.</li>
+        <li>Searchers reply with sealed bids: an amount in wei, their signed backrun transaction, and an EIP-712 <a href="#settlement-eip712">Bid</a> signature authorising a maximum charge. Each accepted bid is acknowledged with a signed <code>BidAck</code>.</li>
+        <li>At close, the highest bid wins and pays the <em>second-highest</em> (or its own bid if it stood alone). Bids without sufficient bond are rejected at submission.</li>
+        <li>The user's transaction is dispatched to the sequencer, then the winner's backrun. Both legs are fault-isolated: a failure of one is reported, never allowed to discard the other.</li>
+        <li>The auctioneer calls <code>OrdoSettlement.settle()</code> with the searcher's signature, debiting the bond and crediting user, app and protocol shares. A signed <code>Receipt</code> for the round is published and later Merkle-anchored.</li>
+      </ol>
+
+      <h3 id="auction-submit">POST /submit<a class="anchor" href="#auction-submit">#</a></h3>
+<pre class="code">// request
+{ "rawTx": "0x02f8…", "originLabel": "my-wallet", "rebateAddress": "0xApp…" }
+
+// response (200)
+{
+  "result": {
+    "opportunityId": "uuid", "winner": "0x…" | null, "clearingPriceWei": "…",
+    "bidCount": 2, "userTxHash": "0x…", "backrunTxHash": "0x…" | null, "dispatchedAt": 1756…
+  },
+  "rebate": { … } | null,             // ledger entry: user / app / protocol amounts
+  "settlement": { … } | null,         // what was submitted to OrdoSettlement
+  "settlementTxHash": "0x…" | null,
+  "receipt": Receipt | null,          // signed, see Verifiability
+  "settlementContract": "0xbC68…",
+  "userError": null | "…",            // the user leg's dispatch error, if any
+  "auctionDelayMs": 203,              // how long the hold added
+  "hint": { "level": "pools", "simulated": true, "pools": 1 }
+}</pre>
+      <p>A malformed request returns <code>400 { error }</code>. <code>auctionDelayMs</code> is reported rather than hidden: it is the latency cost of the auction, typically the window plus a few milliseconds.</p>
+
+      <h3 id="auction-ws">Searcher WebSocket — wss://auction.ordofi.network/searcher<a class="anchor" href="#auction-ws">#</a></h3>
+      <p>All frames are JSON with a <code>type</code>. Server → client:</p>
+<pre class="code">// on connect
+{ "type": "welcome", "swapTopics": { "0xd78a…": "univ2", "0xc420…": "univ3", "0x40e9…": "univ4" },
+  "auctionWindowMs": 200, "hintLevel": "pools" }
+
+// one per held transaction
+{ "type": "opportunity", "opportunity": {
+    "id": "uuid", "createdAt": 1756…,
+    "hint": { "poolsTouched": ["0x…"], "swaps": [ { "kind": "univ3", "pool": "0x…", "direction": "0for1" } ],
+              "to": "0x…", "selector": "0x…", "value": "0x0", "simulated": true, "level": "pools" },
+    "originLabel": "my-wallet", "originRebateAddress": "0x…" } }
+
+// reply to a bid
+{ "type": "bid_ack", "opportunityId": "uuid", "accepted": true,
+  "ack": { "opportunityId": "0x…32 bytes", "searcher": "0x…", "bidWei": "…", "receivedAt": 1756…, "signature": "0x…" } }
+{ "type": "bid_ack", "accepted": false, "reason": "insufficient bond: X wei bonded, Y wei bid — deposit into OrdoSettlement first" }
+
+// malformed frame
+{ "type": "error", "error": "invalid json" }</pre>
+      <p>Client → server:</p>
+<pre class="code">{ "type": "bid", "opportunityId": "uuid", "searcher": "0xYou",
+  "bidWei": "1000000000000000",          // decimal string
+  "backrunRawTx": "0x02f8…",             // signed, ready to dispatch
+  "bidSig": "0x…" }                      // EIP-712 Bid over (searcher, opportunityId, maxAmountWei = bidWei)</pre>
+      <p>Rejection reasons: <code>unknown or closed auction</code>, <code>auction closed</code>, <code>invalid bidWei</code>, <code>bid must be positive</code>, <code>missing backrunRawTx</code>, <code>searcher must be an address when bonding is enabled</code>, <code>insufficient bond…</code>. There is no per-round result frame over the socket; the outcome is the signed receipt at <code>GET /receipts/:opportunityId</code>, and the winner learns it dispatched by watching the chain.</p>
+
+      <h3 id="auction-hints">Hints<a class="anchor" href="#auction-hints">#</a></h3>
+      <p>Searchers never see the raw transaction. The hint is derived by simulating it with <code>eth_simulateV1</code> and decoding <code>Swap</code> logs against the venue topic map. <code>ORDO_HINT_LEVEL</code> selects how much is shared:</p>
+      <table class="compact">
+        <tr><th>Level</th><th>Fields</th></tr>
+        <tr><td><code>minimal</code></td><td><code>poolsTouched</code>, <code>to</code>, <code>selector</code>, <code>value</code></td></tr>
+        <tr><td><code>pools</code> (default)</td><td>+ <code>swaps[]</code> with <code>kind</code> (<code>univ2</code>/<code>univ3</code>/<code>univ4</code>), <code>pool</code>, <code>poolId</code> for V4, <code>direction</code> (<code>0for1</code>/<code>1for0</code>)</td></tr>
+        <tr><td><code>full</code></td><td>+ <code>amount0</code>, <code>amount1</code> per swap</td></tr>
+      </table>
+      <p>If simulation fails or the upstream degrades, <code>simulated</code> is <code>false</code> and <code>poolsTouched</code> falls back to <code>[to]</code>. This is exactly the information that becomes public on the sequencer feed the moment the transaction is ordered; the auction reveals it a few hundred milliseconds early to whoever pays for the privilege.</p>
+
+      <h3 id="auction-clearing">Clearing rule &amp; bonds<a class="anchor" href="#auction-clearing">#</a></h3>
+      <ul>
+        <li>Sealed bids; the highest <code>bidWei</code> wins.</li>
+        <li>Clearing price = second-highest bid; a lone bidder pays its own bid; no bids → no winner, price 0.</li>
+        <li>When <code>ORDO_SETTLEMENT_ADDRESS</code> is set, a bid is only accepted if <code>OrdoSettlement.bond(searcher) ≥ bidWei</code> (bond reads cached <code>ORDO_BOND_CACHE_MS</code> = 15&nbsp;s).</li>
+        <li>On-chain, the charge can never exceed the searcher's signed <code>maxAmountWei</code>; the auctioneer proves the second price by charging less than or equal to what the searcher authorised.</li>
+        <li>Opportunity ids are UUIDs; on-chain they become <code>bytes32</code> by stripping dashes and right-padding with zeros.</li>
+      </ul>
+
+      <h3 id="auction-rebates">Rebate split<a class="anchor" href="#auction-rebates">#</a></h3>
+      <table class="compact">
+        <tr><th>Recipient</th><th>Share</th><th>Where it lands</th><th>Env</th></tr>
+        <tr><td>User (transaction sender)</td><td>90%</td><td><code>claimable[user]</code> in OrdoSettlement</td><td><code>ORDO_REBATE_USER=0.9</code></td></tr>
+        <tr><td>App (order-flow originator)</td><td>5%</td><td><code>claimable[rebateAddress]</code></td><td><code>ORDO_REBATE_APP=0.05</code></td></tr>
+        <tr><td>Protocol</td><td>5%</td><td><code>claimable[treasury]</code></td><td><code>ORDO_REBATE_PROTOCOL=0.05</code></td></tr>
+      </table>
+      <p>The off-chain ledger (<code>data/rebates.ndjson</code>) mirrors every entry and tracks app balances owed; the on-chain split is fixed by <code>appBps</code>/<code>protocolBps</code> in the contract and claimed with <code>claim()</code>.</p>
+
+      <h3 id="auction-http">HTTP endpoints<a class="anchor" href="#auction-http">#</a></h3>
+      <table class="compact">
+        <tr><th>Endpoint</th><th>Returns</th></tr>
+        <tr><td><span class="method post">POST</span><code>/submit</code></td><td>Auction result, see above</td></tr>
+        <tr><td><span class="method get">GET</span><code>/health</code></td><td><code>{ status, searchers, stats }</code> · <code>stats = { opportunities, bids, rejectedBids, dispatched, backruns, settled }</code></td></tr>
+        <tr><td><span class="method get">GET</span><code>/stats</code></td><td><code>{ stats, connectedSearchers, rebateSplit, owedRebates }</code></td></tr>
+        <tr><td><span class="method get">GET</span><code>/receipts?n=20</code></td><td><code>{ auctioneer, receipts[] }</code></td></tr>
+        <tr><td><span class="method get">GET</span><code>/receipts/:opportunityId</code></td><td><code>{ auctioneer, receipt }</code> by uuid or bytes32 · 404 if unknown</td></tr>
+        <tr><td><span class="method get">GET</span><code>/receipts/root</code></td><td><code>{ root, count, anchoredCount, auctioneer }</code></td></tr>
+        <tr><td><span class="method get">GET</span><code>/feed/stats</code></td><td><code>{ upstream, clients, sequencerMessages, txsRelayed, lastSequenceNumber, reconnects }</code></td></tr>
+        <tr><td><span class="method ws">WSS</span><code>/searcher</code> · <code>/feed</code></td><td>See <a href="#auction-ws">searcher protocol</a> and <a href="#feed">feed relay</a></td></tr>
+      </table>
+
+      <h2 id="settlement">OrdoSettlement<a class="anchor" href="#settlement">#</a></h2>
+      <p>Trust-minimised payment for auction outcomes. Searchers post ETH bonds; the auctioneer can debit a bond only with the searcher's own EIP-712 signature over a maximum for that specific opportunity, at most once per opportunity.</p>
+      <table class="compact">
+        <tr><th>Function</th><th>Access</th><th>Semantics</th></tr>
+        <tr><td><span class="method sol">payable</span><code>deposit()</code> · <code>receive()</code></td><td>anyone</td><td>Adds <code>msg.value</code> to <code>bond[msg.sender]</code>. A plain ETH transfer to the contract bonds the sender.</td></tr>
+        <tr><td><code>withdrawBond(uint256 amount)</code></td><td>bond owner</td><td>Returns bond to the searcher</td></tr>
+        <tr><td><code>settle(Settlement s, bytes searcherSig)</code></td><td>auctioneer only</td><td>Verifies <code>searcherSig</code> over <code>Bid(searcher, opportunityId, maxAmountWei)</code>; requires <code>chargeWei ≤ maxAmountWei</code>, <code>!settled[opportunityId]</code>, EIP-2 low-s. Debits <code>bond[searcher]</code> by <code>chargeWei</code> and credits <code>claimable</code> for user (remainder), app (<code>appBps</code>) and treasury (<code>protocolBps</code>). Marks the opportunity settled.</td></tr>
+        <tr><td><code>claim()</code></td><td>anyone</td><td>Pays out <code>claimable[msg.sender]</code></td></tr>
+        <tr><td><code>bond(address)</code> · <code>claimable(address)</code> · <code>settled(bytes32)</code></td><td>view</td><td>Balances and replay state</td></tr>
+        <tr><td><code>bidDigest(address, bytes32, uint256)</code></td><td>view</td><td>The exact EIP-712 digest a searcher signs; useful for wallets and audits</td></tr>
+        <tr><td><code>DOMAIN_SEPARATOR()</code> · <code>BID_TYPEHASH()</code> · <code>auctioneer()</code> · <code>protocolTreasury()</code> · <code>appBps()</code> · <code>protocolBps()</code> · <code>owner()</code></td><td>view</td><td>Parameters</td></tr>
+        <tr><td><code>setAuctioneer</code> · <code>setSplit</code> · <code>setProtocolTreasury</code> · <code>transferOwnership</code></td><td>owner only</td><td>Administration. The owner is the deployer; see <a href="#trust">trust model</a>.</td></tr>
+      </table>
+<pre class="code">struct Settlement {
+  address searcher;       // whose bond is debited
+  bytes32 opportunityId;  // uuid → bytes32 (dashes stripped, right-padded)
+  uint256 maxAmountWei;   // what the searcher signed
+  uint256 chargeWei;      // what the auction cleared at (≤ maxAmountWei)
+  address user;           // receives the user share
+  address app;            // receives appBps
+}</pre>
+
+      <h3 id="settlement-eip712">EIP-712 bid<a class="anchor" href="#settlement-eip712">#</a></h3>
+<pre class="code">domain  = { name: "OrdoSettlement", version: "1", chainId: 4663, verifyingContract: 0xbC680922DaF2F65a8B957e5238857f8c68BeDabb }
+Bid     = Bid(address searcher, bytes32 opportunityId, uint256 maxAmountWei)
+digest  = keccak256(0x1901 ‖ DOMAIN_SEPARATOR ‖ keccak256(abi.encode(BID_TYPEHASH, searcher, opportunityId, maxAmountWei)))</pre>
+      <p>The SDK signs this with <code>signTypedData</code>; <code>maxAmountWei</code> equals the bid, so a searcher can never be charged more than it bid, and the contract makes the second-price claim falsifiable: any <code>chargeWei &gt; maxAmountWei</code> reverts.</p>
+
+      <h2 id="bundler">OrdoBundler &amp; OrdoExecutor<a class="anchor" href="#bundler">#</a></h2>
+      <p>Enforced atomicity on a chain whose sequencer offers none. <code>OrdoBundler</code> deploys one <code>OrdoExecutor</code> per owner at a deterministic CREATE2 address; the executor runs a list of calls as a single transaction, with preconditions and a minimum-gain guard, so a stale or unprofitable bundle reverts as a whole.</p>
+      <table class="compact">
+        <tr><th>Function</th><th>Semantics</th></tr>
+        <tr><td><code>OrdoBundler.executorOf(address owner) → address</code></td><td>Deterministic executor address, whether or not deployed</td></tr>
+        <tr><td><code>OrdoBundler.isDeployed(address owner) → bool</code> · <code>deploy(address owner)</code> · <code>deploy()</code></td><td>Deploys the owner's executor; emits <code>ExecutorDeployed</code></td></tr>
+        <tr><td><code>OrdoExecutor.execute(Call[] calls, Check[] checks, uint64 maxBlock, uint256 minGainWei) payable → bytes[]</code></td><td>Owner only. Reverts if <code>block.number &gt; maxBlock</code>, if any <code>Check</code> fails before execution, or if the executor's ETH balance did not grow by at least <code>minGainWei</code>.</td></tr>
+        <tr><td><code>OrdoExecutor.checksPass(Check[]) → bool</code></td><td>Evaluate preconditions off-chain via <code>eth_call</code></td></tr>
+        <tr><td><code>withdraw</code> · <code>withdrawToken</code> · <code>receive()</code></td><td>Owner recovers ETH and ERC-20 balances</td></tr>
+      </table>
+      <p>Use <code>ordo_bundlerInfo</code> on the gateway to find your executor address; then a "bundle" is one <code>execute()</code> transaction sent like any other.</p>
+
+      <h2 id="receiptlog">OrdoReceiptLog<a class="anchor" href="#receiptlog">#</a></h2>
+      <table class="compact">
+        <tr><th>Function</th><th>Semantics</th></tr>
+        <tr><td><code>commit(bytes32 root, uint64 count)</code></td><td>Auctioneer only (<code>settlement.auctioneer()</code>). Appends a Merkle root over the first <code>count</code> receipts. Rejects an empty root or a <code>count</code> smaller than the previous commitment.</td></tr>
+        <tr><td><code>latest() → (root, count)</code> · <code>total()</code> · <code>commitments(uint256 i)</code></td><td>Read the anchor history</td></tr>
+        <tr><td><code>verify(bytes32 leaf, bytes32[] proof, uint256 index) → bool</code></td><td>Inclusion proof against the latest root</td></tr>
+      </table>
+
+      <h2 id="receipts">Signed receipts<a class="anchor" href="#receipts">#</a></h2>
+      <p>A sealed-bid auction asks you to trust the operator about the bids you did not see. OrdoFi removes that: the moment a bid lands it is acknowledged under the auctioneer's EIP-712 signature, and when the round closes a receipt listing every bid is signed too. A discrepancy between an ack and a receipt is cryptographic evidence of misconduct, not a complaint.</p>
+<pre class="code">domain = { name: "OrdoAuction", version: "1", chainId: 4663 }     // no verifyingContract; these are off-chain attestations
+
+BidAck  = BidAck(bytes32 opportunityId, address searcher, uint256 bidWei, uint64 receivedAt)
+Receipt = Receipt(bytes32 opportunityId, bytes32 bidsHash, address winner, uint256 clearingPriceWei, uint64 closedAt)
+
+bidsHash    = keccak256(abi.encode(address[] searchers, uint256[] bidsWei, uint64[] receivedAts))   // keccak256("") when empty
+receiptHash = keccak256(abi.encode(opportunityId, bidsHash, winner, clearingPriceWei, closedAt))   // the Merkle leaf</pre>
+<pre class="code">// GET /receipts/:opportunityId
+{ "auctioneer": "0x8942…C649",
+  "receipt": {
+    "opportunityId": "0x…", "winner": "0x…", "clearingPriceWei": "…",
+    "bids": [ { "searcher": "0x…", "bidWei": "…", "receivedAt": 1756…, "bidSig": "0x…" } ],
+    "closedAt": 1756…, "signature": "0x…" } }</pre>
+      <p>Each listed bid carries the searcher's own settlement signature (<code>bidSig</code>), so the auctioneer cannot invent bids to inflate a clearing price: a fabricated bid would need a signature it cannot forge.</p>
+
+      <h3 id="receipts-merkle">Merkle anchoring<a class="anchor" href="#receipts-merkle">#</a></h3>
+      <p>Signatures make a receipt unforgeable but not un-retractable. To stop a receipt from being quietly replaced after you read it, the auctioneer commits a Merkle root over every receipt it has ever issued to <code>OrdoReceiptLog</code> every <code>ORDO_RECEIPT_COMMIT_EVERY</code> = 25 new receipts. Leaves are <code>receiptHash</code> in issue order; parents are <code>keccak256(sorted(left, right))</code>; an odd node is carried up unpaired. <code>GET /receipts/root</code> reports <code>count</code> (issued) and <code>anchoredCount</code> (immutable): the gap is the only part still retractable, and it is bounded.</p>
+      <p>Receipts persist in <code>data/receipts.ndjson</code> and are rehydrated on restart; the anchor state is re-read from the chain at boot so a restart cannot reset the log.</p>
+
+      <h3 id="receipts-audit">Auditing a round<a class="anchor" href="#receipts-audit">#</a></h3>
+      <table class="compact">
+        <tr><th>Claim</th><th>Check</th></tr>
+        <tr><td>My bid was counted</td><td>The acknowledged <code>(searcher, bidWei, receivedAt)</code> appears in the receipt's <code>bids</code></td></tr>
+        <tr><td>No bids were invented</td><td>Every <code>bidSig</code> recovers to its <code>searcher</code> under the OrdoSettlement domain</td></tr>
+        <tr><td>Second price was honoured</td><td><code>winner</code> is the highest bidder; <code>clearingPriceWei</code> equals the second-highest bid (or the sole bid)</td></tr>
+        <tr><td>The receipt is the auctioneer's</td><td><code>signature</code> recovers to the published auctioneer under the OrdoAuction domain</td></tr>
+        <tr><td>It cannot be swapped later</td><td><code>receiptHash</code> is included under an anchored root (<code>verify()</code>)</td></tr>
+      </table>
+<pre class="code">import { auditReceipt } from "@ordofi/core/receipt";
+
+const { receipt, auctioneer } = await fetch(`https://auction.ordofi.network/receipts/${id}`).then(r => r.json());
+const finding = await auditReceipt(receipt, myAck, 4663, auctioneer, "0xbC680922DaF2F65a8B957e5238857f8c68BeDabb");
+if (!finding.ok) console.error(finding.reason);   // signed proof of what went wrong
+// also: auditClearingPrice(receipt), auditBidAuthenticity(receipt, 4663, settlement)</pre>
+
+      <h2 id="feed">Sequencer feed relay — wss://auction.ordofi.network/feed<a class="anchor" href="#feed">#</a></h2>
+      <p>MEV here starts on the sequencer feed. OrdoFi holds one upstream connection to <code>wss://feed.mainnet.chain.robinhood.com</code>, decodes the Nitro framing, and fans the transactions out so a searcher does not need its own decoder or connection.</p>
+<pre class="code">// on connect
+{ "type": "welcome", "feed": "wss://feed.mainnet.chain.robinhood.com", "note": "…" }
+
+// per sequencer message
+{ "type": "feed_txs", "sequenceNumber": 51709518, "blockNumber": 51654343, "timestamp": 1756…,
+  "receivedAt": 1756…,                          // ms, stamped by the relay on receipt
+  "txs": [ { "hash": "0x…", "raw": "0x02f8…" } ] }</pre>
+      <p>Decoding: L1 message kind <code>3</code> carries an L2 message; L2 kind <code>4</code> is a single signed transaction, kind <code>3</code> is a batch of sub-messages each prefixed by a big-endian <code>uint64</code> length. <code>receivedAt</code> lets you measure the relay's own added latency instead of assuming it. The upstream reconnects with backoff 1&nbsp;s → 30&nbsp;s; <code>GET /feed/stats</code> exposes <code>reconnects</code>.</p>
+      <div class="callout"><h5>What the feed is not</h5>The feed carries transactions the sequencer has <em>already</em> ordered. It is a head start on decoding, not a preview of pending flow. Pending flow, with hints and the right to trade after it, is what the <a href="#auction">auction</a> sells.</div>
+
+      <h2 id="orderflow">Apps &amp; wallets<a class="anchor" href="#orderflow">#</a></h2>
+      <p>Routing your users' transactions through OrdoFi costs one header and returns a share of the backrun value that would otherwise leave through a bot.</p>
+      <dl>
+        <div><dt><span class="method post">POST</span>app.ordofi.network/api/keys</dt><dd>Body <code>{ label?, rebateAddress? }</code>. Returns <code>201 { key, label, mode, rebateAddress, rateLimitPerMin, note, rpc }</code>. With a rebate address the key is <code>auction</code> mode; without, <code>direct</code> (protected passthrough only). Limited to 3 keys per hour per IP. Keys look like <code>ordo_</code> + 36 hex characters and are shown exactly once.</dd></div>
+        <div><dt><span class="method get">GET</span>app.ordofi.network/api/account?address=0x…</dt><dd><code>{ address, settlement, bondEth, claimableEth, settlementsAsSearcher, settlementsAsApp, claimHint }</code>. Bond and claimable are read live from the contract; no key required.</dd></div>
+        <div><dt><span class="method sol">on-chain</span>OrdoSettlement.claim()</dt><dd>Withdraws everything credited to <code>msg.sender</code>: user rebates, app shares, or protocol shares. The portal at <a href="/portal">/portal</a> wraps this.</dd></div>
+      </dl>
+      <p>Use the key as <code>x-api-key</code> against <code>https://rpc.ordofi.network</code>, or call <code>POST auction.ordofi.network/submit</code> directly with <code>rebateAddress</code> in the body if you prefer to see the auction result inline.</p>
+
+      <h2 id="sdk">Searcher SDK — @ordofi/sdk<a class="anchor" href="#sdk">#</a></h2>
+      <p>TypeScript, built on <code>viem</code> and <code>ws</code>. Until the npm release lands, install from the monorepo (<code>packages/sdk</code>).</p>
+      <dl>
+        <div><dt><code>new OrdoSearcher(config)</code></dt><dd><code>config = { auctionWsUrl, privateKey, settlementAddress, onOpportunity, chainId? }</code>. <code>connect()</code> opens the socket and reconnects on close with exponential backoff (1&nbsp;s doubling to a 30&nbsp;s cap, reset on a successful open); <code>close()</code> stops it. Exposes <code>address</code>.</dd></div>
+        <div><dt><code>onOpportunity(opp, { account }) → Promise&lt;{ maxBidWei: bigint, backrunRawTx: Hex } | null&gt;</code></dt><dd>Called per opportunity with <code>opp = { id, hint: { poolsTouched, to, selector, value }, originLabel }</code>. Return <code>null</code> to pass. A returned decision is signed (<code>signBid</code>) and sent as a <code>bid</code> frame with <code>bidWei = maxBidWei</code>.</dd></div>
+        <div><dt><code>searcher.signBid(opportunityId, maxAmountWei) → Promise&lt;Hex&gt;</code></dt><dd>EIP-712 <code>Bid</code> signature under the OrdoSettlement domain; also usable to build bids by hand.</dd></div>
+        <div><dt><code>opportunityIdToBytes32(uuid) → Hex</code></dt><dd>Strip dashes, right-pad to 32 bytes.</dd></div>
+        <div><dt><code>new OrdoBond(privateKey, settlementAddress, rpcUrl?)</code></dt><dd><code>deposit(amountEth)</code>, <code>claim()</code>, <code>bondOf(address)</code>, <code>claimableOf(address)</code>.</dd></div>
+        <div><dt><code>submitOrderFlow(url, { rawTx, originLabel, rebateAddress? })</code></dt><dd>Typed wrapper for <code>POST /submit</code>.</dd></div>
+        <div><dt><code>SETTLEMENT_ABI</code></dt><dd>The subset of the settlement ABI the SDK uses.</dd></div>
+      </dl>
+      <div class="callout"><h5>Bidding economics</h5>Pay at most what the backrun is worth to you net of gas; you will be charged the second price, so shading is unnecessary. Bond at least your largest intended bid, since bids above your bond are rejected before the auction. The backrun transaction must be valid at dispatch time: correct nonce, sufficient gas for a state-changing call (a 21,000-gas placeholder is refused by the chain), and a fee at or above the current base fee.</div>
+
+      <h2 id="web-api">Web API — app.ordofi.network/api<a class="anchor" href="#web-api">#</a></h2>
+      <p>Read-only JSON over HTTPS, CORS-open, default <code>cache-control: public, max-age=15</code> unless noted. Large responses are gzipped when accepted.</p>
+      <table class="compact">
+        <tr><th>Endpoint</th><th>Returns</th></tr>
+        <tr><td><span class="method get">GET</span><code>/api/stats</code></td><td>Embed-friendly headline numbers: <code>{ chain, arbs, searchers, pools, swaps, arbsPerDay, settlement: { deployed, address, settlements, totalSettledEth, rebatesToUsersEth }, updatedAt }</code>. <code>arbsPerDay</code> is <code>null</code> until the sample spans one hour.</td></tr>
+        <tr><td><span class="method get">GET</span><code>/api/report</code></td><td>The watcher's full MEV report: venues, pools, searchers, USD totals</td></tr>
+        <tr><td><span class="method get">GET</span><code>/api/arbs/recent?n=40</code></td><td>Latest attributed backruns (max 200): block, tx, sender, pools, profit token and amount</td></tr>
+        <tr><td><span class="method get">GET</span><code>/api/onchain?address=</code></td><td>Settlement contract statistics from the index, with an on-chain log scan as fallback</td></tr>
+        <tr><td><span class="method get">GET</span><code>/api/auction</code></td><td>Proxy of the auction's <code>/stats</code></td></tr>
+        <tr><td><span class="method get">GET</span><code>/api/explorer</code></td><td><code>{ report, recentArbs, auction, onchain, generatedAt }</code> — everything the explorer page renders</td></tr>
+        <tr><td><span class="method post">POST</span><code>/api/keys</code> · <span class="method get">GET</span><code>/api/account</code></td><td>See <a href="#orderflow">Apps &amp; wallets</a></td></tr>
+      </table>
+
+      <h3 id="trade-api">Trade endpoints<a class="anchor" href="#trade-api">#</a></h3>
+      <p>The terminal at <a href="/trade">/trade</a> is a thin client over these. The server never holds keys or sends transactions; it prepares Uniswap V3 calldata that the user's wallet signs and submits through the protected RPC. Prices come from the pools' own <code>Swap</code> events, never from an oracle or a price API.</p>
+      <table class="compact">
+        <tr><th>Endpoint</th><th>Params</th><th>Returns</th></tr>
+        <tr><td><code>/api/trade/chain</code></td><td>—</td><td><code>{ id: 4663, idHex: "0x1237", name, rpc, explorer }</code> for <code>wallet_addEthereumChain</code></td></tr>
+        <tr><td><code>/api/trade/tokens</code></td><td>—</td><td>Tradable assets: <code>{ address, symbol, name, decimals, usdPerToken, icon, holders, active, tradable, swaps24h, tiers: { eth: [fees], usdg: [fees] } }[]</code>. Sources: the explorer's most-held ERC-20s, every factory pool that traded in the last 24 h, and user imports. <code>tradable</code> is <code>true</code> when a Uniswap V3 pool exists against ETH or USDG, <code>null</code> while the check is queued. Stale-while-revalidate, rebuilt every 5 min.</td></tr>
+        <tr><td><code>/api/trade/markets</code></td><td>—</td><td>Every routable pair that traded today, from the recorder's tape alone (no RPC on the request path): <code>{ markets: [{ pool, fee, base, quote, price, change24, change1h, high24, low24, volumeQuote, volumeUsd, swaps, lastTrade }], pairsTotal, coverage, at }</code>. Money (USDG over ETH) is always the quote; top 800 by volume.</td></tr>
+        <tr><td><code>/api/trade/token</code></td><td><code>address</code></td><td>Import any ERC-20 by address: resolves metadata and checks ETH/USDG routability. Tradable imports join the list.</td></tr>
+        <tr><td><code>/api/trade/quote</code></td><td><code>tokenIn, tokenOut, amountIn</code> (raw units; <code>eth</code> for native), <code>slippageBps?=50, from?</code></td><td>Best of direct and one-intermediate (WETH/USDG) V3 routes via QuoterV2: <code>{ amountIn, amountOut, minOut, route: { tokens, fees, hops }, priceImpactBps, gasEstimate, tokenIn, tokenOut, tx: { to, data, value }, approval?, account?, quotedAt }</code>. <code>tx</code> is a SwapRouter02 <code>multicall</code> with <code>exactInput</code> (+ <code>unwrapWETH9</code> for native output), recipient <code>MSG_SENDER</code>, 10-minute deadline. <code>no-store</code>.</td></tr>
+        <tr><td><code>/api/trade/candles</code></td><td><code>base, quote, bucketSec?=60, spanBlocks?=72000</code></td><td>OHLCV of base in quote from the deepest direct pool; the watcher's recorded tape first, an adaptive <code>eth_getLogs</code> walk to backfill. <code>{ pool, fee, base, quote, source: "recorder" | "logs" | "recorder+logs", truncated, swaps, volumeQuote, last, candles[] }</code></td></tr>
+        <tr><td><code>/api/trade/pair</code></td><td><code>base, quote</code></td><td><code>{ pool, fee, tvlUsd, reserves, base, quote }</code> for the deepest direct pool by in-range liquidity; cached 60 s</td></tr>
+        <tr><td><code>/api/trade/trades</code></td><td><code>base, quote, limit?=40</code></td><td>Most recent individual swaps: <code>{ block, time, tx, logIndex, price, sizeBase, sizeQuote, side }</code>; cached 5 s</td></tr>
+        <tr><td><code>/api/trade/balances</code></td><td><code>address</code></td><td>Native ETH and every listed token with a non-zero balance, USD-valued where a price is known; cached 30 s</td></tr>
+        <tr><td><code>/api/trade/resolvers</code></td><td>—</td><td>Health of the persistent lookup caches: <code>{ pools, tokens, routes }</code> each <code>{ known, pending }</code></td></tr>
+      </table>
+
+      <h2 id="measurement">MEV measurement<a class="anchor" href="#measurement">#</a></h2>
+      <p>The watcher follows the head with concurrent block fetches (0.1&nbsp;s blocks demand it) and classifies every successful transaction whose receipts contain <code>Swap</code> logs from the venue topic map (<code>univ2</code>, <code>univ3</code>, <code>univ4</code>, which also covers forks sharing those event signatures).</p>
+      <ul>
+        <li><strong>Candidate.</strong> Two or more distinct pools touched in one transaction.</li>
+        <li><strong>Net flows.</strong> ERC-20 <code>Transfer</code>s are netted for the transaction's <code>from</code> and <code>to</code> only — not arbitrary recipients — and native <code>value</code> counts as WETH out. This is what stopped a user's full swap output from being booked as a third party's profit.</li>
+        <li><strong>Disqualifier.</strong> If any token nets negative, the sender paid something: it is a trade, not an arbitrage.</li>
+        <li><strong>Profit.</strong> Positive net in a quote asset (USDG, WETH) is booked as <code>profitWei</code> in that token; a pure positive position in another token is booked as a weaker, unpriced arbitrage.</li>
+        <li><strong>Valuation.</strong> Per token, with decimals and price from <code>getTokenInfo</code>; ETH/USD is derived from the on-chain WETH/USDG pool, not a constant.</li>
+        <li><strong>Extrapolation.</strong> Daily rates are not published until the sample spans at least one hour.</li>
+      </ul>
+      <p>Alongside attribution the watcher records a one-minute OHLC tape per Uniswap V3 pool from <code>sqrtPriceX96</code> and swap amounts (<code>candles</code> table, pruned after three days). The index lives in SQLite (<code>arbs</code>, <code>arb_pools</code>, <code>auctions</code>, <code>settlements</code>, <code>candles</code>, <code>api_keys</code>, <code>meta</code>) with NDJSON as the raw record.</p>
+
+      <h2 id="self-hosting">Self-hosting<a class="anchor" href="#self-hosting">#</a></h2>
+<pre class="code">git clone https://github.com/OrdoFi/ordofi && cd ordofi && npm install
+npm run watcher     # index the chain → data/ordo.db          (:—)
+npm run gateway     # protected RPC                           (:8547)
+npm run auction     # auction, receipts, feed relay           (:8548)
+npm run web         # terminal, explorer, portal, API         (:3000)
+npm test && npm run typecheck
+
+# production: Caddy in front of the services, one shared data volume
+docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d --build</pre>
+      <table class="compact">
+        <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+        <tr><td><code>ORDO_RPC_URL</code> · <code>ORDO_RPC_URLS</code></td><td>sequencer RPC</td><td>Read upstream(s); comma-separated list rotates on transport failures</td></tr>
+        <tr><td><code>ORDO_SEQUENCER_URL</code></td><td><code>https://rpc.mainnet.chain.robinhood.com</code></td><td>Where signed transactions are sent; third-party providers are reads only</td></tr>
+        <tr><td><code>ORDO_API_KEYS</code></td><td>ephemeral dev key</td><td><code>key:label:rateLimit:rebateAddress:mode</code> records</td></tr>
+        <tr><td><code>ORDO_ALLOW_ANON</code> · <code>ORDO_ANON_RATE_LIMIT</code></td><td><code>1</code> in production · <code>600</code></td><td>Anonymous wallet tier and its per-IP limit</td></tr>
+        <tr><td><code>ORDO_AUCTION_URL</code> · <code>ORDO_AUCTION_TIMEOUT_MS</code></td><td><code>http://localhost:8548</code> · <code>3000</code></td><td>Gateway → auction</td></tr>
+        <tr><td><code>ORDO_AUCTION_WINDOW_MS</code> · <code>ORDO_HINT_LEVEL</code></td><td><code>200</code> · <code>pools</code></td><td>Auction window and hint disclosure</td></tr>
+        <tr><td><code>ORDO_SETTLEMENT_ADDRESS</code> · <code>ORDO_AUCTIONEER_KEY</code></td><td>—</td><td>Enables bond checks, on-chain settlement and signed receipts</td></tr>
+        <tr><td><code>ORDO_RECEIPT_LOG_ADDRESS</code> · <code>ORDO_RECEIPT_COMMIT_EVERY</code></td><td>— · <code>25</code></td><td>Merkle anchoring</td></tr>
+        <tr><td><code>ORDO_REBATE_USER/APP/PROTOCOL</code></td><td><code>0.9 / 0.05 / 0.05</code></td><td>Ledger split (on-chain split is in the contract)</td></tr>
+        <tr><td><code>ORDO_FEED_URL</code></td><td>sequencer feed</td><td>Upstream for the relay</td></tr>
+        <tr><td><code>ORDO_DB</code> · <code>ORDO_DATA_DIR</code></td><td><code>data/ordo.db</code> · <code>data/</code></td><td>Index and persisted caches</td></tr>
+      </table>
+      <p>Compose services: <code>caddy</code>, <code>gateway</code>, <code>auction</code>, <code>web</code>, <code>watcher</code>, <code>searcher</code> (the house bidder that keeps the market non-empty), <code>arb</code> (the house arbitrage bot). Contracts are Foundry projects under <code>contracts/</code>; a Nitro full-node deployment for a bare-metal host is under <code>deploy/nitro-node/</code>.</p>
+
+      <h2 id="trust">Trust model &amp; limitations<a class="anchor" href="#trust">#</a></h2>
+      <dl>
+        <div><dt>The sequencer sees everything</dt><dd>Unavoidable on an L2 with a centralized sequencer. OrdoFi removes third parties from the path; it cannot remove the operator. Direct sequencer integration is the end of the roadmap for that reason.</dd></div>
+        <div><dt>Bundles are best-effort</dt><dd>Same-tick dispatch on a FCFS sequencer narrows the gap but does not guarantee adjacency. Use <code>OrdoExecutor</code> for atomicity.</dd></div>
+        <div><dt>Receipts have a bounded retraction window</dt><dd>Everything up to <code>anchoredCount</code> is immutable; the gap to <code>count</code> (at most 25 receipts) could still be altered by a malicious operator. Anchoring cadence is a parameter.</dd></div>
+        <div><dt>The auctioneer key is hot</dt><dd>It signs acks and receipts and calls <code>settle()</code>. Its powers are bounded by searcher signatures (it cannot charge above a signed maximum, nor twice) and by the contract owner, who can rotate it with <code>setAuctioneer</code>.</dd></div>
+        <div><dt>Contract owner</dt><dd>The deployer owns OrdoSettlement and can change the auctioneer, the split and the treasury. Bonds and claimables cannot be seized by the owner; there is no owner withdrawal path.</dd></div>
+        <div><dt>Hints leak early, by design</dt><dd>Searchers learn pools and direction ~200 ms before the feed would show them. Amounts are withheld below the <code>full</code> hint level. This is the price of selling the backrun instead of giving it away.</dd></div>
+        <div><dt>Not audited</dt><dd>The contracts are small and tested but have not had a third-party audit. Bond what you can afford to lose until they have.</dd></div>
+        <div><dt>Not affiliated</dt><dd>OrdoFi Labs is independent of Robinhood Markets, Inc.</dd></div>
+      </dl>
     </div>
-
-    <h2 id="rpc">Gateway API <span class="pill">:8547</span></h2>
-    <p>A drop-in JSON-RPC endpoint. Point any wallet, bot, or app at it. Standard <code>eth_*</code> methods pass through to the chain; OrdoFi adds protection and extensions. Authenticate with an <code>x-api-key</code> header.</p>
-
-    <h3>eth_sendRawTransaction <span class="pill">protected</span></h3>
-    <p>The transaction is simulated from the recovered sender first. If it would revert, it is rejected with code <code>-32000</code> and never reaches the sequencer — so you don't pay gas for a guaranteed failure. Otherwise it forwards normally and returns the tx hash.</p>
-
-    <h3>ordo_simulate</h3>
-    <p>Simulate a raw signed transaction without sending it. Returns <code>{ ok, revertReason?, from, to }</code>.</p>
-    <div class="code">
-curl -X POST http://localhost:8547 <span class="k">\</span>
-  -H <span class="s">'x-api-key: YOUR_KEY'</span> -H <span class="s">'content-type: application/json'</span> <span class="k">\</span>
-  -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"ordo_simulate","params":["0x02f8..."]}'</span>
-    </div>
-
-    <h3>ordo_sendBundle</h3>
-    <p>Submit up to 10 transactions to be sequenced back-to-back. Every tx is simulated first; if any would revert, the whole bundle is rejected. Params: <code>{ txs: [rawTx, ...] }</code>.</p>
-    <p style="color:#8a909a;font-size:13px;"><strong>Ordering guarantee:</strong> best-effort on a first-come-first-served chain — transactions are fired in the same tick to minimize the gap at the sequencer. Enforced atomicity requires sequencer integration (Phase 3) and is documented as such in the response.</p>
-
-    <h3>Operational endpoints</h3>
-    <table>
-      <tr><th>Method</th><th>Path</th><th>Returns</th></tr>
-      <tr><td>GET</td><td>/health</td><td>status, upstream, uptime</td></tr>
-      <tr><td>GET</td><td>/metrics</td><td>Prometheus text</td></tr>
-      <tr><td>GET</td><td>/metrics.json</td><td>counters + latency percentiles</td></tr>
-    </table>
-
-    <h2 id="searcher">Searcher API <span class="pill">:8548</span></h2>
-    <p>Connect over WebSocket to <code>ws://host:8548/searcher</code> to receive order-flow opportunities and bid on backrun rights.</p>
-    <div class="code">
-<span class="c">// on connect you receive:</span>
-{ <span class="k">"type"</span>: <span class="s">"welcome"</span>, <span class="k">"auctionWindowMs"</span>: 200, <span class="k">"swapTopics"</span>: {...} }
-
-<span class="c">// for each user transaction OrdoFi is holding:</span>
-{ <span class="k">"type"</span>: <span class="s">"opportunity"</span>, <span class="k">"opportunity"</span>: {
-    <span class="k">"id"</span>: <span class="s">"…"</span>, <span class="k">"hint"</span>: { <span class="k">"poolsTouched"</span>: […], <span class="k">"selector"</span>: <span class="s">"0x…"</span>, <span class="k">"value"</span>: <span class="s">"0x0"</span> } } }
-
-<span class="c">// respond with a sealed bid before the window closes:</span>
-{ <span class="k">"type"</span>: <span class="s">"bid"</span>, <span class="k">"opportunityId"</span>: <span class="s">"…"</span>, <span class="k">"searcher"</span>: <span class="s">"0xyou"</span>,
-  <span class="k">"bidWei"</span>: <span class="s">"1000000000000000"</span>, <span class="k">"backrunRawTx"</span>: <span class="s">"0x02f8…"</span> }
-    </div>
-    <p>Auctions are sealed-bid, second-price: the highest bidder wins and pays the second-highest price. The winning backrun is dispatched immediately after the user transaction.</p>
-
-    <h2 id="receipts">Verifiable outcomes <span class="pill">signed</span></h2>
-    <p>A sealed-bid auction asks you to take the operator's word for the losing bids. You don't have to. Every bid is acknowledged the moment it lands, and every closed auction publishes a receipt &mdash; both signed by the auctioneer under EIP-712, so a discrepancy between them is evidence rather than a complaint.</p>
-    <div class="code">
-<span class="c">// the reply to your bid — keep it, it is your leverage</span>
-{ <span class="k">"type"</span>: <span class="s">"bid_ack"</span>, <span class="k">"opportunityId"</span>: <span class="s">"…"</span>, <span class="k">"accepted"</span>: true,
-  <span class="k">"ack"</span>: { <span class="k">"opportunityId"</span>: <span class="s">"0x…"</span>, <span class="k">"searcher"</span>: <span class="s">"0xyou"</span>,
-           <span class="k">"bidWei"</span>: <span class="s">"1000000000000000"</span>, <span class="k">"receivedAt"</span>: 1756…, <span class="k">"signature"</span>: <span class="s">"0x…"</span> } }
-
-<span class="c">// the receipt for the round, once it closes</span>
-{ <span class="k">"opportunityId"</span>: <span class="s">"0x…"</span>, <span class="k">"winner"</span>: <span class="s">"0x…"</span>, <span class="k">"clearingPriceWei"</span>: <span class="s">"…"</span>,
-  <span class="k">"bids"</span>: [ { <span class="k">"searcher"</span>: <span class="s">"0x…"</span>, <span class="k">"bidWei"</span>: <span class="s">"…"</span>, <span class="k">"receivedAt"</span>: 1756…,
-             <span class="k">"bidSig"</span>: <span class="s">"0x…"</span> } ], <span class="k">"closedAt"</span>: 1756…, <span class="k">"signature"</span>: <span class="s">"0x…"</span> }
-    </div>
-    <p>Three things are checkable from those two objects alone, with no trust in anything the auctioneer says afterwards:</p>
-    <table>
-      <tr><th>Claim</th><th>How it is checked</th></tr>
-      <tr><td>Your bid was not dropped</td><td>The acknowledged bid must appear in the receipt, at the acknowledged amount</td></tr>
-      <tr><td>No bids were invented</td><td>Each bid carries the searcher's own settlement signature, which cannot be forged for an address you do not hold</td></tr>
-      <tr><td>Second price was honoured</td><td>The winner must be the highest bidder, and must be charged the second-highest bid</td></tr>
-    </table>
-    <div class="code">
-<span class="k">import</span> { auditReceipt } <span class="k">from</span> <span class="s">"@ordofi/core/receipt"</span>;
-
-<span class="k">const</span> { receipt } = <span class="k">await</span> fetch(<span class="s">`https://auction.ordofi.network/receipts/${id}`</span>).then(r =&gt; r.json());
-<span class="k">const</span> finding = <span class="k">await</span> auditReceipt(receipt, ack, 4663, auctioneer, SETTLEMENT_ADDRESS);
-<span class="k">if</span> (!finding.ok) console.error(finding.reason); <span class="c">// signed proof of what went wrong</span>
-    </div>
-    <p>Signatures make one receipt unforgeable; they do not stop a receipt being swapped out after you have read it. So the auctioneer batches a Merkle root over every receipt it has ever issued into <code>OrdoReceiptLog</code> on-chain. <code>anchoredCount</code> is the prefix that is already immutable, so the gap between it and <code>count</code> is exactly what an operator could still retract.</p>
-    <table>
-      <tr><th>Method</th><th>Path</th><th>Returns</th></tr>
-      <tr><td>GET</td><td>/receipts?n=20</td><td>Recent receipts, and the auctioneer address to check them against</td></tr>
-      <tr><td>GET</td><td>/receipts/:opportunityId</td><td>One receipt, by uuid or bytes32</td></tr>
-      <tr><td>GET</td><td>/receipts/root</td><td><code>{ root, count, anchoredCount, auctioneer }</code></td></tr>
-    </table>
-
-    <h2 id="feed">Sequencer feed <span class="pill">ws /feed</span></h2>
-    <p>MEV here is a latency race rather than a fee auction, and the sequencer feed is where that race starts: transactions appear on it before they are in a block you can query. OrdoFi holds one upstream connection, decodes the Nitro batch framing, and fans the result out &mdash; so a searcher gets raw transactions without writing a feed decoder of their own.</p>
-    <div class="code">
-<span class="c">// ws://host:8548/feed</span>
-{ <span class="k">"type"</span>: <span class="s">"feed_txs"</span>, <span class="k">"sequenceNumber"</span>: 51709518, <span class="k">"blockNumber"</span>: 51654343,
-  <span class="k">"timestamp"</span>: 1756…, <span class="k">"receivedAt"</span>: 1756…,
-  <span class="k">"txs"</span>: [ { <span class="k">"hash"</span>: <span class="s">"0x…"</span>, <span class="k">"raw"</span>: <span class="s">"0x02f8…"</span> } ] }
-    </div>
-    <p><code>receivedAt</code> is stamped when OrdoFi received the message, so you can measure the relay's own added latency rather than take it on faith. Throughput and upstream health are at <code>GET /feed/stats</code>: <code>{ upstream, clients, sequencerMessages, txsRelayed, lastSequenceNumber, reconnects }</code>.</p>
-    <p style="color:#8a909a;font-size:13px;"><strong>What this is not:</strong> the feed carries transactions the sequencer has already accepted and ordered. It is a head start on decoding, not a preview of pending order flow — that is what the auction is for.</p>
-
-    <h2 id="submit">Submitting order flow <span class="pill">POST /submit</span></h2>
-    <p>Wallets and apps route user transactions through the auction to earn rebates:</p>
-    <div class="code">
-curl -X POST http://localhost:8548/submit <span class="k">\</span>
-  -H <span class="s">'content-type: application/json'</span> <span class="k">\</span>
-  -d <span class="s">'{"rawTx":"0x02f8…","originLabel":"v4.fun","rebateAddress":"0xapp…"}'</span>
-    </div>
-    <p>Response includes the auction result and the rebate ledger entry (user / app / protocol split). Check accrued rebates at <code>GET /stats</code>.</p>
-
-    <h2>Rebate split</h2>
-    <p>Configurable via env; defaults route the majority to users:</p>
-    <table>
-      <tr><th>Recipient</th><th>Default</th><th>Env</th></tr>
-      <tr><td>User</td><td>90%</td><td>ORDO_REBATE_USER</td></tr>
-      <tr><td>App (order-flow originator)</td><td>5%</td><td>ORDO_REBATE_APP</td></tr>
-      <tr><td>Protocol</td><td>5%</td><td>ORDO_REBATE_PROTOCOL</td></tr>
-    </table>
-
-    <h2 id="keys">Getting a key <span class="pill">/portal</span></h2>
-    <p>Mint one at <a href="/portal">the portal</a>, or from a script. Supply a <code>rebateAddress</code> and the key routes your order flow through the auction with rebates credited to that address; omit it and the key is protected passthrough only.</p>
-    <div class="code">
-curl -X POST https://app.ordofi.network/api/keys <span class="k">\</span>
-  -H <span class="s">'content-type: application/json'</span> <span class="k">\</span>
-  -d <span class="s">'{"label":"my-wallet","rebateAddress":"0xapp…"}'</span>
-    </div>
-    <p>The key is returned once and only its hash is kept, so a lost key is reissued rather than recovered. Send it as <code>x-api-key</code> to <code>https://rpc.ordofi.network</code>.</p>
-    <p>Bonds and claimable rebates for any address are readable without a key, straight from the settlement contract: <code>GET /api/account?address=0x…</code>. The portal shows the same numbers, and claims from your wallet.</p>
-
+    </main>
   </div>
 
   <footer class="site-footer">
@@ -168,9 +541,9 @@ curl -X POST https://app.ordofi.network/api/keys <span class="k">\</span>
           <div class="logo">ordo<span class="logo-app">app</span></div>
           <p>The execution layer for Robinhood Chain.</p>
         </div>
-        <div class="footer-col"><h5>Product</h5><a href="/explorer">Explorer</a><a href="/dashboard">Settlement dashboard</a><a href="/portal">Portal</a><a href="/docs">Documentation</a></div>
+        <div class="footer-col"><h5>Product</h5><a href="/trade">Trade</a><a href="/explorer">Explorer</a><a href="/dashboard">Settlement dashboard</a><a href="/portal">Portal</a></div>
         <div class="footer-col"><h5>Participate</h5><a href="/searchers">For searchers</a><a href="/apps">For apps &amp; wallets</a><a href="/operators">For node operators</a></div>
-        <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs#quickstart">Quickstart</a><a href="/docs#searcher">API reference</a></div>
+        <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="#quickstart">Quickstart</a><a href="#gateway">Gateway reference</a><a href="https://rpc.ordofi.network/" target="_blank" rel="noopener">rpc.ordofi.network</a></div>
       </div>
       <div class="footer-bottom">
         <div class="disclaimer">© 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc.</div>
@@ -178,5 +551,60 @@ curl -X POST https://app.ordofi.network/api/keys <span class="k">\</span>
       </div>
     </div>
   </footer>
+
+  <script>
+  (() => {
+    // Syntax colour for the reference blocks: authored as plain text, coloured
+    // here so the source stays readable and copy-paste stays exact.
+    const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    const RX = /("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|((?:^|(?<=\s))(?:\/\/|#)(?!!).*$)|(\b\d[\d_]*(?:\.\d+)?n?\b)/gm;
+    document.querySelectorAll("pre.code").forEach((pre) => {
+      if (pre.classList.contains("diagram") || pre.querySelector("span")) return;
+      const src = pre.textContent;
+      let out = "", last = 0;
+      for (const m of src.matchAll(RX)) {
+        out += esc(src.slice(last, m.index));
+        const cls = m[1] ? "k" : m[2] ? "s" : m[3] ? "c" : "n";
+        out += `<span class="${cls}">${esc(m[0])}</span>`;
+        last = m.index + m[0].length;
+      }
+      pre.innerHTML = out + esc(src.slice(last));
+    });
+
+    // Sidebar: scrollspy, filter, mobile toggle.
+    const links = [...document.querySelectorAll("#sidenav a[href^='#']")];
+    const byId = new Map(links.map((a) => [a.getAttribute("href").slice(1), a]));
+    const headings = [...byId.keys()].map((id) => document.getElementById(id)).filter(Boolean);
+    let current = null;
+    const setCurrent = (id) => {
+      if (id === current) return;
+      current = id;
+      links.forEach((a) => a.classList.toggle("on", a.getAttribute("href") === "#" + id));
+      const a = byId.get(id);
+      if (a) { const nav = document.getElementById("sidenav"); const r = a.getBoundingClientRect(), n = nav.getBoundingClientRect(); if (r.top < n.top || r.bottom > n.bottom) a.scrollIntoView({ block: "nearest" }); }
+    };
+    const spy = () => {
+      const line = 110;
+      let best = headings[0];
+      for (const h of headings) { if (h.getBoundingClientRect().top - line <= 0) best = h; else break; }
+      if (best) setCurrent(best.id);
+    };
+    document.addEventListener("scroll", spy, { passive: true });
+    spy();
+
+    const search = document.getElementById("sn-search");
+    search.addEventListener("input", () => {
+      const q = search.value.trim().toLowerCase();
+      links.forEach((a) => a.classList.toggle("hide", Boolean(q) && !a.textContent.toLowerCase().includes(q)));
+      document.querySelectorAll("#sidenav h6").forEach((h) => {
+        let el = h.nextElementSibling, any = false;
+        while (el && el.tagName === "A") { if (!el.classList.contains("hide")) any = true; el = el.nextElementSibling; }
+        h.classList.toggle("hide", Boolean(q) && !any);
+      });
+    });
+    document.getElementById("sn-toggle").addEventListener("click", () => document.getElementById("sidenav").classList.toggle("open"));
+    links.forEach((a) => a.addEventListener("click", () => document.getElementById("sidenav").classList.remove("open")));
+  })();
+  </script>
 </body>
 </html>
