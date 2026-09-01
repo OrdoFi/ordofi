@@ -13,6 +13,7 @@ import { settlementEnabled, submitSettlement } from "./settle.js";
 import { feedStats, startFeedRelay } from "./feedrelay.js";
 import {
   acknowledge,
+  anchoringConfigured,
   anchoringEnabled,
   auctioneerAddress,
   currentRoot,
@@ -375,6 +376,10 @@ server.listen(PORT, () => {
       receiptsEnabled()
         ? `on (signed by ${auctioneerAddress()}) · GET /receipts /receipts/root`
         : "off (no ORDO_AUCTIONEER_KEY) — outcomes cannot be audited"
-    } · on-chain anchoring=${anchoringEnabled() ? "on" : "off (no ORDO_RECEIPT_LOG_ADDRESS)"}`,
+    } · on-chain anchoring=${
+      anchoringEnabled()
+        ? "on"
+        : `off (${anchoringConfigured() ? "no ORDO_AUCTIONEER_KEY" : "no ORDO_RECEIPT_LOG_ADDRESS"})`
+    }`,
   );
 });

@@ -16,6 +16,7 @@ order, sequence.
 | --- | --- |
 | `OrdoSettlement` | `0xbC680922DaF2F65a8B957e5238857f8c68BeDabb` |
 | `OrdoBundler` | `0xc0bccFb3aA4ad9160d272645376a1797a32f3c4a` |
+| `OrdoReceiptLog` | `0x89926c06cad403fDDD481C599b2ce709EBC936B9` |
 
 Live at block 51544378 with a 90/5/5 user/app/protocol split. Foundry's receipt
 output labelled these two the wrong way round; the pairing above is the one the

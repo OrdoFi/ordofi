@@ -135,6 +135,11 @@ export function anchoringEnabled(): boolean {
   return Boolean(account && LOG_ADDRESS);
 }
 
+/** Distinguishes "no contract configured" from "no key to sign with". */
+export function anchoringConfigured(): boolean {
+  return Boolean(LOG_ADDRESS);
+}
+
 async function maybeCommitRoot(): Promise<void> {
   if (!account || !LOG_ADDRESS || committing) return;
   if (leaves.length - lastCommittedCount < COMMIT_EVERY) return;
