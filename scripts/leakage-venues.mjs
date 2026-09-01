@@ -61,9 +61,9 @@ const VENUE_NAMES = new Map([
   ["0xe0c4ceb92d08ca985bb70fe0a22feb121a9854a8", "Ramses (CL)"],
   ["0xdcd5f77697914e27f56fd263ef82923c8524abac", "Ramses (DLMM)"],
   ["0x16494a80e08bcb9285d87b67149d7b01774d82f8", "Sheriff (Algebra)"],
-  // Verified source says CLFactory (Velodrome Slipstream lineage); no team has
-  // publicly claimed the deployment, so the codebase is named, not the brand.
-  ["0x1ac9db4a2608ba45d6127b1737949b51bb54b7f3", "Slipstream fork (brand unconfirmed)"],
+  // Verified source: CLFactory, Velodrome Slipstream lineage. The deployment
+  // is up (UP33), Robinhood Chain's native ve(3,3) DEX.
+  ["0x1ac9db4a2608ba45d6127b1737949b51bb54b7f3", "up / UP33 (Slipstream CL)"],
 ]);
 
 const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
