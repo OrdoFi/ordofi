@@ -70,12 +70,25 @@ class UpstreamRpcError extends Error {
 }
 
 /**
+ * Rate limiting arrives as a JSON-RPC error, not a transport failure, so the
+ * "a real answer is not a reason to ask someone else" rule got it exactly
+ * backwards: being throttled is the one RPC-level error where asking someone
+ * else is the entire remedy. Treating it as fatal meant the watcher sat out
+ * its backoff against a busy endpoint while a healthy fallback went unused.
+ */
+export function isRetryableRpcError(err: unknown): boolean {
+  const e = err as { code?: number; message?: string };
+  if (e?.code === -32005 || e?.code === 429) return true;
+  return /rate.?limit|too many requests|throttl|capacity|try again/i.test(e?.message ?? "");
+}
+
+/**
  * JSON-RPC over whichever upstream is currently healthy.
  *
  * Transport failures — 403 challenge pages, timeouts, dead hosts — rotate to
- * the next URL. A JSON-RPC *error* does not: that is a healthy upstream giving
- * a real answer ("intrinsic gas too low" is not a reason to ask someone else),
- * and it is rethrown with `code` intact.
+ * the next URL, as do rate limits. Any other JSON-RPC error does not: that is
+ * a healthy upstream giving a real answer ("intrinsic gas too low" is not a
+ * reason to ask someone else), and it is rethrown with `code` intact.
  */
 export async function rpcFetch(
   method: string,
@@ -101,13 +114,16 @@ export async function rpcFetch(
       } catch {
         throw new Error(`HTTP ${res.status} non-JSON from ${new URL(url).host} (rate limit or bot challenge)`);
       }
-      cursor = idx;
       if (body.error) {
         throw new UpstreamRpcError(body.error.message ?? "upstream error", body.error.code ?? -32000);
       }
+      // Only a genuine answer makes an upstream sticky. Setting this before
+      // checking body.error pinned the cursor to whichever endpoint was busy
+      // throttling us.
+      cursor = idx;
       return body.result;
     } catch (e) {
-      if ((e as UpstreamRpcError).isRpcLevel) throw e;
+      if ((e as UpstreamRpcError).isRpcLevel && !isRetryableRpcError(e)) throw e;
       lastErr = e as Error;
     }
   }

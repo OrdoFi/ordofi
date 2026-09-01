@@ -7,8 +7,26 @@ import { analyzeBlock } from "./detect.js";
 const RPC = ENDPOINTS.rpc;
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data");
 const POLL_MS = Number(process.env.ORDO_POLL_MS ?? 400);
-const BLOCK_DELAY_MS = Number(process.env.ORDO_BLOCK_DELAY_MS ?? 150);
 const SUMMARY_EVERY_BLOCKS = Number(process.env.ORDO_SUMMARY_BLOCKS ?? 100);
+
+/**
+ * This chain produces ten blocks a second, so anything slower than that is not
+ * a slow indexer — it is an indexer that never arrives. The previous settings
+ * (ten blocks per pass, two round trips each, a 150ms sleep per block and a
+ * 400ms poll between passes) came to roughly 3.4 blocks/s, and the index fell
+ * about forty minutes further behind every hour.
+ *
+ * Blocks are now fetched concurrently and the per-block sleep is gone. The
+ * throttling it provided has not been thrown away, just moved: concurrency
+ * halves on any failure and recovers on success, so a rate limit costs
+ * throughput for a few seconds instead of being paid for on every block
+ * forever.
+ */
+const CONCURRENCY = Number(process.env.ORDO_CONCURRENCY ?? 8);
+const MAX_BATCH = Number(process.env.ORDO_MAX_BATCH ?? 400);
+const BLOCK_DELAY_MS = Number(process.env.ORDO_BLOCK_DELAY_MS ?? 0);
+/** Per-arb lines are ~8/block at head; useful when debugging, noise otherwise. */
+const LOG_ARBS = process.env.ORDO_LOG_ARBS === "1";
 
 mkdirSync(DATA_DIR, { recursive: true });
 const swapsFile = join(DATA_DIR, "swaps.ndjson");
@@ -36,11 +54,20 @@ async function rpc<T = any>(method: string, params: unknown[] = []): Promise<T> 
   return (await rpcFetch(method, params)) as T;
 }
 
+/**
+ * Returns null only when the node genuinely lacks the method. Swallowing every
+ * error here meant a rate-limited batch call silently became one call per
+ * transaction — the response to being throttled was to make more requests.
+ */
 async function getReceipts(blockHex: string): Promise<any[] | null> {
   try {
     return await rpc("eth_getBlockReceipts", [blockHex]);
-  } catch {
-    return null; // node doesn't support it; caller falls back per-tx
+  } catch (e) {
+    const msg = (e as Error).message.toLowerCase();
+    if (msg.includes("method not found") || msg.includes("not supported") || msg.includes("unsupported")) {
+      return null;
+    }
+    throw e;
   }
 }
 
@@ -56,22 +83,29 @@ const stats = {
   poolsSeen: new Set<string>(),
 };
 
-function printSummary(head: number) {
+function printSummary(head: number, next: number, concurrency: number) {
   const mins = ((Date.now() - stats.startedAt) / 60000).toFixed(1);
+  const rate = stats.blocksSeen / Math.max(1, (Date.now() - stats.startedAt) / 1000);
+  const lag = Math.max(0, head - next);
   const topSenders = [...stats.arbSenders.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([a, n]) => `${a.slice(0, 10)}…×${n}`)
     .join(" ");
+  // Every token ever profited in was printed on one line, which ran to
+  // hundreds of entries and buried everything else in the log.
   const profit = [...stats.arbProfitByToken.entries()]
+    .sort((a, b) => (b[1] > a[1] ? 1 : -1))
+    .slice(0, 8)
     .map(([t, v]) => `${t.slice(0, 10)}…=${v.toString()}`)
     .join(" ");
   console.log(
-    `[summary] head=${head} uptime=${mins}m blocks=${stats.blocksSeen} txs=${stats.txsSeen} ` +
+    `[summary] head=${head} lag=${lag} (${(lag * 0.1 / 60).toFixed(1)}m) rate=${rate.toFixed(1)}blk/s ` +
+      `conc=${concurrency} uptime=${mins}m blocks=${stats.blocksSeen} txs=${stats.txsSeen} ` +
       `swaps=${stats.swapsSeen} pools=${stats.poolsSeen.size} arbs=${stats.arbsSeen}`,
   );
   if (stats.arbsSeen > 0) {
-    console.log(`[summary] arb profit (wei by token): ${profit}`);
+    console.log(`[summary] top arb profit (wei by token): ${profit}`);
     console.log(`[summary] top arb senders: ${topSenders}`);
   }
 }
@@ -109,10 +143,12 @@ async function processBlock(n: number): Promise<void> {
       );
     }
     appendFileSync(arbsFile, JSON.stringify(a) + "\n");
-    console.log(
-      `[arb] block=${a.block} tx=${a.txHash} sender=${a.sender} pools=${a.poolsTouched.length} ` +
-        `profit=${a.profitWei} of ${a.profitToken}`,
-    );
+    if (LOG_ARBS) {
+      console.log(
+        `[arb] block=${a.block} tx=${a.txHash} sender=${a.sender} pools=${a.poolsTouched.length} ` +
+          `profit=${a.profitWei} of ${a.profitToken}`,
+      );
+    }
   }
 
   if (arbs.length > 0) {
@@ -147,32 +183,69 @@ async function main() {
   );
   console.log(`ordo watcher | writing ${swapsFile} and ${arbsFile}`);
 
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   let consecutiveFailures = 0;
+  let concurrency = CONCURRENCY;
+  let goodChunks = 0;
+  let lastSaved = next;
+  let lastSummary = next;
+
   for (;;) {
     try {
       const head = parseInt(await rpc<string>("eth_blockNumber"), 16);
-      // (reset below only after the whole batch succeeds)
-      // Cap catch-up batches so we never hammer the public RPC.
-      const target = Math.min(head, next + 10);
-      while (next <= target) {
-        await processBlock(next);
-        if (next % SUMMARY_EVERY_BLOCKS === 0) printSummary(head);
-        next++;
-        if (next % 25 === 0) saveCheckpoint(next);
-        // Throttle so backfills don't trip the public RPC's rate limit.
-        if (BLOCK_DELAY_MS > 0) await new Promise((r) => setTimeout(r, BLOCK_DELAY_MS));
+      if (next > head) {
+        await sleep(POLL_MS); // caught up; wait for the chain rather than spin
+        continue;
       }
+
+      const target = Math.min(head, next + MAX_BATCH - 1);
+      while (next <= target) {
+        const chunk: number[] = [];
+        for (let b = next; b <= target && chunk.length < concurrency; b++) chunk.push(b);
+        // All or nothing: a partial chunk would advance the checkpoint past a
+        // block that was never indexed. Retrying the whole chunk is safe
+        // because every insert is idempotent.
+        await Promise.all(chunk.map(processBlock));
+        next += chunk.length;
+
+        if (next - lastSaved >= 25) {
+          saveCheckpoint(next);
+          lastSaved = next;
+        }
+        if (next - lastSummary >= SUMMARY_EVERY_BLOCKS) {
+          printSummary(head, next, concurrency);
+          lastSummary = next;
+        }
+        // Additive increase, multiplicative decrease. Recovering only after a
+        // whole 400-block batch would have left concurrency pinned at 1 for as
+        // long as the endpoint stayed busy, which is slower than the fixed
+        // delay this replaced.
+        if (++goodChunks >= 20 && concurrency < CONCURRENCY) {
+          concurrency++;
+          goodChunks = 0;
+          console.log(`[recover] concurrency up to ${concurrency}`);
+        }
+        if (BLOCK_DELAY_MS > 0) await sleep(BLOCK_DELAY_MS);
+      }
+
+      saveCheckpoint(next);
+      lastSaved = next;
       consecutiveFailures = 0;
     } catch (err) {
       // A flat 2s retry kept the IP hot enough that Cloudflare's challenge
       // never expired. Backing off exponentially is what actually ends a
-      // 403 episode; capping it keeps recovery reasonably prompt.
+      // 403 episode; capping it keeps recovery reasonably prompt. Halving
+      // concurrency means a rate limit costs less on the way back up.
       consecutiveFailures++;
+      concurrency = Math.max(1, Math.floor(concurrency / 2));
+      goodChunks = 0;
       const waitMs = Math.min(60_000, 2_000 * 2 ** Math.min(consecutiveFailures - 1, 5));
-      console.error(`[error] ${(err as Error).message} — backing off ${Math.round(waitMs / 1000)}s (failure ${consecutiveFailures})`);
-      await new Promise((r) => setTimeout(r, waitMs));
+      console.error(
+        `[error] ${(err as Error).message} — backing off ${Math.round(waitMs / 1000)}s ` +
+          `(failure ${consecutiveFailures}, concurrency ${concurrency})`,
+      );
+      await sleep(waitMs);
     }
-    await new Promise((r) => setTimeout(r, POLL_MS));
   }
 }
 
