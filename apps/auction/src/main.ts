@@ -10,6 +10,7 @@ import { Auction, toResult } from "./auctioneer.js";
 import { bondingEnabled, checkBond } from "./bonds.js";
 import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
 import { settlementEnabled, submitSettlement } from "./settle.js";
+import { feedStats, startFeedRelay } from "./feedrelay.js";
 import {
   acknowledge,
   anchoringEnabled,
@@ -264,6 +265,12 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ status: "ok", searchers: searchers.size, stats }));
     return;
   }
+  if (req.method === "GET" && url === "/feed/stats") {
+    res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+    res.end(JSON.stringify(feedStats()));
+    return;
+  }
+
   if (req.method === "GET" && url === "/stats") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
@@ -295,6 +302,7 @@ const server = createServer((req, res) => {
 
 // Searcher WebSocket: receive opportunity hints, submit sealed bids.
 const wss = new WebSocketServer({ server, path: "/searcher" });
+startFeedRelay(server);
 wss.on("connection", (ws) => {
   searchers.add(ws);
   ws.send(
