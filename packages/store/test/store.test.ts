@@ -94,3 +94,24 @@ test("settlements are recorded and attributed to an app", () => {
   assert.deepEqual(s.appEarnings("0xapp"), { settlements: 2, totalChargedWei: "3000" });
   s.close();
 });
+
+test("api keys: issued once, found by hash, never stored in plaintext", () => {
+  const store = new OrdoStore(":memory:");
+  const { key, record } = store.issueApiKey({ label: "v4-fun", rebateAddress: "0xF177b7f781292FAa6d224C4a4fDefB1Eae80Ad2E" });
+
+  assert.match(key, /^ordo_[0-9a-f]{36}$/);
+  assert.equal(record.mode, "auction");
+  assert.equal(store.apiKeyCount(), 1);
+
+  const found = store.findApiKey(key);
+  assert.equal(found?.label, "v4-fun");
+  assert.equal(found?.rebateAddress, "0xf177b7f781292faa6d224c4a4fdefb1eae80ad2e");
+  assert.equal(store.findApiKey("ordo_" + "0".repeat(36)), null);
+});
+
+test("api keys: no rebate address means direct mode; bad address refused", () => {
+  const store = new OrdoStore(":memory:");
+  const { record } = store.issueApiKey({ label: "reader" });
+  assert.equal(record.mode, "direct");
+  assert.throws(() => store.issueApiKey({ rebateAddress: "not-an-address" }), /not an address/);
+});

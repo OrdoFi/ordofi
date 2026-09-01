@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrdoFi Portal — API keys, bonds &amp; rebates</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .portal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 860px) { .portal-grid { grid-template-columns: 1fr; } }
+    .panel { border: 1px solid rgba(255,255,255,.09); border-radius: 10px; padding: 22px; }
+    .panel h2 { margin-top: 0; }
+    .field { margin: 12px 0; }
+    .field label { display: block; font-size: 13px; opacity: .75; margin-bottom: 6px; }
+    .field input { width: 100%; box-sizing: border-box; background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.12); border-radius: 6px; padding: 10px 12px;
+      color: inherit; font: inherit; }
+    .btn-row { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; font-size: 14px; margin: 10px 0; }
+    .kv dt { opacity: .65; } .kv dd { margin: 0; font-family: ui-monospace, monospace; word-break: break-all; }
+    .result { margin-top: 14px; }
+    .keybox { font-family: ui-monospace, monospace; word-break: break-all; padding: 12px;
+      border: 1px dashed rgba(67,224,143,.5); border-radius: 8px; background: rgba(67,224,143,.06); }
+    .warn { font-size: 13px; opacity: .8; margin-top: 8px; }
+    .err { color: #ff7a7a; font-size: 14px; margin-top: 10px; }
+    table.mini { width: 100%; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#43e08f" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#43e08f"/></svg> OrdoFi</a>
+      <div class="nav-links">
+        <a href="/">Home</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
+        <a href="/apps">Apps</a><a href="/portal">Portal</a><a href="/docs">Docs</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap doc">
+    <h1>Portal</h1>
+    <p class="lead">Mint an API key for the gateway, and check any address's bond, claimable rebates, and settlement history — live from the contract.</p>
+
+    <div class="portal-grid">
+      <div class="panel">
+        <h2>Get an API key</h2>
+        <p>The key authenticates you at <code>rpc.ordofi.network</code>. Add a rebate address and your order flow is routed through the auction — 5% of every backrun your users generate accrues to that address.</p>
+        <div class="field">
+          <label for="k-label">Project name</label>
+          <input id="k-label" placeholder="my-wallet" maxlength="40" />
+        </div>
+        <div class="field">
+          <label for="k-rebate">Rebate address (optional — enables auction routing)</label>
+          <input id="k-rebate" placeholder="0x…" />
+        </div>
+        <div class="btn-row"><button class="btn" id="k-go">Mint key</button></div>
+        <div class="result" id="k-out"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Account dashboard</h2>
+        <p>Searcher bond, claimable balance, and recent settlements for any address. Balances are read from <code>OrdoSettlement</code> at request time.</p>
+        <div class="field">
+          <label for="a-addr">Address</label>
+          <input id="a-addr" placeholder="0x…" />
+        </div>
+        <div class="btn-row">
+          <button class="btn" id="a-go">Look up</button>
+          <button class="btn" id="a-claim" style="display:none">Claim with wallet</button>
+        </div>
+        <div class="result" id="a-out"></div>
+      </div>
+    </div>
+
+    <p class="warn" style="margin-top:26px">Keys are shown once and stored only as a hash. Three keys per hour per IP. The claim button asks your wallet to call <code>claim()</code> on the settlement contract; OrdoFi never holds your funds.</p>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+$("k-go").onclick = async () => {
+  const out = $("k-out");
+  out.innerHTML = "minting…";
+  try {
+    const res = await fetch("/api/keys", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        label: $("k-label").value || undefined,
+        rebateAddress: $("k-rebate").value || undefined,
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.status);
+    out.innerHTML =
+      '<div class="keybox">' + esc(d.key) + "</div>" +
+      '<dl class="kv"><dt>mode</dt><dd>' + esc(d.mode) + "</dd>" +
+      "<dt>rate limit</dt><dd>" + esc(d.rateLimitPerMin) + "/min</dd>" +
+      (d.rebateAddress ? "<dt>rebates to</dt><dd>" + esc(d.rebateAddress) + "</dd>" : "") +
+      "</dl>" +
+      '<div class="warn">Copy it now — it is shown exactly once. Use it as the <code>x-api-key</code> header.</div>';
+  } catch (e) {
+    out.innerHTML = '<div class="err">' + esc(e.message) + "</div>";
+  }
+};
+
+let lastAccount = null;
+$("a-go").onclick = async () => {
+  const out = $("a-out");
+  const addr = $("a-addr").value.trim();
+  out.innerHTML = "reading contract…";
+  $("a-claim").style.display = "none";
+  try {
+    const res = await fetch("/api/account?address=" + encodeURIComponent(addr));
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.status);
+    lastAccount = d;
+    const rows = (list, role) => list.map((s) =>
+      "<tr><td>" + esc(role) + "</td><td>" + esc((s.opportunityId || "").slice(0, 10)) + "…</td><td>" +
+      esc((Number(s.chargeWei) / 1e18).toFixed(6)) + " ETH</td></tr>").join("");
+    out.innerHTML =
+      '<dl class="kv">' +
+      "<dt>bond</dt><dd>" + esc(d.bondEth) + " ETH</dd>" +
+      "<dt>claimable</dt><dd>" + esc(d.claimableEth) + " ETH</dd>" +
+      "<dt>contract</dt><dd>" + esc(d.settlement || "not deployed") + "</dd></dl>" +
+      ((d.settlementsAsSearcher.length || d.settlementsAsApp.length)
+        ? '<table class="mini"><tr><th>role</th><th>auction</th><th>amount</th></tr>' +
+          rows(d.settlementsAsSearcher, "searcher") + rows(d.settlementsAsApp, "app") + "</table>"
+        : '<div class="warn">No settlements involving this address yet.</div>');
+    if (Number(d.claimableEth) > 0 && window.ethereum) $("a-claim").style.display = "";
+  } catch (e) {
+    out.innerHTML = '<div class="err">' + esc(e.message) + "</div>";
+  }
+};
+
+// claim() — selector 0x4e71d92d. The wallet signs; the page never sees a key.
+$("a-claim").onclick = async () => {
+  const out = $("a-out");
+  try {
+    const [from] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    if (from.toLowerCase() !== lastAccount.address.toLowerCase()) {
+      throw new Error("connected wallet is " + from + ", not the looked-up address");
+    }
+    const tx = await window.ethereum.request({
+      method: "eth_sendTransaction",
+      params: [{ from, to: lastAccount.settlement, data: "0x4e71d92d" }],
+    });
+    out.insertAdjacentHTML("beforeend", '<div class="warn">claim sent: <code>' + esc(tx) + "</code></div>");
+  } catch (e) {
+    out.insertAdjacentHTML("beforeend", '<div class="err">' + esc(e.message) + "</div>");
+  }
+};
+</script>
+</body>
+</html>

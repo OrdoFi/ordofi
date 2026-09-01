@@ -186,6 +186,55 @@ async function onchainStats(address) {
   };
 }
 
+const VIEW_ABI = [
+  { type: "function", name: "bond", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "claimable", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+];
+
+async function accountView(address) {
+  const client = createPublicClient({ transport: http(RPC) });
+  const [bond, claimable] = SETTLEMENT
+    ? await Promise.all([
+        client.readContract({ address: SETTLEMENT, abi: VIEW_ABI, functionName: "bond", args: [address] }),
+        client.readContract({ address: SETTLEMENT, abi: VIEW_ABI, functionName: "claimable", args: [address] }),
+      ])
+    : [0n, 0n];
+
+  const a = address.toLowerCase();
+  let asSearcher = [];
+  let asApp = [];
+  try {
+    asSearcher = store?.recentSettlements(200).filter((s) => s.searcher.toLowerCase() === a).slice(0, 20) ?? [];
+    asApp = store?.recentSettlements(200).filter((s) => s.appAddress.toLowerCase() === a).slice(0, 20) ?? [];
+  } catch {
+    /* index optional */
+  }
+
+  return {
+    address,
+    settlement: SETTLEMENT || null,
+    bondEth: formatEther(bond),
+    claimableEth: formatEther(claimable),
+    settlementsAsSearcher: asSearcher,
+    settlementsAsApp: asApp,
+    claimHint: `cast send ${SETTLEMENT} "claim()" --rpc-url ${RPC} --account <your-keystore>`,
+  };
+}
+
+/** Fixed-window issuance limiter: three keys per hour per IP. */
+const issuance = new Map();
+function issueAllowed(ip) {
+  const now = Date.now();
+  const w = issuance.get(ip);
+  if (!w || now >= w.resetAt) {
+    issuance.set(ip, { count: 1, resetAt: now + 3_600_000 });
+    return true;
+  }
+  if (w.count >= 3) return false;
+  w.count++;
+  return true;
+}
+
 createServer(async (req, res) => {
   let path = (req.url ?? "/").split("?")[0];
   const url = new URL(req.url ?? "/", "http://x");
@@ -234,6 +283,70 @@ createServer(async (req, res) => {
         updatedAt: new Date().toISOString(),
       }),
     );
+    return;
+  }
+
+  // Self-serve credential issuance. The key is returned exactly once and only
+  // its hash is stored, so there is nothing here worth stealing later. Per-IP
+  // limiting keeps a bored script from minting thousands of rows.
+  if (path === "/api/keys" && req.method === "POST") {
+    if (!store) {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "key store unavailable on this host" }));
+      return;
+    }
+    const ip = (req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "?").toString().split(",")[0];
+    if (!issueAllowed(ip)) {
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "limit reached — three keys per hour per address" }));
+      return;
+    }
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 2048) break;
+    }
+    try {
+      const { label, rebateAddress } = JSON.parse(body || "{}");
+      if (rebateAddress && !/^0x[0-9a-fA-F]{40}$/.test(rebateAddress)) {
+        throw new Error("rebateAddress must be a 20-byte 0x address");
+      }
+      const issued = store.issueApiKey({ label, rebateAddress });
+      res.writeHead(201, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          key: issued.key,
+          label: issued.record.label,
+          mode: issued.record.mode,
+          rebateAddress: issued.record.rebateAddress ?? null,
+          rateLimitPerMin: issued.record.rateLimit,
+          note: "Store this now — it is shown once and only a hash is kept.",
+          rpc: "https://rpc.ordofi.network (header: x-api-key)",
+        }),
+      );
+    } catch (e) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  // Everything the portal shows for one address: live bond and claimable
+  // straight from the contract, plus its settlement history from the index.
+  if (path === "/api/account") {
+    const address = url.searchParams.get("address") ?? "";
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "pass ?address=0x…" }));
+      return;
+    }
+    try {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(await accountView(address)));
+    } catch (e) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
     return;
   }
 
@@ -290,6 +403,7 @@ createServer(async (req, res) => {
   }
 
   if (path === "/") path = "/index.html";
+  if (path === "/portal") path = "/portal.html";
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";

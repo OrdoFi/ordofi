@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
+import { join } from "node:path";
 import { ENDPOINTS } from "@ordofi/core";
+import { OrdoStore } from "@ordofi/store";
 import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
@@ -9,6 +11,36 @@ import { routeOrderFlow } from "./orderflow.js";
 const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
 const limiter = new RateLimiter();
+
+// Self-serve keys minted by the portal live in the shared index, hashed. The
+// env list stays authoritative for operator-configured keys; the store is the
+// fallback, and hits are cached in the same map so the hash is computed once
+// per key, not per request.
+let store: OrdoStore | null = null;
+try {
+  store = new OrdoStore(process.env.ORDO_DB ?? join(import.meta.dirname, "../../../data/ordo.db"));
+} catch (e) {
+  console.warn(`gateway | portal keys unavailable (${(e as Error).message})`);
+}
+
+function storeBackedKey(presented: string): ApiKey | null {
+  if (!store) return null;
+  try {
+    const row = store.findApiKey(presented);
+    if (!row) return null;
+    const key: ApiKey = {
+      key: presented,
+      label: row.label,
+      rateLimit: row.rateLimit,
+      rebateAddress: row.rebateAddress,
+      mode: row.mode,
+    };
+    apiKeys.set(presented, key);
+    return key;
+  } catch {
+    return null;
+  }
+}
 const metrics = new Metrics();
 
 let upstreamId = 0;
@@ -74,6 +106,10 @@ function authenticate(
       : undefined);
 
   if (header && apiKeys.has(header)) return apiKeys.get(header)!;
+  if (header) {
+    const fromStore = storeBackedKey(header);
+    if (fromStore) return fromStore;
+  }
   if (CONFIG.allowAnon && CONFIG.anonMethods.has(method)) return "anon";
   return null;
 }

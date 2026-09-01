@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -49,6 +50,16 @@ export interface AuctionRow {
   userTxHash?: string;
   backrunTxHash?: string;
 }
+
+export interface ApiKeyRow {
+  label: string;
+  rebateAddress?: string;
+  mode: "auction" | "direct";
+  rateLimit: number;
+  createdAt: number;
+}
+
+const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 export class OrdoStore {
   private db: DatabaseSync;
@@ -111,12 +122,82 @@ export class OrdoStore {
       CREATE INDEX IF NOT EXISTS settlements_app ON settlements(app_address);
 
       CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+
+      -- Self-serve gateway credentials. Only a hash is stored: the database
+      -- leaking must not leak the keys themselves.
+      CREATE TABLE IF NOT EXISTS api_keys (
+        key_hash TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        rebate_address TEXT,
+        mode TEXT NOT NULL,
+        rate_limit INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+      );
     `);
   }
 
   // -------------------------------------------------------------------------
   // Writes
   // -------------------------------------------------------------------------
+
+  /**
+   * Mints a gateway credential. The plaintext key exists only in the return
+   * value — what persists is its SHA-256, so issuance is the one moment it
+   * can ever be shown.
+   */
+  issueApiKey(opts: { label?: string; rebateAddress?: string; rateLimit?: number }): {
+    key: string;
+    record: ApiKeyRow;
+  } {
+    const label = (opts.label ?? "self-serve").trim().slice(0, 40) || "self-serve";
+    const rebateAddress = opts.rebateAddress?.toLowerCase();
+    if (rebateAddress && !/^0x[0-9a-f]{40}$/.test(rebateAddress)) {
+      throw new Error("rebateAddress is not an address");
+    }
+    const key = "ordo_" + randomBytes(18).toString("hex");
+    const record: ApiKeyRow = {
+      label,
+      rebateAddress,
+      // A key with somewhere to send rebates defaults into the auction; one
+      // without can only want protection.
+      mode: rebateAddress ? "auction" : "direct",
+      rateLimit: opts.rateLimit ?? 600,
+      createdAt: Date.now(),
+    };
+    this.db
+      .prepare(
+        `INSERT INTO api_keys (key_hash, label, rebate_address, mode, rate_limit, enabled, created_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?)`,
+      )
+      .run(sha256(key), label, rebateAddress ?? null, record.mode, record.rateLimit, record.createdAt);
+    return { key, record };
+  }
+
+  /** Looks up a presented key by its hash. Disabled keys do not resolve. */
+  findApiKey(presented: string): ApiKeyRow | null {
+    const row = this.db
+      .prepare(
+        `SELECT label, rebate_address, mode, rate_limit, created_at
+         FROM api_keys WHERE key_hash = ? AND enabled = 1`,
+      )
+      .get(sha256(presented)) as
+      | { label: string; rebate_address: string | null; mode: string; rate_limit: number; created_at: number }
+      | undefined;
+    if (!row) return null;
+    return {
+      label: row.label,
+      rebateAddress: row.rebate_address ?? undefined,
+      mode: row.mode as "auction" | "direct",
+      rateLimit: row.rate_limit,
+      createdAt: row.created_at,
+    };
+  }
+
+  apiKeyCount(): number {
+    const r = this.db.prepare(`SELECT COUNT(*) c FROM api_keys WHERE enabled = 1`).get() as { c: number };
+    return r.c;
+  }
 
   insertArbs(rows: ArbRow[]): void {
     if (rows.length === 0) return;
