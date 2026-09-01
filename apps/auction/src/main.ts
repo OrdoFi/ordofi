@@ -12,6 +12,7 @@ import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
 import { settlementEnabled, submitSettlement } from "./settle.js";
 import {
   acknowledge,
+  anchoringEnabled,
   auctioneerAddress,
   currentRoot,
   getReceipt,
@@ -366,6 +367,6 @@ server.listen(PORT, () => {
       receiptsEnabled()
         ? `on (signed by ${auctioneerAddress()}) · GET /receipts /receipts/root`
         : "off (no ORDO_AUCTIONEER_KEY) — outcomes cannot be audited"
-    }`,
+    } · on-chain anchoring=${anchoringEnabled() ? "on" : "off (no ORDO_RECEIPT_LOG_ADDRESS)"}`,
   );
 });

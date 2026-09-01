@@ -47,6 +47,7 @@ services:
       # Without it the auction still runs and still writes settlement records,
       # but nothing is ever collected on-chain.
       ORDO_AUCTIONEER_KEY: ${ORDO_AUCTIONEER_KEY:-}
+      ORDO_RECEIPT_LOG_ADDRESS: ${ORDO_RECEIPT_LOG_ADDRESS:-}
       ORDO_AUCTION_WINDOW_MS: ${ORDO_AUCTION_WINDOW_MS:-200}
       ORDO_REBATE_USER: ${ORDO_REBATE_USER:-0.9}
       ORDO_REBATE_APP: ${ORDO_REBATE_APP:-0.05}

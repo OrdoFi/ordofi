@@ -11,7 +11,8 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
-import type { Address, Hex } from "viem";
+import { createWalletClient, http, type Address, type Hex } from "viem";
+import { ENDPOINTS, robinhoodChain } from "@ordofi/core";
 import {
   merkleRoot,
   opportunityIdToBytes32,
@@ -97,7 +98,71 @@ export async function publishReceipt(
     // the log should not take the auction down.
   }
 
+  void maybeCommitRoot();
+
   return receipt;
+}
+
+// ---------------------------------------------------------------------------
+// On-chain anchoring
+//
+// Signatures make receipts unforgeable; the OrdoReceiptLog contract makes the
+// set of them unrewritable. Commits are batched — anchoring is a durability
+// property, not a latency one, and a root every N auctions bounds what a
+// malicious operator could ever retract to the last N receipts.
+// ---------------------------------------------------------------------------
+
+const LOG_ADDRESS = process.env.ORDO_RECEIPT_LOG_ADDRESS as Address | undefined;
+const COMMIT_EVERY = Number(process.env.ORDO_RECEIPT_COMMIT_EVERY ?? 25);
+
+const COMMIT_ABI = [
+  {
+    type: "function",
+    name: "commit",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "root", type: "bytes32" },
+      { name: "count", type: "uint64" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+let lastCommittedCount = 0;
+let committing = false;
+
+export function anchoringEnabled(): boolean {
+  return Boolean(account && LOG_ADDRESS);
+}
+
+async function maybeCommitRoot(): Promise<void> {
+  if (!account || !LOG_ADDRESS || committing) return;
+  if (leaves.length - lastCommittedCount < COMMIT_EVERY) return;
+
+  committing = true;
+  const count = leaves.length;
+  const root = merkleRoot(leaves.slice(0, count));
+  try {
+    const wallet = createWalletClient({
+      account,
+      chain: robinhoodChain,
+      transport: http(process.env.ORDO_RPC_URL ?? ENDPOINTS.rpc),
+    });
+    const hash = await wallet.writeContract({
+      address: LOG_ADDRESS,
+      abi: COMMIT_ABI,
+      functionName: "commit",
+      args: [root, BigInt(count)],
+    });
+    lastCommittedCount = count;
+    console.log(`[anchor] committed root over ${count} receipts — ${hash}`);
+  } catch (e) {
+    // Next receipt retries. Anchoring lag is visible on /receipts/root, so a
+    // persistently failing commit shows up rather than rotting silently.
+    console.error(`[anchor] commit failed: ${(e as Error).message}`);
+  } finally {
+    committing = false;
+  }
 }
 
 export function getReceipt(id: string): AuctionReceipt | null {
@@ -113,6 +178,6 @@ export function recentReceipts(n: number): AuctionReceipt[] {
  * stops a receipt being swapped out after publication; until then it is still
  * useful as a checksum searchers can compare against each other.
  */
-export function currentRoot(): { root: Hex; count: number } {
-  return { root: merkleRoot(leaves), count: leaves.length };
+export function currentRoot(): { root: Hex; count: number; anchoredCount: number } {
+  return { root: merkleRoot(leaves), count: leaves.length, anchoredCount: lastCommittedCount };
 }
