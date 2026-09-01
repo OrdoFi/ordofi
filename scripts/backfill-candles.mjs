@@ -40,8 +40,8 @@ if (RPCS.length === 0) {
 const ALL = args.all === "1";
 const DAYS = Number(args.days ?? 90);
 const MAX_POOLS = Number(args.pools ?? 500);
-const CONCURRENCY = Number(args.concurrency ?? 1);
-const PACE_MS = Number(args.pace ?? 400);
+const CONCURRENCY = Number(args.concurrency ?? 2);
+const PACE_MS = Number(args.pace ?? 600);
 const DB = process.env.ORDO_DB ?? join(import.meta.dirname, "../data/ordo.db");
 const V3_SWAP_TOPIC = toEventSelector("Swap(address,address,int256,int256,uint160,uint128,int24)");
 const BLOCKS_PER_DAY = 864_000; // 0.1 s blocks
@@ -58,7 +58,7 @@ function isTooWide(e) {
   return /exceeds limit|timed out|too many results|query returned more than|response size|block range|limit of/i.test(e.message);
 }
 
-let rpcId = 0, cursor = 0, lastCallAt = 0;
+let rpcId = 0, cursor = 0, lastCallAt = 0, throttles = 0, calls = 0;
 async function rpcOnce(url, method, params) {
   const r = await fetch(url, {
     method: "POST",
@@ -86,11 +86,14 @@ async function rpc(method, params) {
     lastCallAt = Date.now();
     const url = RPCS[cursor % RPCS.length];
     try {
+      calls++;
       return await rpcOnce(url, method, params);
     } catch (e) {
       if (!isThrottle(e) || attempt >= 12) throw e;
+      throttles++;
       cursor++;
       if (RPCS.length === 1 || attempt % RPCS.length === RPCS.length - 1) {
+        if (wait >= 16_000) console.log(`backfill | throttled (${e.status ?? e.code ?? "?"}), waiting ${wait / 1000}s · ${throttles} throttles / ${calls} calls so far`);
         await sleep(wait);
         wait = Math.min(wait * 2, 60_000);
       }
@@ -143,12 +146,12 @@ async function backfillPool(pool) {
   // Start narrow: the busiest pool is ~2 swaps a block, and the public
   // endpoint refuses anything over 10,000 logs. Quiet stretches widen fast.
   let span = Number(store.getMeta(`${key}:span`) ?? 4_000);
-  let logsTotal = 0, minutes = 0, calls = 0, lastReport = Date.now();
+  let logsTotal = 0, minutes = 0, poolCalls = 0, lastReport = Date.now();
   while (hi > floorBlock) {
     const lo = Math.max(floorBlock, hi - span + 1);
     let logs;
     try {
-      calls++;
+      poolCalls++;
       logs = await rpc("eth_getLogs", [{ address: pool, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + lo.toString(16), toBlock: "0x" + hi.toString(16) }]);
     } catch (e) {
       if (isTooWide(e) && span > 200) { span = Math.max(200, Math.floor(span / 2)); continue; }
@@ -156,7 +159,7 @@ async function backfillPool(pool) {
     }
     if (Date.now() - lastReport > 60_000) {
       lastReport = Date.now();
-      console.log(`backfill | ${pool.slice(0, 10)} at block ${lo} · ${logsTotal} swaps → ${minutes} min-candles so far · window ${span} · ${calls} calls`);
+      console.log(`backfill | ${pool.slice(0, 10)} at block ${lo} · ${logsTotal} swaps → ${minutes} min-candles so far · window ${span} · ${poolCalls} calls`);
     }
     if (logs.length) {
       const [tLo, tHi] = await Promise.all([blockTime(lo), blockTime(hi)]);
@@ -182,11 +185,12 @@ async function backfillPool(pool) {
     else if (logs.length > 8_000) span = Math.max(200, Math.floor(span / 2));
     store.setMeta(`${key}:span`, String(span));
   }
-  return { pool, done: true, minutes, logs: logsTotal, calls };
+  return { pool, done: true, minutes, logs: logsTotal, calls: poolCalls };
 }
 
 let i = 0, done = 0;
 const started = Date.now();
+setInterval(() => console.log(`backfill | ${calls} calls, ${throttles} throttled, ${done}/${pools.length} pools done, ${((Date.now() - started) / 60_000).toFixed(0)} min`), 300_000).unref();
 await Promise.all(
   Array.from({ length: CONCURRENCY }, async () => {
     while (i < pools.length) {
