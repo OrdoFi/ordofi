@@ -36,27 +36,36 @@ Robinhood's own guidance is 8+ cores with strong single-core performance,
 of disk. Networked storage "will significantly throttle sync speed" — so no
 block storage, no SAN.
 
-The pick, from what is actually available in Vultr's New Jersey region:
+The pick:
 
 | | |
 | --- | --- |
-| Plan | `vbm-8c-132gb-v2` (bare metal) |
-| CPU | Xeon E-2388G, 8 cores / 16 threads @ 3.2 GHz |
-| RAM | 128 GB |
-| Disk | 2 × 960 GB **NVMe** |
-| Bandwidth | 10 TB |
-| Region | `ewr` (New Jersey) |
-| Cost | **$350/month** |
+| Plan | `vbm-8c-64gb-amd` (bare metal) |
+| CPU | EPYC 4345P, 8 cores / 16 threads @ 3.9 GHz |
+| RAM | 64 GB |
+| Disk | 2 × 1945 GB **NVMe** |
+| Region | `ord` (Chicago) |
+| Cost | **$365/month** |
+
+Chicago rather than New Jersey for two reasons that both happen to point the
+same way: the app server is already there, so the two can talk over a private
+network instead of the public internet, and Chicago is nearer to the
+sequencer's region (AWS us-east-2, Ohio) than New Jersey is.
 
 Provision it with the two disks **striped, not mirrored** (`disk_mode` of
-`raid0`, or `none` and let `bootstrap.sh` stripe them). This is not a
-preference. A mirrored pair gives 960 GB usable, and the restore alone peaks
-near 930 GB — downloaded snapshot parts plus the extracted database — so a
-RAID1 box cannot complete a restore it has room to run afterwards.
+`raid0`, or `none` and let `bootstrap.sh` stripe them). Mirrored gives 1.9 TB
+usable and works, but the restore alone peaks near 930 GB — downloaded parts
+plus the extracted database — so it would start life with about four months of
+runway instead of fourteen.
 
-Bare metal beats the cloud plans here on both counts: the 64 GB NVMe cloud
-instances in `ewr` start at $390/month with less disk, and a shared-tenancy
-vCPU is the wrong thing to put in a latency race.
+Bare metal beats the cloud plans on every axis that matters here: the closest
+64 GB NVMe cloud instance in `ord` is $390/month for 800 GB, and shared-tenancy
+vCPU is the wrong thing to put under a node in a latency race.
+
+64 GB is Robinhood's stated minimum against a recommendation of 128 GB. Taking
+the minimum buys twice the disk and a faster CPU — and single-core speed is
+what their guidance actually emphasises. If memory turns out to be the
+constraint, `voc-m-16c-128gb-1600s-amd` is the fallback at $785/month.
 
 ### Disk is the real cost, and it compounds
 
@@ -70,9 +79,9 @@ Measured from the published snapshot sizes on consecutive dates:
 
 At 0.1s blocks this chain produces about 26 million blocks a month, and a
 pruned node keeps every block and receipt forever — only state is pruned. So
-1.92 TB gives roughly **six months** after a restore, and this is a standing
-~230 GB/month commitment rather than a one-time purchase. Plan on migrating to
-a larger box, not on the number staying still.
+3.89 TB striped gives roughly **fourteen months** after a restore, and this is
+a standing ~230 GB/month commitment rather than a one-time purchase. Plan on
+migrating to a larger box eventually, not on the number staying still.
 
 ## L1 prerequisites
 

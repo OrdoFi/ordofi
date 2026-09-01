@@ -247,8 +247,8 @@ AUCTIONEER=0x... TREASURY=0x... ./deploy.sh
 - **Own Nitro node** (`deploy/nitro-node/`) — pruned full node with `debug_*`
   enabled, restored from a published snapshot rather than synced from genesis
   (the chain's early L1 blobs are past ordinary beacon retention). Specced for
-  Vultr bare metal in New Jersey at $350/month; disk grows ~230 GB/month, which
-  is the number that actually decides the machine. See its README.
+  Vultr bare metal in Chicago at $365/month; disk grows ~230 GB/month, which is
+  the number that actually decides the machine. See its README.
 - **Edge + services** (`deploy/docker-compose.prod.yml` + `deploy/Caddyfile`) —
   gateway, auction, web, and watcher behind Caddy with automatic TLS at
   `rpc.ordofi.network`, `auction.ordofi.network`, `app.ordofi.network`. The apex
