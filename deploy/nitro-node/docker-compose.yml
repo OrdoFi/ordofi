@@ -19,19 +19,20 @@ services:
     # which here means re-downloading several hundred gigabytes.
     stop_grace_period: 10m
     volumes:
-      # The image runs as the `nitro` user; mounting anywhere else leaves the
-      # node unable to persist chain data, and it will not tell you why.
-      - ${NITRO_DATA_DIR:-/data/arbitrum}:/home/nitro/.arbitrum
+      # The image runs as uid 1000 (`user`) with HOME=/home/user; the host
+      # directories must be chowned to 1000 and mounted at that exact path,
+      # or the node quietly writes into the container's own filesystem.
+      - ${NITRO_DATA_DIR:-/data/arbitrum}:/home/user/.arbitrum
       - ${NITRO_INIT_DIR:-/data/init}:/init
-      - ./config:/home/nitro/config:ro
+      - ./config:/home/user/config:ro
     ports:
       # Localhost only. The app server reaches this over the private link, and
       # an open node with debug_* enabled is someone else's free infrastructure.
       - "127.0.0.1:8547:8547"
       - "127.0.0.1:8548:8548"
     command:
-      - --chain.info-files=/home/nitro/config/robinhood-chain-info.json
-      - --init.genesis-json-file=/home/nitro/config/robinhood-genesis.json
+      - --chain.info-files=/home/user/config/robinhood-chain-info.json
+      - --init.genesis-json-file=/home/user/config/robinhood-genesis.json
 
       # Restoring beats syncing from genesis, and not only on time. The chain
       # launched in July 2026, so its early L1 blobs are long past the ~18 day
