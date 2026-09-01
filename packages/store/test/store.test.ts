@@ -268,3 +268,17 @@ test("trades tape: newest first, idempotent inserts, pruned by time", () => {
   assert.equal(s.recentTrades("0xpool").length, 1);
   s.close();
 });
+
+test("candlesAgg rolls minutes up into coarser buckets with correct open/close", () => {
+  const s = new OrdoStore(":memory:");
+  const pt = (bucket: number, block: number, price: number) => ({ pool: "0xp", bucket, price, vol0: 1, vol1: 10, block });
+  // Three minutes in one 5-minute bucket, then one minute in the next.
+  s.upsertCandles([pt(300, 1, 10), pt(360, 2, 14), pt(420, 3, 12), pt(600, 4, 20)]);
+  const agg = s.candlesAgg("0xP", 0, 10_000, 300);
+  assert.equal(agg.length, 2);
+  assert.deepEqual([agg[0].bucket, agg[0].open, agg[0].high, agg[0].low, agg[0].close, agg[0].swaps, agg[0].vol1], [300, 10, 14, 10, 12, 3, 30]);
+  assert.deepEqual([agg[1].bucket, agg[1].open, agg[1].close], [600, 20, 20]);
+  assert.deepEqual(s.candleCoverage("0xp"), { from: 300, to: 600, minutes: 4 });
+  assert.equal(s.candleCoverage("0xnone"), null);
+  s.close();
+});

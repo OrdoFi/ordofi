@@ -70,6 +70,9 @@ export class OrdoStore {
     // WAL keeps the Explorer's reads from blocking the watcher's writes.
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA synchronous = NORMAL");
+    // The watcher and a backfill job may write at the same time; wait for the
+    // lock instead of failing the write.
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.migrate();
   }
 
@@ -510,6 +513,45 @@ export class OrdoStore {
       bucket: Number(r.bucket), open: r.open, high: r.high, low: r.low, close: r.close,
       vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
     }));
+  }
+
+  /**
+   * Stored minute candles rolled up to any coarser bucket, in SQL, so a
+   * month of 1h candles is a few hundred rows over the wire rather than
+   * forty thousand minutes for the browser to fold.
+   */
+  candlesAgg(pool: string, fromBucket: number, toBucket: number, bucketSec: number): {
+    bucket: number; open: number; high: number; low: number; close: number;
+    vol0: number; vol1: number; swaps: number;
+  }[] {
+    const bs = Math.max(60, Math.floor(bucketSec / 60) * 60);
+    return (
+      this.db
+        .prepare(
+          `WITH w AS (
+             SELECT (bucket / CAST(? AS INTEGER)) * CAST(? AS INTEGER) AS b, MIN(bucket) fb, MAX(bucket) lb, MAX(high) high, MIN(low) low,
+                    SUM(vol0) vol0, SUM(vol1) vol1, SUM(swaps) swaps
+             FROM candles WHERE pool = ? AND bucket >= ? AND bucket <= ? GROUP BY b)
+           SELECT w.b, f.open, w.high, w.low, l.close, w.vol0, w.vol1, w.swaps
+           FROM w
+           JOIN candles f ON f.pool = ? AND f.bucket = w.fb
+           JOIN candles l ON l.pool = ? AND l.bucket = w.lb
+           ORDER BY w.b ASC`,
+        )
+        .all(bs, bs, pool.toLowerCase(), fromBucket, toBucket, pool.toLowerCase(), pool.toLowerCase()) as any[]
+    ).map((r) => ({
+      bucket: Number(r.b), open: r.open, high: r.high, low: r.low, close: r.close,
+      vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
+    }));
+  }
+
+  /** How far back the tape goes for one pool, or null if it has none. */
+  candleCoverage(pool: string): { from: number; to: number; minutes: number } | null {
+    const r = this.db
+      .prepare(`SELECT MIN(bucket) f, MAX(bucket) t, COUNT(*) n FROM candles WHERE pool = ?`)
+      .get(pool.toLowerCase()) as { f?: number; t?: number; n?: number } | undefined;
+    if (!r || r.f == null) return null;
+    return { from: Number(r.f), to: Number(r.t), minutes: Number(r.n) };
   }
 
   /**

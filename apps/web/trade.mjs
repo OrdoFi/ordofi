@@ -796,15 +796,23 @@ async function bestPool(base, quote) {
  * backfills the older minutes; the walk is also the sole source for pools the
  * recorder has not seen yet.
  */
-export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 72_000, store = null }) {
+export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 72_000, hours = null, store = null }) {
   const b = (base === NATIVE ? WETH : base).toLowerCase();
   const q = (quote === NATIVE ? WETH : quote).toLowerCase();
   const found = await bestPool(b, q);
   if (!found) throw new Error("no direct V3 pool for this pair");
 
   const [infoBase, infoQuote] = await Promise.all([getTokenInfo(b), getTokenInfo(q)]);
-  const fromBucket = Math.floor((Date.now() / 1000 - spanBlocks * 0.1) / bucketSec) * bucketSec;
-  const recorded = store?.candlesFor?.(found.pool, fromBucket) ?? [];
+  const now = Math.floor(Date.now() / 1000);
+  const rangeSec = hours ? hours * 3600 : spanBlocks * 0.1;
+  const fromBucket = Math.floor((now - rangeSec) / bucketSec) * bucketSec;
+  // Minute candles are what the tape stores; anything coarser is rolled up
+  // in SQL so a month of hourly candles is a few hundred rows, not 40k.
+  const recorded =
+    bucketSec > 60 && store?.candlesAgg
+      ? store.candlesAgg(found.pool, fromBucket, now, bucketSec)
+      : store?.candlesFor?.(found.pool, fromBucket) ?? [];
+  const coverage = store?.candleCoverage?.(found.pool) ?? null;
   const scale = 10 ** (infoBase.decimals - infoQuote.decimals);
   const orient = (p) => (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
   // Inverting swaps the extremes: yesterday's high is today's low.
@@ -818,12 +826,14 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
     vol: (found.base0 ? c.vol1 : c.vol0) / 10 ** infoQuote.decimals,
   }));
 
-  // A freshly restarted watcher has minutes of tape; the chart wants hours.
+  // A pool the recorder has barely seen gets the eth_getLogs backfill for
+  // whatever the upstreams will still serve; a pool with real tape depth
+  // (backfilled or simply old) is served from the tape alone.
   const DEEP_ENOUGH = 60;
   let candles = recCandles;
   let truncated = false;
   let source = "recorder";
-  if (recCandles.length < DEEP_ENOUGH) {
+  if (recCandles.length < DEEP_ENOUGH && bucketSec === 60) {
     try {
       const cutoff = recCandles.length ? recCandles[0].time : Infinity;
       const walked = await candlesFromLogs(found, infoBase, infoQuote, bucketSec, spanBlocks, cutoff);
@@ -843,6 +853,8 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
     quote: { address: q, symbol: infoQuote.symbol },
     bucketSec,
     spanBlocks,
+    hours: hours ?? Math.round(rangeSec / 3600),
+    coverage,
     source,
     truncated,
     swaps: candles.reduce((n, c) => n + (c.swaps ?? 0), 0),

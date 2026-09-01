@@ -233,7 +233,9 @@ async function main() {
           printSummary(head, next, concurrency);
           lastSummary = next;
           // Rolling three-day tape; beyond that the chart never asks.
-          store.pruneCandles(Math.floor(Date.now() / 1000) - 3 * 86_400);
+          // The tape is the chart's history; keep it for as long as disk is
+          // cheap, which at a few hundred MB per chain-year it is.
+          store.pruneCandles(Math.floor(Date.now() / 1000) - 400 * 86_400);
           store.pruneTrades(Math.floor(Date.now() / 1000) - 2 * 3_600);
         }
         // Additive increase, multiplicative decrease. Recovering only after a

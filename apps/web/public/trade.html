@@ -272,10 +272,12 @@
 
     <div class="cpanel">
       <div class="ctools">
-        <button class="tf on" data-tf="1">1m</button>
-        <button class="tf" data-tf="5">5m</button>
+        <button class="tf" data-tf="1">1m</button>
+        <button class="tf on" data-tf="5">5m</button>
         <button class="tf" data-tf="15">15m</button>
         <button class="tf" data-tf="60">1h</button>
+        <button class="tf" data-tf="240">4h</button>
+        <button class="tf" data-tf="1440">1d</button>
         <span class="note" id="cf-src">pool tape — no oracles</span>
       </div>
       <div id="chart"></div>
@@ -427,7 +429,9 @@
     let quoteSeq = 0;
     let slippageBps = 50;
     let modalSide = null;
-    let tfMin = 1;
+    let tfMin = Number(store.get("ordofi.tf", 5)) || 5;
+    // Each timeframe pulls the range a trader expects to see at that scale.
+    const TF_HOURS = { 1: 8, 5: 48, 15: 24 * 7, 60: 24 * 30, 240: 24 * 120, 1440: 24 * 400 };
     let candles1m = [];
     let lastPx = null;
     let myBalances = null;
@@ -475,7 +479,7 @@
     }
 
     function renderChart() {
-      const cs = aggregate(candles1m, tfMin);
+      const cs = candles1m;
       // Sub-cent assets need more precision than the default four decimals.
       const last = cs.length ? cs[cs.length - 1].close : 1;
       const precision = last >= 100 ? 2 : last >= 1 ? 4 : last >= 0.01 ? 6 : 9;
@@ -490,14 +494,18 @@
       const seq = ++chartSeq;
       renderPairHeader();
       try {
-        const d = await jfetch(`/api/trade/candles?base=${baseTok.address}&quote=${quoteTok.address}`, 45_000);
+        const d = await jfetch(`/api/trade/candles?base=${baseTok.address}&quote=${quoteTok.address}&bucketSec=${tfMin * 60}&hours=${TF_HOURS[tfMin] ?? 48}`, 45_000);
         if (seq !== chartSeq) return;
         candles1m = d.candles;
         renderChart();
         setPx(d.last);
         const hourAgo = Math.floor(Date.now() / 1000) - 3600;
         const c1h = d.candles.filter((c) => c.time <= hourAgo).pop();
-        setDelta("chg1h", c1h && d.last ? d.last / c1h.close - 1 : null);
+        if (tfMin <= 15) setDelta("chg1h", c1h && d.last ? d.last / c1h.close - 1 : null);
+        const cov = d.coverage;
+        $("cf-src").textContent = cov
+          ? `pool tape — no oracles · history since ${new Date(cov.from * 1000).toLocaleDateString([], { month: "short", day: "numeric" })} · ${d.candles.length} candles`
+          : `pool tape — no oracles · source: ${d.source}`;
         // 24h figures come from the market list when it has this pair; the
         // chart window is the fallback.
         const m = marketFor(baseTok.address, quoteTok.address);
@@ -506,8 +514,7 @@
           setDelta("chg", first && d.last ? d.last / first - 1 : null);
           $("vol").textContent = d.volumeQuote ? fmtPx(d.volumeQuote) + " " + d.quote.symbol : "—";
         }
-        $("sb-tape").textContent = `tape: ${d.source} · ${d.swaps.toLocaleString()} swaps · ${d.candles.length} candles`;
-        $("cf-src").textContent = `pool tape — no oracles · source: ${d.source}`;
+        $("sb-tape").textContent = `tape: ${d.source} · ${d.swaps.toLocaleString()} swaps in view · ${d.hours}h`;
       } catch (e) {
         if (seq !== chartSeq) return;
         candles1m = []; renderChart();
@@ -1073,12 +1080,16 @@
       activeTab = b.dataset.tab;
       renderTab();
     }));
-    document.querySelectorAll(".tf").forEach((b) => b.addEventListener("click", () => {
-      document.querySelectorAll(".tf").forEach((x) => x.classList.remove("on"));
-      b.classList.add("on");
-      tfMin = Number(b.dataset.tf);
-      renderChart();
-    }));
+    document.querySelectorAll(".tf").forEach((b) => {
+      b.classList.toggle("on", Number(b.dataset.tf) === tfMin);
+      b.addEventListener("click", () => {
+        document.querySelectorAll(".tf").forEach((x) => x.classList.remove("on"));
+        b.classList.add("on");
+        tfMin = Number(b.dataset.tf);
+        store.set("ordofi.tf", tfMin);
+        loadChart();
+      });
+    });
     document.querySelectorAll(".mk-tabs button").forEach((b) => b.addEventListener("click", () => {
       document.querySelectorAll(".mk-tabs button").forEach((x) => x.classList.remove("on"));
       b.classList.add("on");

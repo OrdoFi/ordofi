@@ -513,8 +513,9 @@ async function handle(req, res) {
       const data = await tradeCandles({
         base: (url.searchParams.get("base") ?? "").toLowerCase(),
         quote: (url.searchParams.get("quote") ?? "").toLowerCase(),
-        bucketSec: Math.max(30, Math.min(3600, Number(url.searchParams.get("bucketSec") ?? 60))),
+        bucketSec: Math.max(60, Math.min(86_400, Number(url.searchParams.get("bucketSec") ?? 60))),
         spanBlocks: Math.max(6000, Math.min(200_000, Number(url.searchParams.get("spanBlocks") ?? 72_000))),
+        hours: url.searchParams.has("hours") ? Math.max(1, Math.min(24 * 400, Number(url.searchParams.get("hours")))) : null,
         store,
       });
       res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=30" });
