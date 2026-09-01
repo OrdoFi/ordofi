@@ -49,6 +49,11 @@ export class Auction {
     this.resolver({ winner, clearingPriceWei: clearing });
   }
 
+  /** Every bid accepted, in arrival order — the receipt commits to both. */
+  get allBids(): readonly Bid[] {
+    return this.bids;
+  }
+
   get bidCount(): number {
     return this.bids.length;
   }

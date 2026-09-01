@@ -10,6 +10,15 @@ import { Auction, toResult } from "./auctioneer.js";
 import { bondingEnabled, checkBond } from "./bonds.js";
 import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
 import { settlementEnabled, submitSettlement } from "./settle.js";
+import {
+  acknowledge,
+  auctioneerAddress,
+  currentRoot,
+  getReceipt,
+  publishReceipt,
+  receiptsEnabled,
+  recentReceipts,
+} from "./receipts.js";
 import type { Bid, Opportunity, SettlementRecord } from "./types.js";
 
 const PORT = Number(process.env.ORDO_AUCTION_PORT ?? 8548);
@@ -119,6 +128,15 @@ async function handleSubmit(body: any): Promise<any> {
   const outcome = await auction.settled;
   activeAuctions.delete(opp.id);
 
+  // Published before dispatch so the record of what was decided does not
+  // depend on whether the transactions that follow succeed.
+  const receipt = await publishReceipt(
+    opp.id,
+    auction.allBids,
+    outcome.winner?.searcher ?? null,
+    outcome.clearingPriceWei.toString(),
+  );
+
   let userTxHash: string | undefined;
   let backrunTxHash: string | undefined;
   let userError: string | undefined;
@@ -211,6 +229,7 @@ async function handleSubmit(body: any): Promise<any> {
     rebate: ledgerEntry ?? null,
     settlement: settlementRecord,
     settlementTxHash: settlementTxHash ?? null,
+    receipt,
     settlementContract: SETTLEMENT_ADDRESS || null,
     userError: userError ?? null,
     /** What holding the transaction for the bid window actually cost, in ms. */
@@ -221,6 +240,23 @@ async function handleSubmit(body: any): Promise<any> {
 
 const server = createServer((req, res) => {
   const url = req.url ?? "/";
+
+  if (req.method === "GET" && url.startsWith("/receipts")) {
+    const json = (body: unknown, code = 200) => {
+      res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" });
+      res.end(JSON.stringify(body));
+    };
+    if (url === "/receipts/root") return json({ ...currentRoot(), auctioneer: auctioneerAddress() });
+    if (url === "/receipts" || url.startsWith("/receipts?")) {
+      const n = Number(new URL(url, "http://x").searchParams.get("n") ?? 20);
+      return json({ auctioneer: auctioneerAddress(), receipts: recentReceipts(n) });
+    }
+    const id = url.slice("/receipts/".length);
+    const found = getReceipt(id);
+    return found
+      ? json({ auctioneer: auctioneerAddress(), receipt: found })
+      : json({ error: "no receipt for that opportunity" }, 404);
+  }
 
   if (req.method === "GET" && url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -301,7 +337,14 @@ wss.on("connection", (ws) => {
         }
         const r = auction.submitBid(bid);
         if (r.accepted) stats.bids++;
-        ws.send(JSON.stringify({ type: "bid_ack", opportunityId: bid.opportunityId, ...r }));
+        // The acknowledgement is the searcher's evidence that this bid, at
+        // this amount, was received — worthless to them after the fact if we
+        // only sent it on request.
+        void (r.accepted ? acknowledge(bid) : Promise.resolve(null)).then((ack) =>
+          ws.send(
+            JSON.stringify({ type: "bid_ack", opportunityId: bid.opportunityId, ...r, ack }),
+          ),
+        );
       });
     }
   });
@@ -317,5 +360,12 @@ server.listen(PORT, () => {
   console.log(
     `OrdoFi auction | bond gating=${bondingEnabled() ? "on" : "off (no ORDO_SETTLEMENT_ADDRESS)"} · ` +
       `on-chain settlement=${settlementEnabled() ? "on" : "off (needs ORDO_SETTLEMENT_ADDRESS + ORDO_AUCTIONEER_KEY)"}`,
+  );
+  console.log(
+    `OrdoFi auction | verifiable receipts=${
+      receiptsEnabled()
+        ? `on (signed by ${auctioneerAddress()}) · GET /receipts /receipts/root`
+        : "off (no ORDO_AUCTIONEER_KEY) — outcomes cannot be audited"
+    }`,
   );
 });
