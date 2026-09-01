@@ -34,7 +34,13 @@ export async function simulateRaw(upstream: Upstream, rawTx: string): Promise<Si
   if (tx.to) call.to = tx.to;
   if (tx.data) call.data = tx.data;
   if (tx.value !== undefined) call.value = "0x" + tx.value.toString(16);
-  if (tx.gas !== undefined) call.gas = "0x" + tx.gas.toString(16);
+  // The sender's gas limit is deliberately NOT forwarded. `eth_call` charges
+  // intrinsic gas out of the budget it is given, so a plain transfer carrying
+  // exactly 21000 simulates as "out of gas" and a valid transaction gets
+  // refused. Revert protection exists to catch logic failures — slippage, dead
+  // deadlines, missing approvals — and whether the sender budgeted enough gas
+  // is between them and the sequencer. Blocking a good transaction is a worse
+  // outcome than letting an under-funded one through.
 
   try {
     const returnData = await upstream("eth_call", [call, "latest"]);

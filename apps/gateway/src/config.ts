@@ -7,14 +7,23 @@ export interface ApiKey {
   rateLimit: number;
   /** Optional rebate destination for order-flow revenue sharing. */
   rebateAddress?: string;
+  /**
+   * How `eth_sendRawTransaction` is handled for this key.
+   * - `auction` — routed through the order-flow auction, so the key earns rebates.
+   * - `direct`  — revert-protected, sent straight to the sequencer, no rebate.
+   * Defaults to `auction` when a rebate address is configured.
+   */
+  mode: "auction" | "direct";
 }
 
 /**
  * API keys are loaded from ORDO_API_KEYS as a comma-separated list of
- * `key:label:rateLimit:rebateAddress` records. In development, if none are
- * provided, a single ephemeral key is minted and logged so the gateway is
- * usable out of the box. A public, unauthenticated tier is allowed for
- * read-only methods when ORDO_ALLOW_ANON=1.
+ * `key:label:rateLimit:rebateAddress:mode` records. The last two are optional;
+ * a key with a rebate address defaults to `auction` mode, otherwise `direct`.
+ *
+ * In development, if none are provided, a single ephemeral key is minted and
+ * logged so the gateway is usable out of the box. A public, unauthenticated
+ * tier is allowed for read-only methods when ORDO_ALLOW_ANON=1.
  */
 export function loadApiKeys(): Map<string, ApiKey> {
   const raw = process.env.ORDO_API_KEYS?.trim();
@@ -22,20 +31,22 @@ export function loadApiKeys(): Map<string, ApiKey> {
 
   if (raw) {
     for (const record of raw.split(",")) {
-      const [key, label = "unnamed", rate = "600", rebateAddress] = record.split(":");
+      const [key, label = "unnamed", rate = "600", rebateAddress, mode] = record.split(":");
       if (!key) continue;
+      const rebate = rebateAddress || undefined;
       keys.set(key, {
         key,
         label,
         rateLimit: Number(rate) || 0,
-        rebateAddress: rebateAddress || undefined,
+        rebateAddress: rebate,
+        mode: mode === "auction" || mode === "direct" ? mode : rebate ? "auction" : "direct",
       });
     }
   }
 
   if (keys.size === 0) {
     const dev = "ordo_dev_" + randomBytes(12).toString("hex");
-    keys.set(dev, { key: dev, label: "dev-ephemeral", rateLimit: 600 });
+    keys.set(dev, { key: dev, label: "dev-ephemeral", rateLimit: 600, mode: "direct" });
     console.log(`gateway | no ORDO_API_KEYS set — minted ephemeral dev key:\n  ${dev}`);
   }
 

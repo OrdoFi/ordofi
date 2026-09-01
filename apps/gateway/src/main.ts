@@ -4,6 +4,7 @@ import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
+import { routeOrderFlow } from "./orderflow.js";
 
 const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
@@ -29,9 +30,27 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
 
 async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Promise<any> {
   switch (method) {
-    case "eth_sendRawTransaction":
+    case "eth_sendRawTransaction": {
       metrics.inc("tx_submitted_total", { key: apiKey.label });
-      return protectAndSend(upstream, params[0] as string);
+      // Keys configured for order flow get the auction; everyone else gets a
+      // revert-protected direct send.
+      if (apiKey.mode !== "auction") return protectAndSend(upstream, params[0] as string);
+      const out = await routeOrderFlow(upstream, params[0] as string, apiKey);
+      metrics.inc(out.auctioned ? "orderflow_auctioned_total" : "orderflow_fallback_total", {
+        key: apiKey.label,
+      });
+      if (!out.auctioned) console.warn(`gateway | auction unavailable (${out.reason}) — sent direct`);
+      return out.txHash;
+    }
+    // Always auction, regardless of how the key is configured.
+    case "ordo_sendPrivateTransaction": {
+      metrics.inc("tx_submitted_total", { key: apiKey.label });
+      const out = await routeOrderFlow(upstream, params[0] as string, apiKey);
+      metrics.inc(out.auctioned ? "orderflow_auctioned_total" : "orderflow_fallback_total", {
+        key: apiKey.label,
+      });
+      return out.txHash;
+    }
     case "ordo_simulate":
       return simulateRaw(upstream, params[0] as string);
     case "ordo_sendBundle":
@@ -127,7 +146,11 @@ const server = createServer((req, res) => {
         }
 
         try {
-          const result = await dispatch(method, msg.params ?? [], auth === "anon" ? { key: "anon", label: "anon", rateLimit: 0 } : auth);
+          const result = await dispatch(
+            method,
+            msg.params ?? [],
+            auth === "anon" ? { key: "anon", label: "anon", rateLimit: 0, mode: "direct" } : auth,
+          );
           return { jsonrpc: "2.0", id: msg.id, result };
         } catch (err) {
           const e = err as RpcError;
@@ -151,7 +174,13 @@ server.listen(CONFIG.port, () => {
   console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon}`);
   console.log(`OrdoFi gateway | GET /health /metrics /metrics.json`);
   console.log(
-    `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo`,
+    `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo`,
+  );
+  const auctionKeys = [...apiKeys.values()].filter((k) => k.mode === "auction");
+  console.log(
+    `OrdoFi gateway | order flow: ${auctionKeys.length}/${apiKeys.size} key(s) routed to the auction at ${
+      process.env.ORDO_AUCTION_URL ?? "http://localhost:8548"
+    } (falls back to direct send if unreachable)`,
   );
   console.log(
     `OrdoFi gateway | atomic bundles=${
