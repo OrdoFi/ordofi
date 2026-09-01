@@ -390,8 +390,8 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
   let source = "recorder";
   if (recCandles.length < DEEP_ENOUGH) {
     try {
-      const walked = await candlesFromLogs(found, infoBase, infoQuote, bucketSec, spanBlocks);
       const cutoff = recCandles.length ? recCandles[0].time : Infinity;
+      const walked = await candlesFromLogs(found, infoBase, infoQuote, bucketSec, spanBlocks, cutoff);
       const older = walked.candles.filter((c) => c.time < cutoff);
       candles = [...older, ...recCandles];
       truncated = walked.truncated;
@@ -418,7 +418,7 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
 }
 
 /** The eth_getLogs walk, cached briefly per pool so chart polls don't hammer upstreams. */
-async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks) {
+async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks, beforeTime = Infinity) {
   const cacheKey = `${found.pool}:${bucketSec}:${spanBlocks}`;
   const hit = candleCache.get(cacheKey);
   if (hit && Date.now() - hit.at < 45_000) return hit.data;
@@ -431,8 +431,14 @@ async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks) {
   // costs old history, never the candles the trader is looking at.
   const logs = [];
   let hi = head;
-  let span = 4_000;
-  let budget = 30;
+  if (Number.isFinite(beforeTime)) {
+    // The recorder already owns everything from beforeTime onward; skip the
+    // overlap so the call budget is spent purely on older history.
+    const ageSec = Math.max(0, Math.floor(Date.now() / 1000) - beforeTime);
+    hi = Math.min(hi, head - ageSec * 10); // 0.1s blocks
+  }
+  let span = 1_200;
+  let budget = 40;
   let truncated = false;
   while (hi >= floor && budget > 0) {
     const lo = Math.max(floor, hi - span + 1);
