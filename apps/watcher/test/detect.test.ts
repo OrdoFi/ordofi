@@ -105,3 +105,99 @@ test("a user's multi-pool swap is not counted as searcher profit", () => {
   const quotePriced = arbs.filter((a) => a.profitIsQuote);
   assert.equal(quotePriced.length, 0, "swap output to a third party is not extracted value");
 });
+
+const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
+
+/** Two pools, sender receives `out` of USDG, plus whatever else is passed in. */
+function swapReceipt(extraLogs: any[] = []) {
+  return [
+    {
+      transactionHash: "0xfeed",
+      transactionIndex: "0x0",
+      from: searcher,
+      to: executor,
+      gasUsed: "0x5208",
+      effectiveGasPrice: "0x3b9aca00",
+      status: "0x1",
+      logs: [
+        { address: poolA, topics: [UNIV2_SWAP], data: "0x", transactionHash: "0xfeed", transactionIndex: "0x0", logIndex: "0x0" },
+        { address: poolB, topics: [UNIV2_SWAP], data: "0x", transactionHash: "0xfeed", transactionIndex: "0x0", logIndex: "0x1" },
+        {
+          address: USDG,
+          topics: [TRANSFER_TOPIC, addrTopic(poolB), addrTopic(searcher)],
+          data: amount(166_832_655_237n), // 166,832.66 USDG, six decimals
+          transactionHash: "0xfeed",
+          transactionIndex: "0x0",
+          logIndex: "0x2",
+        },
+        ...extraLogs,
+      ],
+    },
+  ];
+}
+
+test("ETH paid as transaction value is not free money", () => {
+  // Mainnet tx 0x8b0bbb8b…: 68 ETH in, 166,832 USDG out, across three pools.
+  // Receipts carry no `value`, so the ETH side was invisible and the whole
+  // output was booked as profit — $166,832 from one roughly break-even swap.
+  const txValues = new Map([["0xfeed", 68_000_000_000_000_000_000n]]);
+
+  const withoutValue = analyzeBlock(100, 1234, swapReceipt() as any);
+  assert.equal(withoutValue.arbs[0]?.profitIsQuote, true, "fixture is the shape that used to inflate");
+
+  const { arbs } = analyzeBlock(100, 1234, swapReceipt() as any, txValues);
+  assert.equal(
+    arbs.filter((a) => a.profitIsQuote).length,
+    0,
+    "paying 68 ETH for 166k USDG is a trade, not extracted value",
+  );
+});
+
+test("spending a quote asset rules out a quote profit", () => {
+  // Same shape but the ETH leg is WETH, so it is visible in the logs. Booking
+  // the USDG output while ignoring the WETH cost is the same error.
+  const wethOut = {
+    address: WETH,
+    topics: [TRANSFER_TOPIC, addrTopic(searcher), addrTopic(poolA)],
+    data: amount(68_000_000_000_000_000_000n),
+    transactionHash: "0xfeed",
+    transactionIndex: "0x0",
+    logIndex: "0x3",
+  };
+
+  const { arbs } = analyzeBlock(100, 1234, swapReceipt([wethOut]) as any);
+  assert.equal(
+    arbs.filter((a) => a.profitIsQuote).length,
+    0,
+    "sender is down 68 WETH; the USDG is what they bought",
+  );
+});
+
+test("a genuine round trip still counts", () => {
+  // WETH -> USDG -> WETH: the USDG nets to zero and the WETH is real profit.
+  // The fix must not silence the thing we are trying to measure.
+  const logs = [
+    {
+      address: USDG,
+      topics: [TRANSFER_TOPIC, addrTopic(searcher), addrTopic(poolB)],
+      data: amount(166_832_655_237n), // spends back every USDG received
+      transactionHash: "0xfeed",
+      transactionIndex: "0x0",
+      logIndex: "0x3",
+    },
+    {
+      address: WETH,
+      topics: [TRANSFER_TOPIC, addrTopic(poolB), addrTopic(searcher)],
+      data: amount(2_000_000_000_000_000n), // 0.002 WETH profit
+      transactionHash: "0xfeed",
+      transactionIndex: "0x0",
+      logIndex: "0x4",
+    },
+  ];
+
+  const { arbs } = analyzeBlock(100, 1234, swapReceipt(logs) as any);
+  assert.equal(arbs.length, 1);
+  assert.equal(arbs[0].profitIsQuote, true);
+  assert.equal(arbs[0].profitToken, WETH.toLowerCase());
+  assert.equal(arbs[0].profitWei, "2000000000000000");
+});

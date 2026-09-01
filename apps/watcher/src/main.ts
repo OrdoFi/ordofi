@@ -112,7 +112,9 @@ function printSummary(head: number, next: number, concurrency: number) {
 
 async function processBlock(n: number): Promise<void> {
   const hex = "0x" + n.toString(16);
-  const block = await rpc<any>("eth_getBlockByNumber", [hex, false]);
+  // Full transactions, not just hashes: `value` lives on the transaction and
+  // not the receipt, and without it a trade paid for in native ETH looks free.
+  const block = await rpc<any>("eth_getBlockByNumber", [hex, true]);
   if (!block) return;
   const timestamp = parseInt(block.timestamp, 16);
   const txCount = block.transactions.length;
@@ -120,14 +122,19 @@ async function processBlock(n: number): Promise<void> {
   stats.txsSeen += txCount;
   if (txCount === 0) return;
 
+  const txValues = new Map<string, bigint>();
+  for (const t of block.transactions) {
+    if (t?.hash && t.value && t.value !== "0x0") txValues.set(t.hash.toLowerCase(), BigInt(t.value));
+  }
+
   let receipts = await getReceipts(hex);
   if (receipts === null) {
     receipts = await Promise.all(
-      block.transactions.map((h: string) => rpc("eth_getTransactionReceipt", [h])),
+      block.transactions.map((t: any) => rpc("eth_getTransactionReceipt", [t.hash])),
     );
   }
 
-  const { swaps, arbs } = analyzeBlock(n, timestamp, receipts as any[]);
+  const { swaps, arbs } = analyzeBlock(n, timestamp, receipts as any[], txValues);
   stats.swapsSeen += swaps.length;
   stats.arbsSeen += arbs.length;
   for (const s of swaps) stats.poolsSeen.add(s.pool);

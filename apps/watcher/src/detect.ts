@@ -2,6 +2,7 @@ import {
   isQuoteToken,
   SWAP_TOPICS,
   TRANSFER_TOPIC,
+  WETH,
   type ArbObservation,
   type SwapObservation,
 } from "@ordofi/core";
@@ -52,6 +53,14 @@ export function analyzeBlock(
   blockNumber: number,
   timestamp: number,
   receipts: Receipt[],
+  /**
+   * Native ETH sent with each transaction, by hash. Receipts do not carry it,
+   * and without it a trade that pays in ETH looks like it paid nothing: one
+   * mainnet transaction sent 68 ETH and received 166,832 USDG, and was booked
+   * as $166,832 of extracted value rather than the roughly break-even swap it
+   * was. Counted as WETH, since for this purpose they are the same asset.
+   */
+  txValues?: Map<string, bigint>,
 ): BlockAnalysis {
   const swaps: SwapObservation[] = [];
   const arbs: ArbObservation[] = [];
@@ -108,15 +117,31 @@ export function analyzeBlock(
       if (beneficiaries.has(from)) senderNet.set(token, (senderNet.get(token) ?? 0n) - amount);
     }
 
+    const nativeSpent = txValues?.get(r.transactionHash.toLowerCase()) ?? 0n;
+    if (nativeSpent > 0n) senderNet.set(WETH, (senderNet.get(WETH) ?? 0n) - nativeSpent);
+
     // Best quote-denominated profit the searcher itself ends up holding.
     let bestQuoteToken: string | undefined;
     let bestQuoteWei = 0n;
+    let spentAQuoteAsset = false;
     for (const [token, v] of senderNet) {
       if (!isQuoteToken(token)) continue;
+      if (v < 0n) spentAQuoteAsset = true;
       if (v > bestQuoteWei) {
         bestQuoteWei = v;
         bestQuoteToken = token;
       }
+    }
+
+    // A closed loop ends holding more of something and less of nothing. If the
+    // sender is down on any quote asset then they bought that position rather
+    // than arbitraged it, and booking the proceeds as profit counts the output
+    // of an ordinary trade as extracted value — which is how a chain-wide
+    // figure of $3.2M an hour appeared. Genuine arbitrage is unaffected: a
+    // WETH -> USDG -> WETH round trip nets zero USDG and positive WETH.
+    if (spentAQuoteAsset) {
+      bestQuoteToken = undefined;
+      bestQuoteWei = 0n;
     }
 
     // Fallback: sender-centric pure-positive token arb (unpriced inventory).

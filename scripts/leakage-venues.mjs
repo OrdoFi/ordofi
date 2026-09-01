@@ -63,9 +63,15 @@ if (overall.arbs === 0) {
 
 const pools = store.topPools(TOP);
 
-/** Value one pool's extracted profit in USD, per token, as leakage-report does. */
-async function pricedUsdFor(pool) {
-  const d = store.poolLeakage([pool]);
+/**
+ * Value a pool set's extracted profit in USD, per token, as leakage-report
+ * does. Always ask the store about the whole set at once: an arbitrage touches
+ * several pools and its profit belongs to the transaction, not to each pool
+ * it passed through, so summing per-pool answers counts the same dollars once
+ * per hop. Doing that produced venue totals 2.5x the chain-wide figure.
+ */
+async function pricedUsdFor(pools) {
+  const d = store.poolLeakage(pools);
   let usd = 0;
   let unpricedTokens = 0;
   for (const row of d.profitByToken) {
@@ -91,7 +97,7 @@ for (const { pool, count } of pools) {
     token0 ? getTokenInfo(token0) : Promise.resolve(null),
     token1 ? getTokenInfo(token1) : Promise.resolve(null),
   ]);
-  const priced = await pricedUsdFor(pool);
+  const priced = await pricedUsdFor([pool]);
   rows.push({
     pool,
     arbs: count,
@@ -117,13 +123,21 @@ for (const r of rows) {
   v.usd += r.usd;
   venues.set(key, v);
 }
+// Venue totals come from one query over all of that venue's pools, so an
+// arbitrage hopping between two of them is counted once.
 for (const v of venues.values()) {
-  v.searchers = Math.max(...v.pools.map((p) => p.searchers));
+  const priced = await pricedUsdFor(v.pools.map((p) => p.pool));
+  v.usd = priced.usd;
+  v.arbs = priced.arbs;
+  v.searchers = priced.searchers;
   v.pools.sort((a, b) => b.usd - a.usd || b.arbs - a.arbs);
 }
 const ranked = [...venues.values()].sort((a, b) => b.usd - a.usd || b.arbs - a.arbs);
 
-const sampledArbs = rows.reduce((n, r) => n + r.arbs, 0);
+// Distinct arbs across every sampled pool, for the same reason.
+const sampled = store.poolLeakage(rows.map((r) => r.pool));
+const sampledArbs = sampled.arbs;
+const chainUsd = (await pricedUsdFor([])).usd;
 const totalUsd = ranked.reduce((n, v) => n + v.usd, 0);
 
 if (AS_JSON) {
@@ -132,7 +146,8 @@ if (AS_JSON) {
       {
         window: { blocks: [overall.firstBlock, overall.lastBlock], hours: Number(window.spanHours.toFixed(2)) },
         scope: { topPools: TOP, sampledArbs, indexedArbs: overall.arbs },
-        totalPricedUsd: totalUsd,
+        chainPricedUsd: chainUsd,
+        venuesPricedUsd: totalUsd,
         venues: ranked,
         note: "priced figures are a floor; profit booked in tokens without a USD anchor is counted but not valued",
       },
@@ -154,10 +169,13 @@ console.log(
   `Scope  : top ${TOP} pools by arb count — ${sampledArbs.toLocaleString()} of ` +
     `${overall.arbs.toLocaleString()} indexed arbs (${((sampledArbs / overall.arbs) * 100).toFixed(0)}%)`,
 );
+console.log(`Chain  : ${usd(chainUsd)} extracted across every indexed pool (floor)`);
 console.log("");
 console.log("VENUE (factory)                              POOLS    ARBS   EXTRACTED   SHARE");
 for (const v of ranked) {
-  const share = totalUsd > 0 ? ((v.usd / totalUsd) * 100).toFixed(0) + "%" : "—";
+  // Share of the chain-wide total, not of the venue sum: an arbitrage that
+  // crosses two venues is counted by both, so the shares can exceed 100%.
+  const share = chainUsd > 0 ? ((v.usd / chainUsd) * 100).toFixed(0) + "%" : "—";
   const name = v.factory === UNKNOWN ? "unattributed (no factory())" : v.factory;
   console.log(
     `${name.padEnd(44)} ${String(v.pools.length).padStart(5)} ${v.arbs.toLocaleString().padStart(7)} ` +
@@ -194,6 +212,11 @@ console.log("Every figure is a floor. Only profit booked in tokens with a USD an
 console.log("valued; long-tail token profit is counted but not priced, and bots routing");
 console.log("through executor contracts hide more. Attribution is by on-chain factory(),");
 console.log("so a venue's identity is checkable rather than asserted.");
+console.log("");
+console.log("Per-pool rows overlap: an arbitrage touching three pools appears under all");
+console.log("three. Venue and chain totals are de-duplicated, so they will be smaller");
+console.log("than the pool rows above them add up to, and venue shares can exceed 100%");
+console.log("where a route crosses venues.");
 console.log(line);
 console.log("Measured by OrdoFi — https://app.ordofi.network/explorer");
 console.log(line);
