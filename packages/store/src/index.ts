@@ -273,6 +273,17 @@ export class OrdoStore {
       );
   }
 
+  /** Exact totals over on-chain settlements this auction has submitted. */
+  settlementTotals(): { settlements: number; totalChargeWei: bigint } {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) c, COALESCE(SUM(CAST(charge_wei AS INTEGER)), 0) s
+         FROM settlements WHERE tx_hash IS NOT NULL`,
+      )
+      .get() as { c: number; s: number | bigint };
+    return { settlements: r.c, totalChargeWei: BigInt(r.s) };
+  }
+
   setMeta(key: string, value: string): void {
     this.db
       .prepare(`INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`)

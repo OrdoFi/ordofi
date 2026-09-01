@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { ENDPOINTS, SWAP_TOPICS, rpcFetch } from "@ordofi/core";
+import { OrdoStore } from "@ordofi/store";
 import { extractSwapHints, hintLevelFromEnv, simulateTx } from "@ordofi/core/simulate";
 import { appendFileSync } from "node:fs";
 import { Auction, toResult } from "./auctioneer.js";
@@ -37,6 +38,16 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
   // Failover matters most here: this path dispatches user transactions, and a
   // bot challenge on the primary must not eat someone's trade.
   return rpcFetch(method, params);
+}
+
+// The index is how the explorer and portal answer "what settled" without
+// scanning history on an RPC that rations it. Optional: the auction runs fine
+// without a writable index, it just leaves those pages blank.
+let settlementIndex: OrdoStore | null = null;
+try {
+  settlementIndex = new OrdoStore(process.env.ORDO_DB ?? join(import.meta.dirname, "../../../data/ordo.db"));
+} catch (e) {
+  console.warn(`auction | settlement index unavailable (${(e as Error).message})`);
 }
 
 const searchers = new Set<WebSocket>();
@@ -215,6 +226,19 @@ async function handleSubmit(body: any): Promise<any> {
           settlementTxHash = txHash;
           stats.settled++;
           console.log(`[settle] ${opp.id.slice(0, 8)} charged ${outcome.clearingPriceWei} wei — ${txHash}`);
+          try {
+            settlementIndex?.insertSettlement({
+              opportunityId: opp.id,
+              searcher: settlementRecord.searcher,
+              chargeWei: settlementRecord.chargeWei,
+              userAddress: settlementRecord.user,
+              appAddress: settlementRecord.app,
+              txHash,
+              createdAt: Date.now(),
+            });
+          } catch (e) {
+            console.error(`[settle] indexed write failed: ${(e as Error).message}`);
+          }
         }
       } catch (e) {
         console.error(`[settle] failed for ${opp.id.slice(0, 8)}: ${(e as Error).message}`);

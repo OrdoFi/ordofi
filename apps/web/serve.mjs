@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
-import { createPublicClient, fallback, http, parseAbiItem, formatEther } from "viem";
-import { RPC_HEADERS, rpcUrls } from "@ordofi/core";
+import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult } from "viem";
+import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 
 /**
@@ -156,53 +156,45 @@ async function onchainStats(address) {
 }
 
 async function onchainStatsFresh(address) {
-  const client = createPublicClient({ transport: fallbackTransport() });
-  const head = await client.getBlockNumber();
-  // Scan a recent window; a production indexer would persist a cursor.
-  const fromBlock = head > 500000n ? head - 500000n : 0n;
+  // One cheap call decides "deployed"; the old way was three half-million
+  // block log scans, which the public endpoints either 403 or ration.
+  // viem's fallback treats a 403 as deterministic and gives up; rpcFetch
+  // rotates — and the 403 challenge page is exactly what we route around.
+  const code = await rpcFetch("eth_getCode", [address, "latest"]);
+  if (!code || code === "0x") return { deployed: false, address };
 
-  const [settled, deposited, claimed] = await Promise.all([
-    client.getLogs({ address, event: SETTLED_EVENT, fromBlock, toBlock: head }),
-    client.getLogs({ address, event: DEPOSITED_EVENT, fromBlock, toBlock: head }),
-    client.getLogs({ address, event: CLAIMED_EVENT, fromBlock, toBlock: head }),
-  ]);
+  // Exact figures come from the index the auction writes at settlement time.
+  // The split is computed from configuration, which is honest as long as it
+  // is labelled: the contract enforces the split, we display it.
+  const totals = store?.settlementTotals?.() ?? { settlements: 0, totalChargeWei: 0n };
+  const user = Number(process.env.ORDO_REBATE_USER ?? 0.9);
+  const app = Number(process.env.ORDO_REBATE_APP ?? 0.05);
+  const charge = totals.totalChargeWei;
+  const share = (f) => formatEther((charge * BigInt(Math.round(f * 1e6))) / 1_000_000n);
 
-  let totalSettled = 0n, totalUser = 0n, totalApp = 0n, totalProtocol = 0n;
-  for (const l of settled) {
-    totalSettled += l.args.amount;
-    totalUser += l.args.userAmt;
-    totalApp += l.args.appAmt;
-    totalProtocol += l.args.protocolAmt;
-  }
-  let totalBonded = 0n;
-  for (const l of deposited) totalBonded += l.args.amount;
-  let totalClaimed = 0n;
-  for (const l of claimed) totalClaimed += l.args.amount;
-
-  const recent = settled.slice(-15).reverse().map((l) => ({
-    opportunityId: l.args.opportunityId,
-    searcher: l.args.searcher,
-    amountEth: formatEther(l.args.amount),
-    userEth: formatEther(l.args.userAmt),
-    app: l.args.app,
-    txHash: l.transactionHash,
-    block: Number(l.blockNumber),
+  const recent = (store?.recentSettlements(15) ?? []).map((r) => ({
+    opportunityId: r.opportunityId,
+    searcher: r.searcher,
+    amountEth: formatEther(BigInt(r.chargeWei)),
+    userEth: formatEther((BigInt(r.chargeWei) * BigInt(Math.round(user * 1e6))) / 1_000_000n),
+    app: r.appAddress,
+    txHash: r.txHash ?? null,
+    block: null,
   }));
 
   return {
     deployed: true,
     address,
     rpc: RPC,
-    scannedFromBlock: Number(fromBlock),
-    headBlock: Number(head),
+    totalsSource: "index",
     totals: {
-      settlements: settled.length,
-      totalSettledEth: formatEther(totalSettled),
-      rebatesToUsersEth: formatEther(totalUser),
-      rebatesToAppsEth: formatEther(totalApp),
-      protocolFeesEth: formatEther(totalProtocol),
-      totalBondedEth: formatEther(totalBonded),
-      totalClaimedEth: formatEther(totalClaimed),
+      settlements: totals.settlements,
+      totalSettledEth: formatEther(charge),
+      rebatesToUsersEth: share(user),
+      rebatesToAppsEth: share(app),
+      protocolFeesEth: share(Math.max(0, 1 - user - app)),
+      totalBondedEth: null,
+      totalClaimedEth: null,
     },
     recent,
   };
@@ -214,13 +206,12 @@ const VIEW_ABI = [
 ];
 
 async function accountView(address) {
-  const client = createPublicClient({ transport: fallbackTransport() });
-  const [bond, claimable] = SETTLEMENT
-    ? await Promise.all([
-        client.readContract({ address: SETTLEMENT, abi: VIEW_ABI, functionName: "bond", args: [address] }),
-        client.readContract({ address: SETTLEMENT, abi: VIEW_ABI, functionName: "claimable", args: [address] }),
-      ])
-    : [0n, 0n];
+  const read = async (functionName) => {
+    const data = encodeFunctionData({ abi: VIEW_ABI, functionName, args: [address] });
+    const out = await rpcFetch("eth_call", [{ to: SETTLEMENT, data }, "latest"]);
+    return decodeFunctionResult({ abi: VIEW_ABI, functionName, data: out });
+  };
+  const [bond, claimable] = SETTLEMENT ? await Promise.all([read("bond"), read("claimable")]) : [0n, 0n];
 
   const a = address.toLowerCase();
   let asSearcher = [];
