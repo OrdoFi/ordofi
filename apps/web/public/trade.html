@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OrdoFi Trade — MEV-protected swaps on Robinhood Chain</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .tr { padding: 26px 0 60px; }
+    .tr .maxw { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+
+    /* pair strip */
+    .strip { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; margin-bottom: 16px; }
+    .strip .pair { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+    .strip .px { font-family: var(--mono); font-size: 24px; font-weight: 700; color: var(--accent); }
+    .kv { display: flex; flex-direction: column; }
+    .kv .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .kv .v { font-family: var(--mono); font-size: 14px; color: var(--text); margin-top: 2px; }
+    .badge-prot { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-light); border-radius: 6px; padding: 8px 14px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+    .badge-prot .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    .grid { display: grid; grid-template-columns: 1fr 400px; gap: 18px; align-items: start; }
+    .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+
+    /* chart */
+    .chartwrap { padding: 14px; }
+    #chart { width: 100%; height: 460px; }
+    .chart-foot { display: flex; gap: 18px; padding: 8px 6px 2px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+
+    /* swap card */
+    .swap { padding: 20px; }
+    .swap h3 { font-size: 15px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
+    .swap h3 .cfg { font-family: var(--mono); font-size: 11.5px; color: var(--muted); font-weight: 400; cursor: pointer; }
+    .box { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+    .box + .box { margin-top: 6px; }
+    .box .lab { font-size: 11.5px; color: var(--muted); display: flex; justify-content: space-between; }
+    .box .row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+    .box input { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: var(--mono); font-size: 24px; color: var(--text); font-weight: 600; }
+    .box input::placeholder { color: #b9b3a6; }
+    .tokbtn { display: flex; align-items: center; gap: 7px; background: var(--card); border: 1px solid var(--border-light); border-radius: 8px; padding: 8px 12px; font-weight: 700; font-size: 15px; cursor: pointer; white-space: nowrap; }
+    .tokbtn:hover { border-color: var(--accent); }
+    .tokbtn .chev { font-size: 10px; color: var(--muted); }
+    .flip { display: flex; justify-content: center; margin: -2px 0; position: relative; z-index: 2; }
+    .flip button { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--card); cursor: pointer; font-size: 15px; color: var(--text-dim); }
+    .flip button:hover { color: var(--accent); border-color: var(--accent); }
+    .usd { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+    .qd { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 12px; font-size: 13px; }
+    .qd .l { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--muted); }
+    .qd .l b { font-family: var(--mono); color: var(--text); font-weight: 500; }
+    .qd .warn b { color: var(--danger); }
+
+    .action { width: 100%; margin-top: 14px; padding: 15px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: var(--sans); transition: background .15s; }
+    .action:hover:not(:disabled) { background: var(--accent-dim); }
+    .action:disabled { opacity: .55; cursor: default; }
+    .action.alt { background: transparent; color: var(--text); border-color: var(--border-light); }
+    .status { margin-top: 12px; font-family: var(--mono); font-size: 12px; line-height: 1.7; color: var(--text-dim); word-break: break-all; }
+    .status a { color: var(--accent); text-decoration: underline; }
+
+    /* token modal */
+    .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 200; }
+    .modal.open { display: flex; }
+    .modal .sheet { background: var(--card); border: 1px solid var(--border); border-radius: 14px; width: 400px; max-height: 60vh; overflow: hidden; display: flex; flex-direction: column; }
+    .sheet .mh { padding: 16px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; }
+    .sheet .mh span { cursor: pointer; color: var(--muted); }
+    .sheet input { margin: 12px 18px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 8px; font-family: var(--mono); font-size: 13.5px; background: var(--bg-elev); outline: none; color: var(--text); }
+    .sheet .list { overflow-y: auto; }
+    .tokrow { display: flex; justify-content: space-between; align-items: center; padding: 11px 18px; cursor: pointer; }
+    .tokrow:hover { background: var(--bg-elev); }
+    .tokrow .sym { font-weight: 700; }
+    .tokrow .addr { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .tokrow .pr { font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); }
+
+    /* fills + pitch */
+    .below { display: grid; grid-template-columns: 1fr 400px; gap: 18px; margin-top: 18px; }
+    .fills { padding: 18px 20px; }
+    .fills h3 { font-size: 15px; margin-bottom: 12px; }
+    .fills table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    .fills th, .fills td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--border); }
+    .fills th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    .fills td { font-family: var(--mono); font-size: 12px; }
+    .fills a { color: var(--accent); }
+    .pitch { padding: 18px 20px; }
+    .pitch h3 { font-size: 15px; margin-bottom: 10px; }
+    .pitch p { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-bottom: 10px; }
+    .pitch .mono { color: var(--accent-dim); font-size: 12px; }
+
+    @media (max-width: 1020px) { .grid, .below { grid-template-columns: 1fr; } #chart { height: 340px; } }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#e2622e" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#e2622e"/></svg> OrdoFi</a>
+      <div class="nav-links">
+        <a href="/">Home</a><a href="/trade">Trade</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
+        <a href="/apps">Apps</a><a href="/docs">Docs</a>
+        <a class="btn ghost" id="nav-connect" href="#" style="padding:9px 18px">Connect</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="tr">
+    <div class="maxw">
+      <div class="strip">
+        <div class="pair" id="pair-title">ETH / USDG</div>
+        <div class="px" id="last-px">—</div>
+        <div class="kv"><div class="k">Window change</div><div class="v" id="chg">—</div></div>
+        <div class="kv"><div class="k">Window volume</div><div class="v" id="vol">—</div></div>
+        <div class="kv"><div class="k">Pool</div><div class="v" id="poolinfo">—</div></div>
+        <div class="badge-prot"><span class="dot"></span> MEV-protected via rpc.ordofi.network</div>
+      </div>
+
+      <div class="grid">
+        <div class="panel chartwrap">
+          <div id="chart"></div>
+          <div class="chart-foot">
+            <span id="cf-src">tape: pool Swap events, 1m candles</span>
+            <span id="cf-sw"></span>
+            <span style="margin-left:auto">no oracles — this is the pool's own tape</span>
+          </div>
+        </div>
+
+        <div class="panel swap">
+          <h3>Swap <span class="cfg" id="slip-btn" title="click to change slippage">slippage 0.5%</span></h3>
+          <div class="box">
+            <div class="lab"><span>You pay</span><span id="bal-in"></span></div>
+            <div class="row">
+              <input id="amt-in" placeholder="0.0" inputmode="decimal" autocomplete="off" />
+              <button class="tokbtn" id="tok-in-btn"><span id="tok-in-sym">ETH</span><span class="chev">▼</span></button>
+            </div>
+            <div class="usd" id="usd-in"></div>
+          </div>
+          <div class="flip"><button id="flip" title="flip">↕</button></div>
+          <div class="box">
+            <div class="lab"><span>You receive</span><span id="bal-out"></span></div>
+            <div class="row">
+              <input id="amt-out" placeholder="0.0" readonly />
+              <button class="tokbtn" id="tok-out-btn"><span id="tok-out-sym">USDG</span><span class="chev">▼</span></button>
+            </div>
+            <div class="usd" id="usd-out"></div>
+          </div>
+
+          <div class="qd" id="qd" style="display:none">
+            <div class="l"><span>Rate</span><b id="q-rate">—</b></div>
+            <div class="l"><span>Price impact</span><b id="q-imp">—</b></div>
+            <div class="l"><span>Min received</span><b id="q-min">—</b></div>
+            <div class="l"><span>Route</span><b id="q-route">—</b></div>
+          </div>
+
+          <button class="action" id="action" disabled>Connect wallet</button>
+          <div class="status" id="status">Every swap here is signed by your wallet and submitted through OrdoFi's protected RPC — never the public mempoolless default. Private routing, no frontrunning, rebates as the auction fills.</div>
+        </div>
+      </div>
+
+      <div class="below">
+        <div class="panel fills">
+          <h3>Your fills <span class="cfg" style="font-family:var(--mono);font-size:11px;color:var(--muted);font-weight:400">stored locally, only you see these</span></h3>
+          <table><thead><tr><th>When</th><th>Swap</th><th>Received</th><th>Tx</th></tr></thead><tbody id="fills"><tr><td colspan="4" style="color:var(--muted)">No fills yet.</td></tr></tbody></table>
+        </div>
+        <div class="panel pitch">
+          <h3>What "protected" means here</h3>
+          <p><b>Private submission.</b> Your transaction goes to the sequencer through OrdoFi's gateway, not a public endpoint that leaks your intent to latency bots.</p>
+          <p><b>The backrun pays you.</b> If your trade moves a pool, OrdoFi auctions the right to rebalance it and the winning bid is charged on-chain — 90% of it flows back as rebates instead of vanishing to a bot.</p>
+          <p><b>Receipts.</b> Auction outcomes are signed and anchored on-chain. <a class="mono" href="/docs#receipts">Verify any fill →</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="modal">
+    <div class="sheet">
+      <div class="mh">Select token <span id="modal-x">✕</span></div>
+      <input id="tok-search" placeholder="search symbol or paste address" />
+      <div class="list" id="tok-list"></div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script>
+  (() => {
+    const $ = (id) => document.getElementById(id);
+    const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+
+    // ---------- units ----------
+    const parseUnits = (s, d) => {
+      s = String(s).trim();
+      if (!/^\d*\.?\d*$/.test(s) || s === "" || s === ".") return null;
+      const [i, f = ""] = s.split(".");
+      const frac = (f + "0".repeat(d)).slice(0, d);
+      try { return BigInt(i || "0") * 10n ** BigInt(d) + BigInt(frac || "0"); } catch { return null; }
+    };
+    const formatUnits = (raw, d, prec = 6) => {
+      const v = BigInt(raw); const base = 10n ** BigInt(d);
+      const whole = v / base; let frac = (v % base).toString().padStart(d, "0").slice(0, prec).replace(/0+$/, "");
+      return whole.toString() + (frac ? "." + frac : "");
+    };
+
+    // ---------- state ----------
+    const NATIVE = "eth";
+    let CHAIN = null;
+    let tokens = [];
+    let tokIn = { address: NATIVE, symbol: "ETH", decimals: 18 };
+    let tokOut = null; // USDG once the list arrives
+    let account = null;
+    let provider = window.ethereum ?? null;
+    let quote = null;
+    let quoteSeq = 0;
+    let slippageBps = 50;
+    let modalSide = null;
+    let chart, series;
+
+    // ---------- chart ----------
+    function initChart() {
+      chart = LightweightCharts.createChart($("chart"), {
+        layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "JetBrains Mono, monospace" },
+        grid: { vertLines: { color: "rgba(0,0,0,0.05)" }, horzLines: { color: "rgba(0,0,0,0.05)" } },
+        rightPriceScale: { borderColor: "#dedad1" },
+        timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: false },
+        autoSize: true,
+      });
+      series = chart.addCandlestickSeries({
+        upColor: "#1e9e6a", downColor: "#c0392b", borderVisible: false,
+        wickUpColor: "#1e9e6a", wickDownColor: "#c0392b",
+        priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+      });
+    }
+
+    async function loadChart() {
+      const base = tokIn.address === NATIVE ? "eth" : tokIn.address;
+      const quoteT = tokOut.address === NATIVE ? "eth" : tokOut.address;
+      $("pair-title").textContent = `${tokIn.symbol} / ${tokOut.symbol}`;
+      try {
+        const d = await (await fetch(`/api/trade/candles?base=${base}&quote=${quoteT}`)).json();
+        if (d.error) throw new Error(d.error);
+        series.setData(d.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+        chart.timeScale().fitContent();
+        const first = d.candles[0]?.open, last = d.last;
+        $("last-px").textContent = last ? fmtPx(last) + " " + d.quote.symbol : "—";
+        const chg = first && last ? ((last / first - 1) * 100) : null;
+        $("chg").textContent = chg == null ? "—" : (chg >= 0 ? "+" : "") + chg.toFixed(2) + "%";
+        $("chg").style.color = chg >= 0 ? "#1e9e6a" : "#c0392b";
+        $("vol").textContent = d.volumeQuote ? fmtPx(d.volumeQuote) + " " + d.quote.symbol : "—";
+        $("poolinfo").textContent = short(d.pool) + " · " + (d.fee / 10000).toFixed(2) + "%";
+        $("cf-sw").textContent = d.swaps.toLocaleString() + " swaps in window";
+      } catch (e) {
+        series.setData([]);
+        $("last-px").textContent = "—";
+        $("poolinfo").textContent = "no direct pool";
+        $("cf-sw").textContent = String(e.message || "chart unavailable");
+      }
+    }
+    const fmtPx = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n >= 1 ? n.toFixed(2) : n.toPrecision(4);
+
+    // ---------- tokens ----------
+    async function loadTokens() {
+      const list = await (await fetch("/api/trade/tokens")).json();
+      tokens = [{ address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: list.find((t) => t.symbol === "WETH")?.usdPerToken ?? null }, ...list];
+      tokOut = tokens.find((t) => t.symbol === "USDG") ?? tokens[1];
+      renderTokenButtons();
+      loadChart();
+    }
+    function renderTokenButtons() {
+      $("tok-in-sym").textContent = tokIn.symbol;
+      $("tok-out-sym").textContent = tokOut.symbol;
+    }
+    function openModal(side) {
+      modalSide = side;
+      $("modal").classList.add("open");
+      $("tok-search").value = "";
+      renderList("");
+      $("tok-search").focus();
+    }
+    function renderList(q) {
+      q = q.toLowerCase();
+      const rows = tokens.filter((t) => !q || t.symbol.toLowerCase().includes(q) || t.address.includes(q));
+      $("tok-list").innerHTML = rows.map((t, i) =>
+        `<div class="tokrow" data-i="${tokens.indexOf(t)}">
+           <div><div class="sym">${t.symbol}</div><div class="addr">${t.address === NATIVE ? "native" : short(t.address)}</div></div>
+           <div class="pr">${t.usdPerToken ? "$" + fmtPx(t.usdPerToken) : ""}</div>
+         </div>`).join("") || `<div style="padding:18px;color:var(--muted);font-size:13px">no match</div>`;
+      [...$("tok-list").children].forEach((el) => el.addEventListener("click", () => {
+        const t = tokens[Number(el.dataset.i)];
+        if (!t) return;
+        if (modalSide === "in") { if (t.address === tokOut.address) tokOut = tokIn; tokIn = t; }
+        else { if (t.address === tokIn.address) tokIn = tokOut; tokOut = t; }
+        $("modal").classList.remove("open");
+        renderTokenButtons(); refreshBalances(); requestQuote(); loadChart();
+      }));
+    }
+
+    // ---------- wallet ----------
+    async function connect() {
+      if (!provider) { window.open("https://metamask.io", "_blank"); return; }
+      const [a] = await provider.request({ method: "eth_requestAccounts" });
+      account = a;
+      $("nav-connect").textContent = short(a);
+      await ensureChain();
+      refreshBalances();
+      requestQuote();
+    }
+    async function ensureChain() {
+      if (!CHAIN) CHAIN = await (await fetch("/api/trade/chain")).json();
+      const current = await provider.request({ method: "eth_chainId" });
+      if (current === CHAIN.idHex) return true;
+      try {
+        await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN.idHex }] });
+      } catch (e) {
+        // 4902: unknown chain — add it, with the protected RPC as the endpoint.
+        await provider.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: CHAIN.idHex,
+            chainName: CHAIN.name + " · OrdoFi protected",
+            rpcUrls: [CHAIN.rpc],
+            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+            blockExplorerUrls: [CHAIN.explorer],
+          }],
+        });
+      }
+      return (await provider.request({ method: "eth_chainId" })) === CHAIN.idHex;
+    }
+    async function refreshBalances() {
+      if (!account) return;
+      try {
+        const q = new URLSearchParams({ tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: "1", from: account });
+        const d = await (await fetch("/api/trade/quote?" + q)).json();
+        if (d.account) $("bal-in").textContent = "balance " + formatUnits(d.account.balance, tokIn.decimals ?? d.tokenIn.decimals, 5);
+      } catch { /* balances are cosmetic */ }
+    }
+
+    // ---------- quoting ----------
+    let debounceT = null;
+    function requestQuote() { clearTimeout(debounceT); debounceT = setTimeout(fetchQuote, 350); }
+
+    async function fetchQuote() {
+      const seq = ++quoteSeq;
+      quote = null;
+      const raw = parseUnits($("amt-in").value, tokIn.decimals);
+      if (!raw || raw <= 0n) { $("qd").style.display = "none"; $("amt-out").value = ""; setAction(); return; }
+      setStatus("quoting…");
+      try {
+        const q = new URLSearchParams({ tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: raw.toString(), slippageBps: String(slippageBps) });
+        if (account) q.set("from", account);
+        const d = await (await fetch("/api/trade/quote?" + q)).json();
+        if (seq !== quoteSeq) return; // superseded
+        if (d.error) throw new Error(d.error);
+        quote = d;
+        $("amt-out").value = formatUnits(d.amountOut, d.tokenOut.decimals, 6);
+        const rate = Number(formatUnits(d.amountOut, d.tokenOut.decimals, 8)) / Number($("amt-in").value || 1);
+        $("q-rate").textContent = `1 ${tokIn.symbol} ≈ ${fmtPx(rate)} ${tokOut.symbol}`;
+        $("q-imp").textContent = d.priceImpactBps == null ? "—" : (d.priceImpactBps / 100).toFixed(2) + "%";
+        $("q-imp").parentElement.classList.toggle("warn", d.priceImpactBps > 100);
+        $("q-min").textContent = formatUnits(d.minOut, d.tokenOut.decimals, 6) + " " + tokOut.symbol;
+        $("q-route").textContent = d.route.hops === 1 ? `direct · ${(d.route.fees[0] / 10000).toFixed(2)}%` : `${d.route.hops} hops`;
+        const usdIn = tokens.find((t) => t.address === tokIn.address)?.usdPerToken;
+        $("usd-in").textContent = usdIn ? "≈ $" + fmtPx(usdIn * Number($("amt-in").value)) : "";
+        const usdOut = tokens.find((t) => t.address === tokOut.address)?.usdPerToken;
+        $("usd-out").textContent = usdOut ? "≈ $" + fmtPx(usdOut * Number($("amt-out").value)) : "";
+        if (d.account) $("bal-in").textContent = "balance " + formatUnits(d.account.balance, d.tokenIn.decimals, 5);
+        $("qd").style.display = "block";
+        setStatus("");
+      } catch (e) {
+        if (seq !== quoteSeq) return;
+        $("qd").style.display = "none"; $("amt-out").value = "";
+        setStatus("quote failed: " + (e.message ?? e));
+      }
+      setAction();
+    }
+    setInterval(() => { if ($("amt-in").value && document.visibilityState === "visible") fetchQuote(); }, 15000);
+
+    // ---------- action button ----------
+    function setAction() {
+      const b = $("action");
+      if (!provider) { b.textContent = "Install a wallet"; b.disabled = false; return; }
+      if (!account) { b.textContent = "Connect wallet"; b.disabled = false; return; }
+      if (!quote) { b.textContent = "Enter an amount"; b.disabled = true; return; }
+      if (quote.account && !quote.account.sufficient) { b.textContent = "Insufficient " + tokIn.symbol; b.disabled = true; return; }
+      if (quote.approval) { b.textContent = "Approve " + tokIn.symbol; b.disabled = false; return; }
+      b.textContent = "Swap"; b.disabled = false;
+    }
+    function setStatus(html) { $("status").innerHTML = html || ""; }
+
+    async function waitReceipt(hash) {
+      for (let i = 0; i < 120; i++) {
+        const r = await provider.request({ method: "eth_getTransactionReceipt", params: [hash] }).catch(() => null);
+        if (r) return r;
+        await new Promise((r2) => setTimeout(r2, 1200));
+      }
+      throw new Error("timed out waiting for receipt");
+    }
+
+    async function act() {
+      if (!account) return connect();
+      if (!quote) return;
+      if (!(await ensureChain())) { setStatus("switch to Robinhood Chain to continue"); return; }
+      const b = $("action");
+      b.disabled = true;
+      try {
+        if (quote.approval) {
+          setStatus("approve in your wallet…");
+          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: quote.approval.token, data: quote.approval.data }] });
+          setStatus("approval sent — waiting…");
+          await waitReceipt(hash);
+          await fetchQuote();
+          setStatus("approved. Ready to swap.");
+          return;
+        }
+        setStatus("confirm the swap in your wallet…");
+        const hash = await provider.request({
+          method: "eth_sendTransaction",
+          params: [{ from: account, to: quote.tx.to, data: quote.tx.data, value: quote.tx.value }],
+        });
+        setStatus(`submitted through the protected RPC — <a target="_blank" href="${CHAIN.explorer}/tx/${hash}">view on explorer</a>`);
+        const rec = await waitReceipt(hash);
+        const ok = rec.status === "0x1";
+        setStatus((ok
+          ? `filled ✓ &nbsp;<a target="_blank" href="${CHAIN.explorer}/tx/${hash}">receipt</a> · routed privately via rpc.ordofi.network`
+          : `reverted — <a target="_blank" href="${CHAIN.explorer}/tx/${hash}">inspect</a> (price likely moved past your slippage)`));
+        if (ok) {
+          saveFill({ t: Date.now(), inS: `${$("amt-in").value} ${tokIn.symbol}`, outS: `${$("amt-out").value} ${tokOut.symbol}`, hash });
+          $("amt-in").value = ""; $("amt-out").value = ""; $("qd").style.display = "none"; quote = null;
+          refreshBalances();
+        }
+      } catch (e) {
+        setStatus("cancelled or failed: " + (e?.message ?? e).toString().slice(0, 140));
+      } finally {
+        b.disabled = false;
+        setAction();
+      }
+    }
+
+    // ---------- fills ----------
+    const fills = JSON.parse(localStorage.getItem("ordofi.fills") ?? "[]");
+    function saveFill(f) { fills.unshift(f); localStorage.setItem("ordofi.fills", JSON.stringify(fills.slice(0, 30))); renderFills(); }
+    function renderFills() {
+      if (!fills.length) return;
+      $("fills").innerHTML = fills.map((f) =>
+        `<tr><td>${new Date(f.t).toLocaleTimeString()}</td><td>${f.inS}</td><td>${f.outS}</td>
+         <td><a target="_blank" href="${(CHAIN?.explorer ?? "https://robinhoodchain.blockscout.com")}/tx/${f.hash}">${f.hash.slice(0, 10)}…</a></td></tr>`).join("");
+    }
+
+    // ---------- events ----------
+    $("amt-in").addEventListener("input", requestQuote);
+    $("flip").addEventListener("click", () => { const t = tokIn; tokIn = tokOut; tokOut = t; renderTokenButtons(); $("amt-in").value = ""; $("amt-out").value = ""; $("qd").style.display = "none"; loadChart(); setAction(); });
+    $("tok-in-btn").addEventListener("click", () => openModal("in"));
+    $("tok-out-btn").addEventListener("click", () => openModal("out"));
+    $("modal-x").addEventListener("click", () => $("modal").classList.remove("open"));
+    $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) $("modal").classList.remove("open"); });
+    $("tok-search").addEventListener("input", (e) => renderList(e.target.value));
+    $("action").addEventListener("click", act);
+    $("nav-connect").addEventListener("click", (e) => { e.preventDefault(); connect(); });
+    $("slip-btn").addEventListener("click", () => {
+      const v = prompt("Max slippage, in percent:", (slippageBps / 100).toString());
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0 && n <= 30) { slippageBps = Math.round(n * 100); $("slip-btn").textContent = `slippage ${n}%`; requestQuote(); }
+    });
+    if (provider) {
+      provider.on?.("accountsChanged", (a) => { account = a[0] ?? null; $("nav-connect").textContent = account ? short(account) : "Connect"; setAction(); });
+      provider.on?.("chainChanged", () => setAction());
+    }
+
+    // ---------- boot ----------
+    initChart();
+    const qp = new URLSearchParams(location.search);
+    loadTokens().then(() => {
+      // Deep links: /trade?pay=eth&receive=USDG&amt=0.5 (symbol or address).
+      const bySym = (v) => v && tokens.find((t) => t.symbol.toLowerCase() === v.toLowerCase() || t.address === v.toLowerCase());
+      const pIn = bySym(qp.get("pay")), pOut = bySym(qp.get("receive"));
+      if (pIn && pIn.address !== (pOut ?? tokOut).address) tokIn = pIn;
+      if (pOut && pOut.address !== tokIn.address) tokOut = pOut;
+      renderTokenButtons();
+      if (pIn || pOut) loadChart();
+      if (qp.get("amt")) { $("amt-in").value = qp.get("amt"); requestQuote(); }
+      setAction();
+    });
+    fetch("/api/trade/chain").then((r) => r.json()).then((c) => { CHAIN = c; renderFills(); });
+    setInterval(loadChart, 60_000);
+  })();
+  </script>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-bottom">
+        <div class="disclaimer">Swaps execute on Robinhood Chain through the canonical Uniswap V3 router; OrdoFi routes and protects but never holds funds. Quotes are indicative until your wallet signs. © 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc.</div>
+        <div class="socials"><a href="/docs">Docs</a><a href="/explorer">Explorer</a></div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

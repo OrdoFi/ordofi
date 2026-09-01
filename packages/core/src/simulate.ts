@@ -1,5 +1,5 @@
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
-import { SWAP_TOPICS } from "./index.js";
+import { SWAP_TOPICS } from "./index.ts";
 
 /**
  * Execution simulation and hint extraction.

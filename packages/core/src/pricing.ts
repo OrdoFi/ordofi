@@ -1,4 +1,4 @@
-import { ETH_USD, QUOTE_TOKENS, WETH, rpcFetch } from "./index.js";
+import { ETH_USD, QUOTE_TOKENS, WETH, rpcFetch } from "./index.ts";
 
 /**
  * Minimal on-chain metadata + USD valuation for tokens.

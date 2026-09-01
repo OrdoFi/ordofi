@@ -4,6 +4,7 @@ import { join, extname } from "node:path";
 import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
 import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
+import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN } from "./trade.mjs";
 
 /**
  * The index is the query path. NDJSON is kept as the raw record and used as a
@@ -433,6 +434,62 @@ createServer(async (req, res) => {
     return;
   }
 
+  // ---- Trade terminal ----------------------------------------------------
+
+  // Wallet-facing chain config, so "add the protected RPC" is one click.
+  if (path === "/api/trade/chain") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(TRADE_CHAIN));
+    return;
+  }
+
+  if (path === "/api/trade/tokens") {
+    try {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(await tradeTokens(store)));
+    } catch (e) {
+      res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (path === "/api/trade/quote") {
+    try {
+      const q = await tradeQuote({
+        tokenIn: (url.searchParams.get("tokenIn") ?? "").toLowerCase(),
+        tokenOut: (url.searchParams.get("tokenOut") ?? "").toLowerCase(),
+        amountIn: url.searchParams.get("amountIn") ?? "0",
+        slippageBps: Math.min(3000, Math.max(1, Number(url.searchParams.get("slippageBps") ?? 50))),
+        from: url.searchParams.get("from"),
+      });
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(q));
+    } catch (e) {
+      res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (path === "/api/trade/candles") {
+    try {
+      const data = await tradeCandles({
+        base: (url.searchParams.get("base") ?? "").toLowerCase(),
+        quote: (url.searchParams.get("quote") ?? "").toLowerCase(),
+        bucketSec: Math.max(30, Math.min(3600, Number(url.searchParams.get("bucketSec") ?? 60))),
+        spanBlocks: Math.max(6000, Math.min(200_000, Number(url.searchParams.get("spanBlocks") ?? 72_000))),
+        store,
+      });
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=30" });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
   if (path === "/api/report") {
     const rep = loadReport();
     res.writeHead(200, { "content-type": "application/json" });
@@ -487,6 +544,7 @@ createServer(async (req, res) => {
 
   if (path === "/") path = "/index.html";
   if (path === "/portal") path = "/portal.html";
+  if (path === "/trade") path = "/trade.html";
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";

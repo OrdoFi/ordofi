@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { ENDPOINTS, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { analyzeBlock } from "./detect.js";
+import { extractPricePoints } from "./candles.js";
 
 const RPC = ENDPOINTS.rpc;
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data");
@@ -135,6 +136,14 @@ async function processBlock(n: number): Promise<void> {
   }
 
   const { swaps, arbs } = analyzeBlock(n, timestamp, receipts as any[], txValues);
+  // The tape for the trade terminal's charts: recorded here because the
+  // receipts are already in hand, where re-reading them later via
+  // eth_getLogs hits public endpoints' 10k-result caps within minutes.
+  try {
+    store.upsertCandles(extractPricePoints(n, timestamp, receipts as any[]));
+  } catch {
+    /* charts must never stall the indexer */
+  }
   stats.swapsSeen += swaps.length;
   stats.arbsSeen += arbs.length;
   for (const s of swaps) stats.poolsSeen.add(s.pool);
@@ -222,6 +231,8 @@ async function main() {
         if (next - lastSummary >= SUMMARY_EVERY_BLOCKS) {
           printSummary(head, next, concurrency);
           lastSummary = next;
+          // Rolling three-day tape; beyond that the chart never asks.
+          store.pruneCandles(Math.floor(Date.now() / 1000) - 3 * 86_400);
         }
         // Additive increase, multiplicative decrease. Recovering only after a
         // whole 400-block batch would have left concurrency pinned at 1 for as

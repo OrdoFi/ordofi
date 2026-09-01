@@ -123,6 +123,27 @@ export class OrdoStore {
 
       CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 
+      -- Per-pool minute candles, recorded live by the watcher from the swap
+      -- events it already decodes. Public RPCs cap eth_getLogs at 10k results,
+      -- which the busiest pool here exceeds in half an hour; recording the
+      -- tape as it happens is the only way to chart it without owning a node.
+      -- Prices are raw token1-per-token0 floats; orientation and decimal
+      -- scaling belong to the reader, which knows the tokens.
+      CREATE TABLE IF NOT EXISTS candles (
+        pool TEXT NOT NULL,
+        bucket INTEGER NOT NULL,
+        open REAL NOT NULL,
+        high REAL NOT NULL,
+        low REAL NOT NULL,
+        close REAL NOT NULL,
+        vol0 REAL NOT NULL DEFAULT 0,
+        vol1 REAL NOT NULL DEFAULT 0,
+        swaps INTEGER NOT NULL DEFAULT 0,
+        first_block INTEGER NOT NULL,
+        last_block INTEGER NOT NULL,
+        PRIMARY KEY (pool, bucket)
+      );
+
       -- Self-serve gateway credentials. Only a hash is stored: the database
       -- leaking must not leak the keys themselves.
       CREATE TABLE IF NOT EXISTS api_keys (
@@ -394,6 +415,90 @@ export class OrdoStore {
       topSearchers,
       topPools,
     };
+  }
+
+  /**
+   * Merge swap price points into minute candles. The watcher processes blocks
+   * concurrently, so points arrive out of order; open/close are guarded by
+   * block bounds rather than arrival order. Replayed blocks after a restart
+   * re-add their volume — a bounded, cosmetic inflation the chart can live
+   * with, unlike losing idempotency on the tables that count money.
+   */
+  upsertCandles(
+    points: { pool: string; bucket: number; price: number; vol0: number; vol1: number; block: number }[],
+  ): void {
+    if (points.length === 0) return;
+    // Collapse per (pool, bucket) first so one SQL row carries each group.
+    const groups = new Map<
+      string,
+      { pool: string; bucket: number; open: number; high: number; low: number; close: number; vol0: number; vol1: number; swaps: number; first: number; last: number; firstPrice: number; lastPrice: number }
+    >();
+    for (const p of points) {
+      const key = `${p.pool}:${p.bucket}`;
+      const g = groups.get(key);
+      if (!g) {
+        groups.set(key, {
+          pool: p.pool, bucket: p.bucket, open: p.price, high: p.price, low: p.price, close: p.price,
+          vol0: p.vol0, vol1: p.vol1, swaps: 1, first: p.block, last: p.block, firstPrice: p.price, lastPrice: p.price,
+        });
+        continue;
+      }
+      g.high = Math.max(g.high, p.price);
+      g.low = Math.min(g.low, p.price);
+      g.vol0 += p.vol0;
+      g.vol1 += p.vol1;
+      g.swaps++;
+      if (p.block <= g.first) { g.first = p.block; g.open = p.price; }
+      if (p.block >= g.last) { g.last = p.block; g.close = p.price; }
+      groups.set(key, g);
+    }
+    const stmt = this.db.prepare(
+      `INSERT INTO candles (pool, bucket, open, high, low, close, vol0, vol1, swaps, first_block, last_block)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(pool, bucket) DO UPDATE SET
+         open = CASE WHEN excluded.first_block < candles.first_block THEN excluded.open ELSE candles.open END,
+         close = CASE WHEN excluded.last_block > candles.last_block THEN excluded.close ELSE candles.close END,
+         high = MAX(candles.high, excluded.high),
+         low = MIN(candles.low, excluded.low),
+         vol0 = candles.vol0 + excluded.vol0,
+         vol1 = candles.vol1 + excluded.vol1,
+         swaps = candles.swaps + excluded.swaps,
+         first_block = MIN(candles.first_block, excluded.first_block),
+         last_block = MAX(candles.last_block, excluded.last_block)`,
+    );
+    this.db.exec("BEGIN");
+    try {
+      for (const g of groups.values()) {
+        stmt.run(g.pool.toLowerCase(), g.bucket, g.open, g.high, g.low, g.close, g.vol0, g.vol1, g.swaps, g.first, g.last);
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  candlesFor(pool: string, fromBucket: number): {
+    bucket: number; open: number; high: number; low: number; close: number;
+    vol0: number; vol1: number; swaps: number;
+  }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT bucket, open, high, low, close, vol0, vol1, swaps FROM candles
+           WHERE pool = ? AND bucket >= ? ORDER BY bucket ASC`,
+        )
+        .all(pool.toLowerCase(), fromBucket) as any[]
+    ).map((r) => ({
+      bucket: Number(r.bucket), open: r.open, high: r.high, low: r.low, close: r.close,
+      vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
+    }));
+  }
+
+  /** The tape is a rolling window, not an archive; old buckets cost disk. */
+  pruneCandles(olderThanBucket: number): number {
+    const r = this.db.prepare(`DELETE FROM candles WHERE bucket < ?`).run(olderThanBucket);
+    return Number(r.changes ?? 0);
   }
 
   setMeta(key: string, value: string): void {

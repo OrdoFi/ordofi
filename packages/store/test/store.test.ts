@@ -168,6 +168,29 @@ test("arbsTouchingPool returns the transactions behind a singleton venue", () =>
   s.close();
 });
 
+test("candles: out-of-order points still yield correct open/close", () => {
+  const s = new OrdoStore(":memory:");
+  const pt = (block: number, price: number) => ({ pool: "0xPool", bucket: 600, price, vol0: 1, vol1: 2, block });
+
+  // Concurrent block processing delivers newest first here.
+  s.upsertCandles([pt(105, 9.0), pt(103, 7.0)]);
+  s.upsertCandles([pt(101, 5.0), pt(104, 12.0)]);
+
+  const [c] = s.candlesFor("0xPOOL", 0);
+  assert.equal(c.open, 5.0, "open follows the earliest block, not the first arrival");
+  assert.equal(c.close, 9.0, "close follows the latest block");
+  assert.equal(c.high, 12.0);
+  assert.equal(c.low, 5.0);
+  assert.equal(c.swaps, 4);
+  assert.equal(c.vol1, 8);
+
+  assert.equal(s.candlesFor("0xpool", 601).length, 0, "window filter");
+  s.upsertCandles([{ pool: "0xpool", bucket: 60, price: 1, vol0: 0, vol1: 0, block: 1 }]);
+  assert.equal(s.pruneCandles(600), 1, "old buckets are dropped");
+  assert.equal(s.candlesFor("0xpool", 0).length, 1);
+  s.close();
+});
+
 test("clearing measurements keeps what the chain cannot re-derive", () => {
   const s = new OrdoStore(":memory:");
 
