@@ -1,7 +1,14 @@
 # Production stack: OrdoFi services behind Caddy (auto-TLS), pointed at our own
 # Nitro node. Run the node separately (deploy/nitro-node) — ideally same VPC.
 #
-#   ORDO_RPC_URL=http://nitro:8547 docker compose -f docker-compose.prod.yml up -d
+# Run from the repo root, and pass the root .env explicitly: compose otherwise
+# looks for .env next to this file and would start every service unconfigured.
+#
+#   docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d
+#
+# .env must carry the addresses written by contracts/deploy.sh
+# (ORDO_SETTLEMENT_ADDRESS, ORDO_BUNDLER_ADDRESS), the auctioneer hot key, and
+# the API keys. Set ORDO_RPC_URL=http://nitro:8547 once the node is up.
 services:
   caddy:
     image: caddy:2
@@ -21,6 +28,12 @@ services:
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
       ORDO_API_KEYS: ${ORDO_API_KEYS:-}
       ORDO_ALLOW_ANON: ${ORDO_ALLOW_ANON:-1}
+      # Without this the gateway looks for the auction on its own localhost,
+      # fails, and silently falls back to unauctioned direct sends — protection
+      # without rebates. It is the difference between earning and not.
+      ORDO_AUCTION_URL: http://auction:8548
+      ORDO_BUNDLER_ADDRESS: ${ORDO_BUNDLER_ADDRESS:-}
+    depends_on: [auction]
     restart: unless-stopped
 
   auction:
@@ -30,7 +43,14 @@ services:
       ORDO_AUCTION_PORT: 8548
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
       ORDO_SETTLEMENT_ADDRESS: ${ORDO_SETTLEMENT_ADDRESS:-}
+      # Hot key for the auctioneer address the settlement contract authorizes.
+      # Without it the auction still runs and still writes settlement records,
+      # but nothing is ever collected on-chain.
+      ORDO_AUCTIONEER_KEY: ${ORDO_AUCTIONEER_KEY:-}
       ORDO_AUCTION_WINDOW_MS: ${ORDO_AUCTION_WINDOW_MS:-200}
+      ORDO_REBATE_USER: ${ORDO_REBATE_USER:-0.9}
+      ORDO_REBATE_APP: ${ORDO_REBATE_APP:-0.05}
+      ORDO_REBATE_PROTOCOL: ${ORDO_REBATE_PROTOCOL:-0.05}
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
 
@@ -41,6 +61,10 @@ services:
       ORDO_WEB_PORT: 3000
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
       ORDO_SETTLEMENT_ADDRESS: ${ORDO_SETTLEMENT_ADDRESS:-}
+      # Same reason as the gateway: the explorer's auction panel goes blank
+      # without it.
+      ORDO_AUCTION_URL: http://auction:8548
+    depends_on: [auction]
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
 

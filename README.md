@@ -182,10 +182,15 @@ AUCTIONEER=0x... TREASURY=0x... ./deploy.sh
   numbers) and archive mode. Colocate in AWS us-east-2 (the sequencer's region).
 - **Edge + services** (`deploy/docker-compose.prod.yml` + `deploy/Caddyfile`) —
   gateway, auction, web, and watcher behind Caddy with automatic TLS at
-  `rpc.ordofi.network`, `auction.ordofi.network`, `ordofi.network`.
+  `rpc.ordofi.network`, `auction.ordofi.network`, `app.ordofi.network`. The apex
+  stays with the Framer marketing site.
+
+Run from the repo root and pass the root `.env` explicitly. Compose otherwise
+looks for a `.env` beside the compose file, finds none, and starts every
+service unconfigured — no settlement key, no contract addresses:
 
 ```bash
-ORDO_RPC_URL=http://nitro:8547 docker compose -f deploy/docker-compose.prod.yml up -d
+docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d
 ```
 
 ## Tests & CI
