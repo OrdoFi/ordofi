@@ -284,6 +284,83 @@ export class OrdoStore {
     return { settlements: r.c, totalChargeWei: BigInt(r.s) };
   }
 
+  /**
+   * Everything an outbound pitch needs about a set of pools: how contested
+   * they are, by whom, and how much of the extracted value was denominated in
+   * something we can actually price. An empty pool list means the whole chain.
+   *
+   * `pricedProfitWei` deliberately sums only quote-denominated profit. Most
+   * arbitrage books out in long-tail tokens this cannot value, so the figure
+   * is a floor, and calling it anything else in a sales email would be the
+   * fastest way to lose the argument with someone who checks.
+   */
+  poolLeakage(pools: string[] = []): {
+    arbs: number;
+    searchers: number;
+    pricedArbs: number;
+    pricedProfitWei: bigint;
+    firstBlock: number | null;
+    lastBlock: number | null;
+    topSearchers: { address: string; count: number }[];
+    topPools: { pool: string; count: number }[];
+  } {
+    // Pools are stored exactly as the logs emitted them, and callers paste
+    // checksummed addresses out of block explorers, so both sides are folded
+    // rather than assuming either is already lowercase.
+    const lower = pools.map((p) => p.toLowerCase());
+    const filter = lower.length
+      ? `WHERE a.tx_hash IN (SELECT tx_hash FROM arb_pools WHERE LOWER(pool) IN (${lower.map(() => "?").join(",")}))`
+      : "";
+
+    const head = this.db
+      .prepare(
+        `SELECT COUNT(*) arbs,
+                COUNT(DISTINCT a.sender) searchers,
+                COALESCE(SUM(a.profit_is_quote), 0) pricedArbs,
+                MIN(a.block) lo, MAX(a.block) hi
+         FROM arbs a ${filter}`,
+      )
+      .get(...lower) as { arbs: number; searchers: number; pricedArbs: number; lo: number | null; hi: number | null };
+
+    // SUM() over a TEXT wei column would overflow a double, so the priced
+    // rows are accumulated as BigInt in JS instead.
+    const priced = this.db
+      .prepare(`SELECT a.profit_wei w FROM arbs a ${filter}${filter ? " AND" : " WHERE"} a.profit_is_quote = 1`)
+      .all(...lower) as { w: string | null }[];
+    let pricedProfitWei = 0n;
+    for (const row of priced) if (row.w) pricedProfitWei += BigInt(row.w);
+
+    const topSearchers = (
+      this.db
+        .prepare(
+          `SELECT a.sender address, COUNT(*) count FROM arbs a ${filter}
+           GROUP BY a.sender ORDER BY count DESC LIMIT 10`,
+        )
+        .all(...lower) as any[]
+    ).map((r) => ({ address: r.address as string, count: Number(r.count) }));
+
+    const topPools = (
+      this.db
+        .prepare(
+          `SELECT p.pool pool, COUNT(*) count FROM arb_pools p
+           ${lower.length ? `WHERE LOWER(p.pool) IN (${lower.map(() => "?").join(",")})` : ""}
+           GROUP BY p.pool ORDER BY count DESC LIMIT 10`,
+        )
+        .all(...lower) as any[]
+    ).map((r) => ({ pool: r.pool as string, count: Number(r.count) }));
+
+    return {
+      arbs: head.arbs,
+      searchers: head.searchers,
+      pricedArbs: Number(head.pricedArbs),
+      pricedProfitWei,
+      firstBlock: head.lo,
+      lastBlock: head.hi,
+      topSearchers,
+      topPools,
+    };
+  }
+
   setMeta(key: string, value: string): void {
     this.db
       .prepare(`INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`)
