@@ -97,6 +97,12 @@ services:
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
       ORDO_RPC_URLS: ${ORDO_RPC_URLS:-}
       ORDO_ETH_USD: ${ORDO_ETH_USD:-2250}
+      # Only consulted when there is no checkpoint. An hour of chain is about
+      # 36,000 blocks, which the indexer now covers in roughly twelve minutes.
+      ORDO_BACKFILL: ${ORDO_BACKFILL:-0}
+      ORDO_CONCURRENCY: ${ORDO_CONCURRENCY:-8}
+      ORDO_MAX_BATCH: ${ORDO_MAX_BATCH:-400}
+      ORDO_LOG_ARBS: ${ORDO_LOG_ARBS:-}
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
 
