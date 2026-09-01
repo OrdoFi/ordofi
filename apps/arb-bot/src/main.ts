@@ -63,7 +63,8 @@ const GAS_RESERVE = parseEther(process.env.ORDO_ARB_GAS_RESERVE_ETH ?? "0.0008")
 const MAX_NOTIONAL = process.env.ORDO_ARB_MAX_NOTIONAL_ETH
   ? parseEther(process.env.ORDO_ARB_MAX_NOTIONAL_ETH)
   : null;
-const INTERVAL_MS = Number(process.env.ORDO_ARB_INTERVAL_MS ?? 8000);
+const INTERVAL_MS = Number(process.env.ORDO_ARB_INTERVAL_MS ?? 12000);
+const MAX_CYCLES = Number(process.env.ORDO_ARB_MAX_CYCLES ?? 160);
 
 const FACTORY_ABI = [
   { type: "function", name: "getPool", stateMutability: "view", inputs: [{ type: "address" }, { type: "address" }, { type: "uint24" }], outputs: [{ type: "address" }] },
@@ -214,14 +215,10 @@ async function tradableBalance(): Promise<bigint> {
   return MAX_NOTIONAL && free > MAX_NOTIONAL ? MAX_NOTIONAL : free;
 }
 
-/** A few sizes up to the budget; price impact makes the best size interior. */
+/** Two sizes — a third and the whole budget; price impact makes the best interior. */
 function sizeLadder(budget: bigint): bigint[] {
-  const sizes: bigint[] = [];
-  for (const frac of [8n, 3n]) {
-    const s = budget / frac;
-    if (s > 0n) sizes.push(s);
-  }
-  if (budget > 0n) sizes.push(budget);
+  const third = budget / 3n;
+  const sizes = [third, budget].filter((s) => s > 0n);
   return [...new Set(sizes.map(String))].map(BigInt).sort((a, b) => (a < b ? -1 : 1));
 }
 
@@ -238,25 +235,49 @@ function buildTx(c: Cycle, amountIn: bigint, minReturn: bigint) {
   return encodeFunctionData({ abi: ROUTER_ABI, functionName: "multicall", args: [deadline, [swap, unwrap]] });
 }
 
-let firing = false;
+let busy = false; // one scan/fire at a time — quotes are many and the RPC is shared
+
+/** Run tasks with bounded concurrency so a scan is fast but never floods the upstream. */
+async function pooled<T>(items: T[], limit: number, fn: (t: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) await fn(items[i++]);
+  });
+  await Promise.all(workers);
+}
 
 async function tick(cycles: Cycle[]): Promise<void> {
-  if (firing) return;
+  if (busy) return;
+  busy = true;
+  try {
+    await scan(cycles);
+  } catch (e) {
+    console.warn(`[arb] scan: ${(e as Error).message}`);
+  } finally {
+    busy = false;
+  }
+}
+
+async function scan(cycles: Cycle[]): Promise<void> {
   const budget = await tradableBalance();
-  if (budget < parseEther("0.0002")) return; // dust; nothing worth trying
+  if (budget < parseEther("0.0002")) {
+    console.log(`[arb] idle — tradable ${formatEther(budget)} ETH is below the dust floor; fund ${account.address}`);
+    return;
+  }
 
   const sizes = sizeLadder(budget);
-  let best: { c: Cycle; amountIn: bigint; out: bigint; gross: bigint } | null = null;
+  const tasks = cycles.flatMap((c) => sizes.map((amountIn) => ({ c, amountIn })));
+  const found: { c: Cycle; amountIn: bigint; out: bigint; gross: bigint }[] = [];
+  await pooled(tasks, 8, async ({ c, amountIn }) => {
+    const out = await quoteCycle(c, amountIn);
+    if (out != null && out > amountIn) found.push({ c, amountIn, out, gross: out - amountIn });
+  });
 
-  for (const c of cycles) {
-    for (const amountIn of sizes) {
-      const out = await quoteCycle(c, amountIn);
-      if (out == null || out <= amountIn) continue;
-      const gross = out - amountIn;
-      if (!best || gross > best.gross) best = { c, amountIn, out, gross };
-    }
+  if (found.length === 0) {
+    console.log(`[arb] scanned ${tasks.length} quotes · no positive round trip · budget ${formatEther(budget)} ETH`);
+    return;
   }
-  if (!best) return;
+  const best = found.reduce((a, b) => (b.gross > a.gross ? b : a));
 
   // Price the real transaction. eth_estimateGas double-checks it would not
   // revert *and* gives the gas to subtract from the edge; a revert here means
@@ -278,24 +299,17 @@ async function tick(cycles: Cycle[]): Promise<void> {
     return;
   }
 
-  firing = true;
-  try {
-    const nonce = parseInt((await rpcFetch("eth_getTransactionCount", [account.address, "pending"])) as string, 16);
-    const raw = await account.signTransaction({
-      chainId: CHAIN_ID, to: ROUTER as Hex, data: data as Hex, value: best.amountIn,
-      gas, maxFeePerGas, maxPriorityFeePerGas: 0n, nonce, type: "eip1559",
-    });
-    const hash = (await rpcFetch("eth_sendRawTransaction", [raw])) as string;
-    console.log(`[arb] FIRING ${best.c.label} size ${formatEther(best.amountIn)} ETH · sim net ${formatEther(net)} ETH · ${hash}`);
-    await confirm(hash, best.amountIn);
-  } catch (e) {
-    console.warn(`[arb] send failed: ${(e as Error).message}`);
-  } finally {
-    firing = false;
-  }
+  const nonce = parseInt((await rpcFetch("eth_getTransactionCount", [account.address, "pending"])) as string, 16);
+  const raw = await account.signTransaction({
+    chainId: CHAIN_ID, to: ROUTER as Hex, data: data as Hex, value: best.amountIn,
+    gas, maxFeePerGas, maxPriorityFeePerGas: 0n, nonce, type: "eip1559",
+  });
+  const hash = (await rpcFetch("eth_sendRawTransaction", [raw])) as string;
+  console.log(`[arb] FIRING ${best.c.label} size ${formatEther(best.amountIn)} ETH · sim net ${formatEther(net)} ETH · ${hash}`);
+  await confirm(hash);
 }
 
-async function confirm(hash: string, amountIn: bigint): Promise<void> {
+async function confirm(hash: string): Promise<void> {
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 1000));
     const rec = (await rpcFetch("eth_getTransactionReceipt", [hash]).catch(() => null)) as
@@ -317,7 +331,10 @@ async function confirm(hash: string, amountIn: bigint): Promise<void> {
 // --- main --------------------------------------------------------------------
 
 console.log(`OrdoFi arb bot | ${account.address}`);
-let cycles = await discoverCycles();
+// Cross-tier cycles (shorter paths) sort first, so the cap keeps the cheapest,
+// most-liquid routes when the discovered set is larger than the budget allows.
+const rankCycles = (cs: Cycle[]) => cs.sort((a, b) => a.fees.length - b.fees.length).slice(0, MAX_CYCLES);
+let cycles = rankCycles(await discoverCycles());
 const midCount = new Set(cycles.map((c) => c.tokens.join(">"))).size;
 console.log(`OrdoFi arb bot | ${cycles.length} cycles (cross-tier + triangular) across ${midCount} routes`);
 console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas reserve ${formatEther(GAS_RESERVE)} ETH · scan ${INTERVAL_MS}ms`);
@@ -325,7 +342,7 @@ console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas rese
 await refreshGas();
 setInterval(() => { refreshGas().catch(() => {}); }, 20_000);
 // Pools come and go; re-discover occasionally without blocking the scan loop.
-setInterval(() => { discoverCycles().then((c) => { if (c.length) cycles = c; }).catch(() => {}); }, 600_000);
+setInterval(() => { discoverCycles().then((c) => { if (c.length) cycles = rankCycles(c); }).catch(() => {}); }, 600_000);
 
 if (cycles.length === 0) {
   console.warn("[arb] no cross-tier cycles found — the arb surface is empty right now; will re-scan every 10 min");
