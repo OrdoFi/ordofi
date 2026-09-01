@@ -58,11 +58,15 @@ export function rpcUrls(): string[] {
 let rpcId = 0;
 let cursor = 0; // sticky: keep using whichever upstream last answered
 
+// No parameter properties here: apps/web runs under plain Node, whose native
+// type-stripping only accepts erasable TypeScript syntax.
 class UpstreamRpcError extends Error {
-  constructor(message: string, public code: number) {
-    super(message);
-  }
+  code: number;
   readonly isRpcLevel = true;
+  constructor(message: string, code: number) {
+    super(message);
+    this.code = code;
+  }
 }
 
 /**
