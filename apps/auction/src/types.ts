@@ -1,3 +1,7 @@
+import type { HintLevel, SwapHint } from "@ordofi/core/simulate";
+
+export type { HintLevel, SwapHint };
+
 /**
  * An order-flow opportunity: a user transaction that OrdoFi is holding privately
  * and will submit. Searchers receive a redacted "hint" (MEV-Share style) — enough
@@ -9,12 +13,27 @@ export interface Opportunity {
   createdAt: number;
   /** Redacted hint broadcast to searchers. */
   hint: {
+    /** Addresses of the pools the transaction was simulated to move. */
     poolsTouched: string[];
+    /**
+     * The same pools with their shape, direction, and — only at the `full`
+     * hint level — their sizes. Direction is what prices a backrun; size is
+     * what would let a searcher front-run instead, so it is withheld by default.
+     */
+    swaps: SwapHint[];
     to: string | null;
     /** Function selector only, not full calldata. */
     selector: string | null;
     /** Value transferred, if any (hex wei). */
     value: string;
+    /**
+     * False when the node could not give us logs — rate limited, or an
+     * endpoint without `eth_simulateV1`. Searchers must read this rather than
+     * treat an empty `swaps` as "this transaction moves no pools".
+     */
+    simulated: boolean;
+    /** Which fields the hint was allowed to carry. */
+    level: HintLevel;
   };
   /** The originating app/wallet, for rebate attribution (from the API key). */
   originLabel: string;

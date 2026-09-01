@@ -39,7 +39,7 @@
 <span class="c"># run the reference bot against the auction</span>
 git clone https://github.com/OrdoFi/ordofi &amp;&amp; cd ordofi &amp;&amp; npm install
 SEARCHER_KEY=0xYOUR_KEY \
-ORDO_AUCTION_WS=wss://auction.ordofi.xyz/searcher \
+ORDO_AUCTION_WS=wss://auction.ordofi.network/searcher \
 ORDO_SETTLEMENT_ADDRESS=0xCONTRACT \
 npm run searcher-bot
     </div>
@@ -49,7 +49,7 @@ npm run searcher-bot
 <span class="k">import</span> { OrdoSearcher } <span class="k">from</span> <span class="s">"@ordofi/sdk"</span>;
 
 <span class="k">const</span> searcher = <span class="k">new</span> OrdoSearcher({
-  auctionWsUrl: <span class="s">"wss://auction.ordofi.xyz/searcher"</span>,
+  auctionWsUrl: <span class="s">"wss://auction.ordofi.network/searcher"</span>,
   privateKey: process.env.SEARCHER_KEY,
   settlementAddress: process.env.ORDO_SETTLEMENT_ADDRESS,
   onOpportunity: <span class="k">async</span> (opp) =&gt; {

@@ -30,7 +30,7 @@ export interface OpportunityHint {
 }
 
 export interface SearcherConfig {
-  /** Auction WebSocket URL, e.g. wss://auction.ordofi.xyz/searcher */
+  /** Auction WebSocket URL, e.g. wss://auction.ordofi.network/searcher */
   auctionWsUrl: string;
   /** Searcher private key (used to sign EIP-712 bids and backrun txs). */
   privateKey: Hex;

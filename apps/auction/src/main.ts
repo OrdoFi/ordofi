@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { ENDPOINTS, SWAP_TOPICS } from "@ordofi/core";
+import { extractSwapHints, hintLevelFromEnv, simulateTx } from "@ordofi/core/simulate";
 import { appendFileSync } from "node:fs";
 import { Auction, toResult } from "./auctioneer.js";
 import { bondingEnabled, checkBond } from "./bonds.js";
@@ -17,6 +18,7 @@ const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../.
 const ledger = new RebateLedger(join(DATA_DIR, "rebates.ndjson"));
 const settlementsFile = join(DATA_DIR, "settlements.ndjson");
 const SETTLEMENT_ADDRESS = process.env.ORDO_SETTLEMENT_ADDRESS ?? "";
+const HINT_LEVEL = hintLevelFromEnv();
 
 let upstreamId = 0;
 async function upstream(method: string, params: unknown[]): Promise<any> {
@@ -41,44 +43,64 @@ function broadcastHint(opp: Opportunity): void {
   }
 }
 
-/** Build the redacted hint from a raw user tx: pools it will touch, selector, value. */
-function buildHint(rawTx: string): Opportunity["hint"] {
+/**
+ * Build the redacted hint from a raw user tx.
+ *
+ * The transaction is simulated with `eth_simulateV1`, whose logs name the pools
+ * it will actually move — including pools reached through a router nobody has
+ * catalogued. Only the pool, its shape and its direction are broadcast; the
+ * calldata, the amounts and the sender never leave this process at the default
+ * hint level.
+ *
+ * Simulation is best-effort by construction. The public endpoint rate limits,
+ * and a hint is worth less than the order flow it describes, so a failed
+ * simulation degrades to the target address rather than rejecting the submit.
+ */
+async function buildHint(rawTx: string): Promise<Opportunity["hint"]> {
   const tx = parseTransaction(rawTx as TransactionSerialized);
   const data = (tx.data ?? "0x") as string;
-  return {
-    poolsTouched: [], // populated by simulation below when available
+  const base = {
     to: tx.to ?? null,
     selector: data.length >= 10 ? data.slice(0, 10) : null,
     value: "0x" + (tx.value ?? 0n).toString(16),
+    level: HINT_LEVEL,
   };
-}
 
-/**
- * Simulate the user tx to discover which pools it touches (via swap logs in the
- * trace), enriching the hint so searchers can value the backrun. Falls back to
- * an empty pool list if the node doesn't support trace-style simulation.
- */
-async function poolsFromSimulation(rawTx: string): Promise<string[]> {
+  if (HINT_LEVEL === "minimal") {
+    return { ...base, poolsTouched: [], swaps: [], simulated: false };
+  }
+
   try {
-    const tx = parseTransaction(rawTx as TransactionSerialized);
-    // eth_call won't return logs; we approximate by checking the target only.
-    // Full log-level simulation requires eth_simulateV1 / trace_callMany on a
-    // dedicated node (Phase 1b). For now, surface the target contract.
-    return tx.to ? [tx.to.toLowerCase()] : [];
+    const sim = await simulateTx(upstream, rawTx, { fundSender: true });
+    if (!sim.ok || sim.degraded) {
+      return {
+        ...base,
+        poolsTouched: tx.to ? [tx.to.toLowerCase()] : [],
+        swaps: [],
+        simulated: false,
+      };
+    }
+    const swaps = extractSwapHints(sim.logs, HINT_LEVEL);
+    return {
+      ...base,
+      poolsTouched: [...new Set(swaps.map((s) => s.pool))],
+      swaps,
+      simulated: true,
+    };
   } catch {
-    return [];
+    return { ...base, poolsTouched: tx.to ? [tx.to.toLowerCase()] : [], swaps: [], simulated: false };
   }
 }
 
 async function handleSubmit(body: any): Promise<any> {
+  const receivedAt = Date.now();
   const rawTx: string = body?.rawTx;
   if (!rawTx?.startsWith("0x")) throw new Error("rawTx (signed user transaction) required");
 
   const originLabel: string = body?.originLabel ?? "anon";
   const originRebateAddress: string | undefined = body?.rebateAddress;
 
-  const hint = buildHint(rawTx);
-  hint.poolsTouched = await poolsFromSimulation(rawTx);
+  const hint = await buildHint(rawTx);
 
   const opp: Opportunity = {
     id: randomUUID(),
@@ -103,7 +125,12 @@ async function handleSubmit(body: any): Promise<any> {
 
   // Dispatch user tx and (if any) winning backrun back-to-back in the same tick.
   // On an FCFS chain adjacency is probabilistic; sequencer integration (Phase 3)
-  // makes it guaranteed. We never delay the user's own transaction. Both sends
+  // makes it guaranteed.
+  //
+  // The user's transaction *is* delayed, by exactly the auction window
+  // (ORDO_AUCTION_WINDOW_MS, 200ms by default) — the bid window has to close
+  // before there is a backrun to place behind it. That cost is real and is
+  // reported to the caller as `auctionDelayMs` rather than hidden. Both sends
   // are fault-isolated: a broadcast failure is reported but never discards the
   // auction result or blocks the other leg.
   const sends: Promise<void>[] = [];
@@ -186,6 +213,9 @@ async function handleSubmit(body: any): Promise<any> {
     settlementTxHash: settlementTxHash ?? null,
     settlementContract: SETTLEMENT_ADDRESS || null,
     userError: userError ?? null,
+    /** What holding the transaction for the bid window actually cost, in ms. */
+    auctionDelayMs: Date.now() - receivedAt,
+    hint: { level: opp.hint.level, simulated: opp.hint.simulated, pools: opp.hint.poolsTouched.length },
   };
 }
 
@@ -230,7 +260,14 @@ const server = createServer((req, res) => {
 const wss = new WebSocketServer({ server, path: "/searcher" });
 wss.on("connection", (ws) => {
   searchers.add(ws);
-  ws.send(JSON.stringify({ type: "welcome", swapTopics: SWAP_TOPICS, auctionWindowMs: Number(process.env.ORDO_AUCTION_WINDOW_MS ?? 200) }));
+  ws.send(
+    JSON.stringify({
+      type: "welcome",
+      swapTopics: SWAP_TOPICS,
+      auctionWindowMs: Number(process.env.ORDO_AUCTION_WINDOW_MS ?? 200),
+      hintLevel: HINT_LEVEL,
+    }),
+  );
 
   ws.on("message", (data) => {
     let msg: any;

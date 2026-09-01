@@ -31,7 +31,7 @@
     <div class="code">
 <span class="k">import</span> { submitOrderFlow } <span class="k">from</span> <span class="s">"@ordofi/sdk"</span>;
 
-<span class="k">const</span> { result, rebate } = <span class="k">await</span> submitOrderFlow(<span class="s">"https://auction.ordofi.xyz"</span>, {
+<span class="k">const</span> { result, rebate } = <span class="k">await</span> submitOrderFlow(<span class="s">"https://auction.ordofi.network"</span>, {
   rawTx,                            <span class="c">// the user's signed transaction</span>
   originLabel: <span class="s">"your-app"</span>,          <span class="c">// attribution</span>
   rebateAddress: <span class="s">"0xYourApp…"</span>,      <span class="c">// where your 5% accrues</span>
@@ -43,7 +43,7 @@
     <p>For wallets that don't want to change submission logic, use the OrdoFi gateway as a drop-in RPC. You get free revert protection (transactions that would fail never cost gas) plus the option to opt user flow into the auction.</p>
     <div class="code">
 <span class="c"># drop-in JSON-RPC with revert protection</span>
-https://rpc.ordofi.xyz    <span class="c"># add header: x-api-key: YOUR_KEY</span>
+https://rpc.ordofi.network    <span class="c"># add header: x-api-key: YOUR_KEY</span>
     </div>
 
     <h2>Rebate split</h2>

@@ -3,7 +3,7 @@ import { ENDPOINTS } from "@ordofi/core";
 import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
-import { protectAndSend, sendBundle, simulateRaw } from "./protect.js";
+import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 
 const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
@@ -36,7 +36,9 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
       return simulateRaw(upstream, params[0] as string);
     case "ordo_sendBundle":
       metrics.inc("bundle_submitted_total", { key: apiKey.label });
-      return sendBundle(upstream, params[0] as { txs: string[] });
+      return sendBundle(upstream, params[0] as { txs: string[]; allowRevert?: boolean | number[] });
+    case "ordo_bundlerInfo":
+      return bundlerInfo(upstream, params[0] as string);
     default:
       return upstream(method, params);
   }
@@ -148,5 +150,14 @@ server.listen(CONFIG.port, () => {
   console.log(`OrdoFi gateway | listening on :${CONFIG.port} | upstream=${UPSTREAM}`);
   console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon}`);
   console.log(`OrdoFi gateway | GET /health /metrics /metrics.json`);
-  console.log(`OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_simulate, ordo_sendBundle`);
+  console.log(
+    `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo`,
+  );
+  console.log(
+    `OrdoFi gateway | atomic bundles=${
+      process.env.ORDO_BUNDLER_ADDRESS
+        ? `on (OrdoBundler ${process.env.ORDO_BUNDLER_ADDRESS})`
+        : "off (no ORDO_BUNDLER_ADDRESS) — multi-tx bundles stay best-effort"
+    }`,
+  );
 });

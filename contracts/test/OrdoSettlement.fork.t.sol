@@ -20,24 +20,32 @@ contract OrdoSettlementForkTest is Test {
     bool forked;
 
     function setUp() public {
-        // Only run when a fork is active (chainid 4663 = Robinhood Chain).
-        try vm.createSelectFork("robinhood") {
-            forked = true;
-        } catch {
+        // `--fork-url` may already have put us on the chain. Re-forking would
+        // drop back to the `robinhood` alias, whose public endpoint refuses
+        // Foundry's user agent — so the suite would silently skip while
+        // appearing to pass. Run this through `scripts/fork-proxy.mjs` or a
+        // node of your own.
+        if (block.chainid != 4663) {
+            try vm.createSelectFork("robinhood") {} catch {}
+        }
+        if (block.chainid != 4663) {
             forked = false;
             return;
         }
+        forked = true;
         searcher = vm.addr(searcherPk);
         settlement = new OrdoSettlement(auctioneer, treasury, 500, 500);
     }
 
     function test_Fork_FullLifecycleOnMainnetState() public {
         if (!forked) {
-            emit log("skipping fork test: no 'robinhood' rpc endpoint configured");
+            emit log("SKIPPED: not forked. Run: node scripts/fork-proxy.mjs");
+            emit log("         then: forge test --fork-url http://127.0.0.1:8545");
             return;
         }
 
         assertEq(block.chainid, 4663, "forked Robinhood Chain");
+        emit log_named_uint("forked at block", block.number);
 
         // Searcher bonds real-looking ETH on the forked chain.
         vm.deal(searcher, 5 ether);

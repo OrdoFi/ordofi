@@ -42,7 +42,7 @@ current numbers against your own data.
 import { OrdoSearcher } from "@ordofi/sdk";
 
 const searcher = new OrdoSearcher({
-  auctionWsUrl: "wss://auction.ordofi.xyz/searcher",
+  auctionWsUrl: "wss://auction.ordofi.network/searcher",
   privateKey: process.env.SEARCHER_KEY,
   settlementAddress: process.env.ORDO_SETTLEMENT_ADDRESS,
   onOpportunity: async (opp) => {
@@ -101,6 +101,41 @@ curl localhost:8548/stats     # throughput + accrued rebates
 
 See `apps/web/public/docs.html` (served at `/docs`) for the full API.
 
+## Atomic bundles
+
+`contracts/OrdoBundler.sol` is the answer to "can you do Jito bundles here". A
+searcher calls `OrdoBundler.deploy()` once to get their own `OrdoExecutor` at a
+CREATE2 address derived from their own — so the address is known before it
+exists, and allowances granted to it can only ever be spent by the account that
+granted them. Then:
+
+```solidity
+executor.execute(calls, checks, maxBlock, minGainWei);
+```
+
+Every call runs in one transaction: all of them land or none do. `checks` are
+preconditions read off live state before the first call, so a bundle can refuse
+to run when the trade it was meant to follow has not landed. `minGainWei` makes
+an unprofitable bundle revert rather than settle.
+
+The fork test is the demonstration. The SCL market's buyback holds 1.26 ETH,
+has never fired, and cannot: it spends its whole balance in one swap and
+refuses a fill worse than 5% below spot, which 1.26 ETH cannot achieve against
+that pool. One bundle — buy to deepen, burn, sell back — unsticks it, and
+either every leg lands or the searcher is out nothing but gas:
+
+```bash
+npm run fork-proxy &          # the public endpoint refuses Foundry
+cd contracts && forge test --match-contract OrdoBundlerFork --fork-url http://127.0.0.1:8545 -vv
+```
+
+```
+[PASS] test_Fork_AtomicBundleUnsticksTheBurn()
+  deepening buy:        14.000000000000000000
+  SCL burned:           3088573
+  searcher cost (wei):   0.292654556741677170
+```
+
 ## Settlement contract
 
 `contracts/OrdoSettlement.sol` makes the auction economically real: searchers
@@ -147,7 +182,7 @@ AUCTIONEER=0x... TREASURY=0x... ./deploy.sh
   numbers) and archive mode. Colocate in AWS us-east-2 (the sequencer's region).
 - **Edge + services** (`deploy/docker-compose.prod.yml` + `deploy/Caddyfile`) —
   gateway, auction, web, and watcher behind Caddy with automatic TLS at
-  `rpc.ordofi.xyz`, `auction.ordofi.xyz`, `ordofi.xyz`.
+  `rpc.ordofi.network`, `auction.ordofi.network`, `ordofi.network`.
 
 ```bash
 ORDO_RPC_URL=http://nitro:8547 docker compose -f deploy/docker-compose.prod.yml up -d
@@ -190,7 +225,7 @@ All `/api/*` endpoints are CORS-open so an external site (e.g. a Framer build)
 can embed live numbers directly.
 
 ```js
-const s = await fetch("https://app.ordofi.xyz/api/stats").then(r => r.json());
+const s = await fetch("https://app.ordofi.network/api/stats").then(r => r.json());
 // { arbs, searchers, pools, swaps, arbsPerDay,
 //   settlement: { deployed, settlements, totalSettledEth, rebatesToUsersEth, totalBondedEth } }
 ```
@@ -202,19 +237,37 @@ const s = await fetch("https://app.ordofi.xyz/api/stats").then(r => r.json());
 | `GET /api/arbs/recent?n=40` | Recent atomic arbitrages |
 | `GET /api/onchain` | Settlement contract state and recent settlements |
 
-## Design honesty (Phase 1 trade-offs)
+## Design honesty
 
-- **No true bundle atomicity.** Impossible on an FCFS chain without sequencer
-  cooperation. Bundles are best-effort (fired same-tick) and the API says so.
+- **Atomicity is per-sender, not cross-sender.** `OrdoExecutor` makes every leg
+  of one transaction succeed or fail together, which is what a searcher needs
+  for their own legs. A user's trade and someone else's backrun landing
+  *adjacent* cannot be guaranteed without the sequencer, and nothing here
+  pretends otherwise — `ordo_sendBundle` returns `atomic: false` for
+  multi-transaction bundles and points at the executor instead. What the
+  executor's preconditions buy across senders is the weaker but real guarantee
+  that a backrun refuses to execute on stale state rather than filling at a
+  price that no longer exists.
 - **Simulation is a strong signal, not a guarantee.** State can shift between
-  `eth_call` and inclusion.
-- **Rebates are off-chain accounting in Phase 1.** The split math and
-  attribution are final; trustless on-chain settlement is Phase 2.
+  `eth_simulateV1` and inclusion.
+- **Hints leak direction, not size.** At the default `pools` level a searcher
+  learns which pools move and which way — enough to price a backrun, not enough
+  to front-run. `ORDO_HINT_LEVEL=full` discloses amounts; that is a deliberate
+  choice with a real cost.
+- **The auction delays the user's transaction** by the bid window (200ms by
+  default). `/submit` reports the actual figure as `auctionDelayMs`.
+- **On-chain settlement is implemented and fork-tested, not yet deployed.**
+  Until `contracts/deploy.sh` has been run against mainnet and
+  `ORDO_SETTLEMENT_ADDRESS` is set, rebates are off-chain accounting. The
+  services log which mode they are in at boot.
 - **USD value is quote-denominated.** Only profits ending in WETH/stablecoins
   are priced; long-tail token inventory is counted but not valued, to keep the
   headline number honest.
-- **Public RPC rate-limits.** Sustained measurement needs a dedicated endpoint
-  or our own Nitro node — which is also step one of colocation.
+- **The public RPC is not a foundation.** It has `eth_simulateV1` but no
+  `debug_*` and no archive state, rate limits hard, and serves Foundry a
+  Cloudflare challenge. Run `npm run node-check` to see it for yourself, and
+  `npm run fork-proxy` to work around it until the node in
+  `deploy/nitro-node/` is up.
 
 ## Roadmap
 

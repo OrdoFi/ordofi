@@ -7,7 +7,15 @@ function opp(): Opportunity {
   return {
     id: "opp-test",
     createdAt: Date.now(),
-    hint: { poolsTouched: ["0xpool"], to: "0xto", selector: "0xdeadbeef", value: "0x0" },
+    hint: {
+      poolsTouched: ["0xpool"],
+      swaps: [{ pool: "0xpool", kind: "univ3", direction: "0for1" }],
+      to: "0xto",
+      selector: "0xdeadbeef",
+      value: "0x0",
+      simulated: true,
+      level: "pools",
+    },
     originLabel: "test",
   };
 }

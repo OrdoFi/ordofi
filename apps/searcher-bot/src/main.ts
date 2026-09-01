@@ -12,7 +12,7 @@ import { OrdoSearcher } from "@ordofi/sdk";
  * minutes, and as the canonical example of the EIP-712 bid flow.
  *
  * Env:
- *   ORDO_AUCTION_WS       wss://auction.ordofi.xyz/searcher (default ws://localhost:8548/searcher)
+ *   ORDO_AUCTION_WS       wss://auction.ordofi.network/searcher (default ws://localhost:8548/searcher)
  *   ORDO_SETTLEMENT_ADDRESS  deployed OrdoSettlement (for EIP-712 domain)
  *   SEARCHER_KEY          searcher private key (default: ephemeral, for testing)
  *   ORDO_MAX_BID_ETH      max bid per opportunity (default 0.001)

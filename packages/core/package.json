@@ -6,7 +6,8 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./pricing": "./src/pricing.ts"
+    "./pricing": "./src/pricing.ts",
+    "./simulate": "./src/simulate.ts"
   },
   "dependencies": {
     "viem": "^2.21.0"

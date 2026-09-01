@@ -1,18 +1,29 @@
 # OrdoFi edge — automatic TLS via Caddy. Point DNS A records at the host.
 # Usage: caddy run --config deploy/Caddyfile
+#
+# The apex is deliberately absent. ordofi.network and www.ordofi.network are
+# the Framer marketing site and resolve to Framer's own hosts; claiming them
+# here would either fail to get a certificate or take the marketing site down
+# the moment DNS was pointed at this box. Everything OrdoFi actually runs lives
+# on a subdomain.
+#
+# DNS needed, all A records at this host:
+#   app.ordofi.network       explorer, docs, dashboard, /api/*
+#   rpc.ordofi.network       the gateway
+#   auction.ordofi.network   order-flow auction and searcher WebSocket
 
-ordofi.xyz, www.ordofi.xyz {
+app.ordofi.network {
 	reverse_proxy web:3000
 	encode gzip
 }
 
-rpc.ordofi.xyz {
+rpc.ordofi.network {
 	reverse_proxy gateway:8547
 	# gateway enforces API keys + per-key rate limits itself.
 	encode gzip
 }
 
-auction.ordofi.xyz {
+auction.ordofi.network {
 	# WebSocket (searcher feed) + HTTP (/submit, /stats) on the same host.
 	reverse_proxy auction:8548
 }

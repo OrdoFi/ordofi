@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Instance bootstrap for the OrdoFi Nitro archive node.
+#
+# Formats and mounts the data volume, installs Docker, and stages the compose
+# file. It deliberately does NOT start the node: chain-info.json has to be
+# copied up first, and a node started without it fails in a way that looks like
+# a sync problem rather than a missing file.
+set -euxo pipefail
+
+dnf update -y
+dnf install -y docker git
+systemctl enable --now docker
+
+# Docker Compose v2 as a CLI plugin.
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# The data volume shows up as a NVMe device rather than the name given in the
+# block mapping, so it is found by size instead of by path.
+DEV=$(lsblk -dpno NAME,SIZE | awk '$2 !~ /^(8|40)G$/ && $1 ~ /nvme/ {print $1; exit}')
+if [ -n "$DEV" ]; then
+  blkid "$DEV" || mkfs.xfs "$DEV"
+  mkdir -p /data
+  grep -q "$DEV" /etc/fstab || echo "$DEV /data xfs defaults,nofail 0 2" >> /etc/fstab
+  mount -a
+fi
+
+mkdir -p /opt/ordofi /data/arbitrum
+chown -R ec2-user:ec2-user /opt/ordofi /data/arbitrum
+
+cat > /opt/ordofi/.env <<EOF
+L1_RPC_URL=${l1_rpc_url}
+L1_BEACON_URL=${l1_beacon_url}
+EOF
+chmod 600 /opt/ordofi/.env
+chown ec2-user:ec2-user /opt/ordofi/.env
+
+cat > /opt/ordofi/docker-compose.yml <<'EOF'
+services:
+  nitro:
+    image: offchainlabs/nitro-node:v3.2.1-d81324d
+    restart: unless-stopped
+    ports:
+      - "8547:8547"
+      - "8548:8548"
+    volumes:
+      - /data/arbitrum:/home/user/.arbitrum
+      - /opt/ordofi/chain-info.json:/chain-info.json:ro
+    command:
+      - --parent-chain.connection.url=${L1_RPC_URL}
+      - --parent-chain.blob-client.beacon-url=${L1_BEACON_URL}
+      - --chain.id=4663
+      - --chain.info-json=/chain-info.json
+      - --http.addr=0.0.0.0
+      - --http.port=8547
+      - --http.api=net,web3,eth,debug,arb
+      - --http.corsdomain=*
+      - --http.vhosts=*
+      - --ws.addr=0.0.0.0
+      - --ws.port=8548
+      - --ws.api=net,web3,eth
+      - --node.feed.input.url=wss://feed.mainnet.chain.robinhood.com
+      # Archive mode. Without it there is no historical state, which means no
+      # fork tests and no honest trace-based MEV attribution.
+      - --execution.caching.archive
+    stop_grace_period: 2m
+EOF
+
+chown ec2-user:ec2-user /opt/ordofi/docker-compose.yml
+
+echo "bootstrap complete. copy chain-info.json to /opt/ordofi/, then: docker compose up -d" \
+  > /opt/ordofi/READY

@@ -64,28 +64,96 @@ export async function protectAndSend(upstream: Upstream, rawTx: string): Promise
 export interface BundleResult {
   bundleId: string;
   txHashes: string[];
-  atomic: false;
+  atomic: boolean;
+  note: string;
+  /** Present on a multi-transaction bundle: how to get real atomicity instead. */
+  atomicAlternative?: string;
+}
+
+const BUNDLER = process.env.ORDO_BUNDLER_ADDRESS ?? "";
+
+/** `executorOf(address)` and `isDeployed(address)` on `OrdoBundler`. */
+const SEL_EXECUTOR_OF = "0x848676a2";
+const SEL_IS_DEPLOYED = "0x90184b02";
+
+export interface BundlerInfo {
+  bundler: string | null;
+  executor: string | null;
+  deployed: boolean;
   note: string;
 }
 
 /**
- * Best-effort bundle for an FCFS chain: simulate every tx, then submit them
- * back-to-back with no await between sends so they arrive at the sequencer
- * as close together as possible. True atomicity requires sequencer
- * integration (Phase 2); callers must treat ordering as probabilistic.
+ * Where an owner's atomic executor lives, deployed or not.
+ *
+ * The address is a CREATE2 derivation of the owner, so it is answerable before
+ * the executor exists — which is what lets a searcher fund and approve it in
+ * the same breath as deploying it.
+ */
+export async function bundlerInfo(upstream: Upstream, owner: string): Promise<BundlerInfo> {
+  if (!BUNDLER) {
+    return {
+      bundler: null,
+      executor: null,
+      deployed: false,
+      note: "no OrdoBundler configured; set ORDO_BUNDLER_ADDRESS",
+    };
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(owner ?? "")) throw new RpcError(-32602, "expected an owner address");
+
+  const arg = owner.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+  const [executorWord, deployedWord] = await Promise.all([
+    upstream("eth_call", [{ to: BUNDLER, data: SEL_EXECUTOR_OF + arg }, "latest"]),
+    upstream("eth_call", [{ to: BUNDLER, data: SEL_IS_DEPLOYED + arg }, "latest"]),
+  ]);
+
+  return {
+    bundler: BUNDLER,
+    executor: "0x" + String(executorWord).slice(-40),
+    deployed: BigInt(deployedWord as string) === 1n,
+    note: "call OrdoBundler.deploy() once, then execute(calls, checks, maxBlock, minGainWei) for atomic bundles",
+  };
+}
+
+/**
+ * Submit a bundle.
+ *
+ * There are two honestly different things this can mean on a chain with one
+ * first-come-first-served sequencer and no bundle endpoint:
+ *
+ *   - **One transaction through `OrdoExecutor`** is genuinely atomic. Every
+ *     leg runs inside a single transaction, so either all of them land or none
+ *     of them do, and `atomic: true` is returned. This is what a searcher
+ *     should use for their own multi-leg work.
+ *
+ *   - **Several transactions from different senders** cannot be made atomic
+ *     without the sequencer's cooperation, and nothing here pretends otherwise.
+ *     They are simulated, then fired in the same tick to minimise the gap at
+ *     the sequencer, and `atomic: false` is returned along with a pointer at
+ *     the executor that would have made it atomic.
+ *
+ * `allowRevert` exists for the second case. A conditional backrun is *built*
+ * to revert when the transaction it was meant to follow did not land, so
+ * rejecting it for failing simulation would defeat the guard entirely.
  */
 export async function sendBundle(
   upstream: Upstream,
-  bundle: { txs: string[] },
+  bundle: { txs: string[]; allowRevert?: boolean | number[] },
 ): Promise<BundleResult> {
   if (!bundle?.txs?.length) throw new RpcError(-32602, "bundle.txs required");
   if (bundle.txs.length > 10) throw new RpcError(-32602, "max 10 txs per bundle");
 
+  const tolerated = (i: number): boolean =>
+    bundle.allowRevert === true || (Array.isArray(bundle.allowRevert) && bundle.allowRevert.includes(i));
+
+  let targetsExecutor = false;
   for (const [i, raw] of bundle.txs.entries()) {
     const sim = await simulateRaw(upstream, raw);
-    if (!sim.ok) {
+    if (BUNDLER && sim.to && sim.to.toLowerCase() === BUNDLER.toLowerCase()) targetsExecutor = true;
+    if (!sim.ok && !tolerated(i)) {
       throw new RpcError(-32000, `ordo: bundle tx[${i}] would revert: ${sim.revertReason}`, {
         failedIndex: i,
+        hint: "set allowRevert if this leg is a conditional backrun that is meant to be able to revert",
       });
     }
   }
@@ -94,10 +162,22 @@ export async function sendBundle(
   const sends = bundle.txs.map((raw) => upstream("eth_sendRawTransaction", [raw]));
   const txHashes = await Promise.all(sends);
 
+  const atomic = bundle.txs.length === 1;
   return {
     bundleId: txHashes[0],
     txHashes,
-    atomic: false,
-    note: "FCFS best-effort ordering; sequencer-enforced atomicity lands in Phase 2",
+    atomic,
+    note: atomic
+      ? targetsExecutor
+        ? "atomic: one transaction through OrdoExecutor, all legs succeed or none do"
+        : "atomic by virtue of being a single transaction"
+      : "FCFS best-effort ordering across senders; the sequencer decides adjacency",
+    ...(atomic
+      ? {}
+      : {
+          atomicAlternative: BUNDLER
+            ? `route your own legs through your OrdoExecutor via OrdoBundler at ${BUNDLER} for all-or-nothing execution`
+            : "deploy OrdoBundler and set ORDO_BUNDLER_ADDRESS to offer atomic single-sender bundles",
+        }),
   };
 }
