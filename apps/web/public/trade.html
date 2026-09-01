@@ -306,6 +306,8 @@
       return whole.toString() + (frac ? "." + frac : "");
     };
     const fmtPx = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n >= 1 ? n.toFixed(2) : n.toPrecision(4);
+    // Prices keep cents even in the thousands, so the tape visibly ticks.
+    const fmtTick = (n) => n >= 1000 ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n >= 1 ? n.toFixed(2) : n.toPrecision(4);
     const fmtAmt = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : n >= 1 ? n.toFixed(3) : n.toPrecision(3);
     const fmtUsd = (n) => "$" + (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : n.toFixed(2));
     const hhmmss = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
@@ -400,7 +402,7 @@
     function setPx(v) {
       if (v == null) return;
       const el = $("last-px");
-      el.textContent = fmtPx(v) + " " + quoteTok.symbol;
+      el.textContent = fmtTick(v) + " " + quoteTok.symbol;
       if (lastPx != null && v !== lastPx) el.className = "bigpx " + (v > lastPx ? "up" : "dn");
       lastPx = v;
     }
@@ -429,7 +431,7 @@
         const isNew = (t) => !seenTrades.has(t.tx + t.logIndex);
         $("tlist").innerHTML = d.trades.map((t) =>
           `<div class="trow ${t.side}${isNew(t) && seenTrades.size ? " fresh" : ""}" data-tx="${t.tx}">
-            <span>${fmtPx(t.price)}</span><span>${fmtAmt(t.sizeBase)}</span><span>${hhmmss(t.time)}</span>
+            <span>${fmtTick(t.price)}</span><span>${fmtAmt(t.sizeBase)}</span><span>${hhmmss(t.time)}</span>
           </div>`).join("");
         seenTrades = new Set(d.trades.map((t) => t.tx + t.logIndex));
         [...$("tlist").children].forEach((el) => el.addEventListener("click", () =>
@@ -572,7 +574,7 @@
         quote = d;
         $("amt-out").value = formatUnits(d.amountOut, d.tokenOut.decimals, 6);
         const rate = Number(formatUnits(d.amountOut, d.tokenOut.decimals, 8)) / Number($("amt-in").value || 1);
-        $("q-rate").textContent = `1 ${tin.symbol} ≈ ${fmtPx(rate)} ${tout.symbol}`;
+        $("q-rate").textContent = `1 ${tin.symbol} ≈ ${fmtTick(rate)} ${tout.symbol}`;
         $("q-imp").textContent = d.priceImpactBps == null ? "—" : (d.priceImpactBps / 100).toFixed(2) + "%";
         $("q-imp").parentElement.classList.toggle("warn", d.priceImpactBps > 100);
         $("q-min").textContent = formatUnits(d.minOut, d.tokenOut.decimals, 6) + " " + tout.symbol;
