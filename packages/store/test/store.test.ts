@@ -252,3 +252,19 @@ test("clearing measurements keeps what the chain cannot re-derive", () => {
 
   s.close();
 });
+
+test("trades tape: newest first, idempotent inserts, pruned by time", () => {
+  const s = new OrdoStore(":memory:");
+  const t = (block: number, logIndex: number, ts: number) =>
+    ({ pool: "0xPool", block, logIndex, txHash: `0xtx${block}${logIndex}`, amount0: "-1000", amount1: "2500000", sqrtPrice: "79228162514264337593543950336", ts });
+  s.insertTrades([t(10, 0, 1000), t(10, 3, 1000), t(11, 1, 1001)]);
+  s.insertTrades([t(11, 1, 1001)]); // duplicate delivery from a concurrent fetch
+  const rows = s.recentTrades("0xPOOL", 10);
+  assert.equal(rows.length, 3, "duplicates are ignored");
+  assert.deepEqual(rows.map((r) => [r.block, r.logIndex]), [[11, 1], [10, 3], [10, 0]], "newest first, then log index");
+  assert.equal(rows[0].amount0, "-1000", "int256 survives as exact text");
+  assert.equal(s.recentTrades("0xpool", 2).length, 2, "limit honoured");
+  assert.equal(s.pruneTrades(1001), 2, "older rows pruned by timestamp");
+  assert.equal(s.recentTrades("0xpool").length, 1);
+  s.close();
+});

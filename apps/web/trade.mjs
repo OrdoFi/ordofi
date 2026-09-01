@@ -872,8 +872,8 @@ async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks, befor
     const ageSec = Math.max(0, Math.floor(Date.now() / 1000) - beforeTime);
     hi = Math.min(hi, head - ageSec * 10); // 0.1s blocks
   }
-  let span = 1_200;
-  let budget = 40;
+  let span = 100; // upstreams call anything older than ~128 blocks an archive request
+  let budget = 12;
   let truncated = false;
   while (hi >= floor && budget > 0) {
     const lo = Math.max(floor, hi - span + 1);
@@ -889,7 +889,7 @@ async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks, befor
       ]);
       logs.push(...part);
       hi = lo - 1;
-      if (part.length < 3000 && span < 40_000) span *= 2;
+      if (part.length < 3000 && span < 400) span *= 2;
     } catch (e) {
       if (span > 250) {
         span = Math.floor(span / 2);
@@ -992,70 +992,63 @@ export async function tradePair({ base, quote }) {
 
 const tradesCache = new Map(); // pool -> { at, data }
 
-export async function tradeTrades({ base, quote, limit = 40 }) {
+export async function tradeTrades({ base, quote, limit = 40, store = null }) {
   const b = (base === NATIVE ? WETH : base).toLowerCase();
   const q = (quote === NATIVE ? WETH : quote).toLowerCase();
   const found = await bestPool(b, q);
   if (!found) throw new Error("no direct V3 pool for this pair");
 
   const hit = tradesCache.get(found.pool);
-  if (hit && Date.now() - hit.at < 5_000) return hit.data;
+  if (hit && Date.now() - hit.at < 3_000) return hit.data;
 
-  const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
   const [infoB, infoQ] = await Promise.all([getTokenInfo(b), getTokenInfo(q)]);
-
-  // Recent-only walk: a couple of minutes of blocks is plenty for the busy
-  // pools and stays inside every upstream's non-archive window.
-  const logs = [];
-  let hi = head;
-  let span = 900;
-  let budget = 5;
-  while (logs.length < limit && budget-- > 0 && hi > head - 30_000) {
-    const lo = Math.max(0, hi - span + 1);
-    try {
-      const part = await rpcFetch("eth_getLogs", [
-        {
-          address: found.pool,
-          topics: [V3_SWAP_TOPIC],
-          fromBlock: "0x" + lo.toString(16),
-          toBlock: "0x" + hi.toString(16),
-        },
-      ]);
-      logs.push(...part);
-      hi = lo - 1;
-      if (part.length < limit) span = Math.min(span * 3, 6_000);
-    } catch {
-      if (span > 150) span = Math.floor(span / 2);
-      else break;
-    }
-  }
-
   const scale = 10 ** (infoB.decimals - infoQ.decimals);
-  const now = Math.floor(Date.now() / 1000);
-  const rows = [];
-  for (const l of logs) {
-    const data = l.data.slice(2);
-    if (data.length < 5 * 64) continue;
-    const a0 = int256(data.slice(0, 64));
-    const a1 = int256(data.slice(64, 128));
-    const sqrt = Number(BigInt("0x" + data.slice(128, 192)));
-    const p = (sqrt / 2 ** 96) ** 2;
+  const row = ({ block, logIndex, txHash, amount0, amount1, sqrtPrice, ts }) => {
+    const p = (Number(BigInt(sqrtPrice)) / 2 ** 96) ** 2;
     const price = (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
-    if (!Number.isFinite(price) || price <= 0) continue;
+    if (!Number.isFinite(price) || price <= 0) return null;
+    const a0 = BigInt(amount0), a1 = BigInt(amount1);
     const amtBase = found.base0 ? a0 : a1;
     const amtQuote = found.base0 ? a1 : a0;
-    const block = Number(BigInt(l.blockNumber));
-    rows.push({
-      block,
-      time: now - Math.round((head - block) * 0.1),
-      tx: l.transactionHash,
-      logIndex: Number(BigInt(l.logIndex ?? "0x0")),
-      price,
+    return {
+      block, time: ts, tx: txHash, logIndex, price,
       sizeBase: Math.abs(toWhole(amtBase < 0n ? -amtBase : amtBase, infoB.decimals)),
       sizeQuote: Math.abs(toWhole(amtQuote < 0n ? -amtQuote : amtQuote, infoQ.decimals)),
       // Positive base delta means the pool received base: someone sold it.
       side: amtBase > 0n ? "sell" : "buy",
-    });
+    };
+  };
+
+  // The recorder's tape first: exact, deep, and free of upstream limits.
+  let rows = (store?.recentTrades?.(found.pool, limit) ?? []).map(row).filter(Boolean);
+  let source = "recorder";
+
+  // Fallback for a pool the recorder has not written yet: the head of the
+  // chain via eth_getLogs, in the ~100-block window every upstream still
+  // serves without calling it an archive request.
+  if (rows.length === 0) {
+    source = "logs";
+    try {
+      const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
+      const now = Math.floor(Date.now() / 1000);
+      const logs = await rpcFetch("eth_getLogs", [
+        { address: found.pool, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + Math.max(0, head - 100).toString(16), toBlock: "0x" + head.toString(16) },
+      ]);
+      rows = logs
+        .map((l) => {
+          const data = l.data.slice(2);
+          if (data.length < 5 * 64) return null;
+          const block = Number(BigInt(l.blockNumber));
+          return row({
+            block, logIndex: Number(BigInt(l.logIndex ?? "0x0")), txHash: l.transactionHash,
+            amount0: int256(data.slice(0, 64)).toString(), amount1: int256(data.slice(64, 128)).toString(),
+            sqrtPrice: BigInt("0x" + data.slice(128, 192)).toString(), ts: now - Math.round((head - block) * 0.1),
+          });
+        })
+        .filter(Boolean);
+    } catch {
+      /* nothing recent to show */
+    }
   }
   rows.sort((x, y) => y.block - x.block || y.logIndex - x.logIndex);
 
@@ -1063,6 +1056,7 @@ export async function tradeTrades({ base, quote, limit = 40 }) {
     pool: found.pool,
     base: { address: b, symbol: infoB.symbol },
     quote: { address: q, symbol: infoQ.symbol },
+    source,
     trades: rows.slice(0, limit),
   };
   tradesCache.set(found.pool, { at: Date.now(), data });

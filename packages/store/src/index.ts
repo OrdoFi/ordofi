@@ -144,6 +144,23 @@ export class OrdoStore {
         PRIMARY KEY (pool, bucket)
       );
 
+      -- The last couple of hours of individual V3 swaps, per pool: the trades
+      -- tape. Public upstreams refuse eth_getLogs beyond ~128 blocks (13 s on
+      -- this chain), so the only tape that can show more than the busiest pool
+      -- is the one we write ourselves. Amounts are int256 as decimal text.
+      CREATE TABLE IF NOT EXISTS trades (
+        pool TEXT NOT NULL,
+        block INTEGER NOT NULL,
+        log_index INTEGER NOT NULL,
+        tx_hash TEXT NOT NULL,
+        amount0 TEXT NOT NULL,
+        amount1 TEXT NOT NULL,
+        sqrt_price TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        PRIMARY KEY (pool, block, log_index)
+      );
+      CREATE INDEX IF NOT EXISTS trades_pool_block ON trades (pool, block DESC);
+
       -- Self-serve gateway credentials. Only a hash is stored: the database
       -- leaking must not leak the keys themselves.
       CREATE TABLE IF NOT EXISTS api_keys (
@@ -524,6 +541,44 @@ export class OrdoStore {
       vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
       firstBucket: Number(r.fb), lastBucket: Number(r.lb),
     }));
+  }
+
+  insertTrades(
+    rows: { pool: string; block: number; logIndex: number; txHash: string; amount0: string; amount1: string; sqrtPrice: string; ts: number }[],
+  ): void {
+    if (rows.length === 0) return;
+    const stmt = this.db.prepare(
+      `INSERT OR IGNORE INTO trades (pool, block, log_index, tx_hash, amount0, amount1, sqrt_price, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.db.exec("BEGIN");
+    try {
+      for (const r of rows) stmt.run(r.pool.toLowerCase(), r.block, r.logIndex, r.txHash, r.amount0, r.amount1, r.sqrtPrice, r.ts);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  recentTrades(pool: string, limit = 40): {
+    block: number; logIndex: number; txHash: string; amount0: string; amount1: string; sqrtPrice: string; ts: number;
+  }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT block, log_index, tx_hash, amount0, amount1, sqrt_price, ts FROM trades
+           WHERE pool = ? ORDER BY block DESC, log_index DESC LIMIT ?`,
+        )
+        .all(pool.toLowerCase(), limit) as any[]
+    ).map((r) => ({
+      block: Number(r.block), logIndex: Number(r.log_index), txHash: r.tx_hash,
+      amount0: r.amount0, amount1: r.amount1, sqrtPrice: r.sqrt_price, ts: Number(r.ts),
+    }));
+  }
+
+  pruneTrades(olderThanTs: number): number {
+    const r = this.db.prepare(`DELETE FROM trades WHERE ts < ?`).run(olderThanTs);
+    return Number(r.changes ?? 0);
   }
 
   /** The tape is a rolling window, not an archive; old buckets cost disk. */

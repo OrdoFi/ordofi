@@ -41,3 +41,20 @@ test("garbage logs are ignored rather than fatal", () => {
   const receipts = [{ logs: [{ address: "0xp", topics: [V3_SWAP], data: "0x1234" }] }, {}];
   assert.equal(extractPricePoints(1, 60, receipts as never).length, 0);
 });
+
+test("extractTrades keeps exact signed amounts and identifies the log", async () => {
+  const { extractTrades } = await import("../src/candles.ts");
+  const { SWAP_TOPICS } = await import("@ordofi/core");
+  const topic = Object.entries(SWAP_TOPICS).find(([, v]) => v === "univ3")![0];
+  const word = (n: bigint) => (n < 0n ? (1n << 256n) + n : n).toString(16).padStart(64, "0");
+  const data = "0x" + word(-5000n) + word(12_500_000n) + word(79228162514264337593543950336n) + word(1n) + word(0n);
+  const rows = extractTrades(77, 1_700_000_000, [
+    { transactionHash: "0xabc", logs: [{ address: "0xPOOL", topics: [topic], data, logIndex: "0x2" }] },
+    { transactionHash: "0xdef", logs: [{ address: "0xother", topics: ["0x1234"], data: "0x" }] },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0], {
+    pool: "0xpool", block: 77, logIndex: 2, txHash: "0xabc",
+    amount0: "-5000", amount1: "12500000", sqrtPrice: "79228162514264337593543950336", ts: 1_700_000_000,
+  });
+});

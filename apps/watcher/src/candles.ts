@@ -28,6 +28,49 @@ function absInt256(word: string): bigint {
   return signed < 0n ? -signed : signed;
 }
 
+/** One V3 swap as the trades tape stores it: raw, exact, orientation-free. */
+export interface TradeRow {
+  pool: string;
+  block: number;
+  logIndex: number;
+  txHash: string;
+  amount0: string;
+  amount1: string;
+  sqrtPrice: string;
+  ts: number;
+}
+
+function int256(word: string): bigint {
+  const v = BigInt("0x" + word);
+  return v >= TWO_255 ? v - TWO_256 : v;
+}
+
+export function extractTrades(
+  block: number,
+  timestamp: number,
+  receipts: { transactionHash?: string; logs?: { address: string; topics?: string[]; data?: string; logIndex?: string; transactionHash?: string }[] }[],
+): TradeRow[] {
+  const out: TradeRow[] = [];
+  for (const r of receipts) {
+    for (const log of r?.logs ?? []) {
+      if (SWAP_TOPICS[log.topics?.[0]?.toLowerCase() ?? ""] !== "univ3") continue;
+      const data = (log.data ?? "0x").slice(2);
+      if (data.length < 5 * 64) continue;
+      out.push({
+        pool: log.address.toLowerCase(),
+        block,
+        logIndex: Number(BigInt(log.logIndex ?? "0x0")),
+        txHash: log.transactionHash ?? r.transactionHash ?? "",
+        amount0: int256(data.slice(0, 64)).toString(),
+        amount1: int256(data.slice(64, 128)).toString(),
+        sqrtPrice: BigInt("0x" + data.slice(2 * 64, 3 * 64)).toString(),
+        ts: timestamp,
+      });
+    }
+  }
+  return out;
+}
+
 export function extractPricePoints(
   block: number,
   timestamp: number,

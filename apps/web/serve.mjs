@@ -547,6 +547,7 @@ async function handle(req, res) {
         base: (url.searchParams.get("base") ?? "").toLowerCase(),
         quote: (url.searchParams.get("quote") ?? "").toLowerCase(),
         limit: Math.max(5, Math.min(100, Number(url.searchParams.get("limit") ?? 40))),
+        store,
       });
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       res.end(JSON.stringify(data));
