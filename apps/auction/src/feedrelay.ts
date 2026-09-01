@@ -18,7 +18,6 @@
  * its own kind — 4 is one signed transaction, 3 is a batch of length-prefixed
  * sub-messages, each of which starts with another kind byte.
  */
-import type { Server } from "node:http";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { keccak256, type Hex } from "viem";
 import { ENDPOINTS } from "@ordofi/core";
@@ -89,8 +88,15 @@ export function decodeL2Msg(l2Msg: Uint8Array): Uint8Array[] {
 const toHex = (b: Uint8Array): Hex =>
   ("0x" + Buffer.from(b).toString("hex")) as Hex;
 
-export function startFeedRelay(server: Server): void {
-  const wss = new WebSocketServer({ server, path: "/feed" });
+/**
+ * Returns a detached WebSocketServer. Attaching it to the HTTP server is the
+ * caller's job via a single shared upgrade router: two instances bound with
+ * ({ server, path }) each see every upgrade, and the one that does not own
+ * the path writes an HTTP 400 into a socket the other already upgraded —
+ * which a client reports as the memorably useless "RSV1 must be clear".
+ */
+export function createFeedRelay(): WebSocketServer {
+  const wss = new WebSocketServer({ noServer: true });
 
   wss.on("connection", (ws) => {
     stats.clients = wss.clients.size;
@@ -107,7 +113,7 @@ export function startFeedRelay(server: Server): void {
 
   if (!FEED_URL) {
     console.log("OrdoFi auction | feed relay=off (no ORDO_FEED_URL)");
-    return;
+    return wss;
   }
 
   const fanout = (payload: string) => {
@@ -189,4 +195,5 @@ export function startFeedRelay(server: Server): void {
 
   connect();
   console.log(`OrdoFi auction | feed relay=on · WS /feed <- ${FEED_URL}`);
+  return wss;
 }

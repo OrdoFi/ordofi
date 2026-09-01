@@ -10,7 +10,7 @@ import { Auction, toResult } from "./auctioneer.js";
 import { bondingEnabled, checkBond } from "./bonds.js";
 import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
 import { settlementEnabled, submitSettlement } from "./settle.js";
-import { feedStats, startFeedRelay } from "./feedrelay.js";
+import { createFeedRelay, feedStats } from "./feedrelay.js";
 import {
   acknowledge,
   anchoringConfigured,
@@ -302,8 +302,19 @@ const server = createServer((req, res) => {
 });
 
 // Searcher WebSocket: receive opportunity hints, submit sealed bids.
-const wss = new WebSocketServer({ server, path: "/searcher" });
-startFeedRelay(server);
+// Both WebSocket endpoints share one upgrade router; see createFeedRelay for
+// what happens when two ws servers are attached to the same http server.
+const wss = new WebSocketServer({ noServer: true });
+const feedWss = createFeedRelay();
+server.on("upgrade", (req, socket, head) => {
+  const { pathname } = new URL(req.url ?? "/", "http://internal");
+  const target = pathname === "/searcher" ? wss : pathname === "/feed" ? feedWss : null;
+  if (!target) {
+    socket.destroy();
+    return;
+  }
+  target.handleUpgrade(req, socket, head, (ws) => target.emit("connection", ws, req));
+});
 wss.on("connection", (ws) => {
   searchers.add(ws);
   ws.send(
