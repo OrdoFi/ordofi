@@ -137,6 +137,42 @@ export async function tradeTokens(store) {
   return tokenCache?.list ?? [];
 }
 
+/**
+ * The chain explorer's ERC-20 registry: names, icons, USD prices, holder
+ * counts. Cloudflare shields it from some networks, so a failure here only
+ * costs the extras — the pool-derived list still ships.
+ */
+async function blockscoutTokens(pages = 3) {
+  const out = [];
+  let params = "";
+  for (let i = 0; i < pages; i++) {
+    const r = await fetch(`https://robinhoodchain.blockscout.com/api/v2/tokens?type=ERC-20${params}`, {
+      headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) ordofi-app" },
+      signal: AbortSignal.timeout(9_000),
+    });
+    if (!r.ok) throw new Error(`blockscout ${r.status}`);
+    const d = await r.json();
+    for (const t of d.items ?? []) {
+      const address = (t.address_hash ?? t.address ?? "").toLowerCase();
+      if (!/^0x[0-9a-f]{40}$/.test(address)) continue;
+      const symbol = (t.symbol ?? "").trim();
+      if (!symbol || symbol.length > 12) continue;
+      out.push({
+        address,
+        symbol,
+        name: (t.name ?? "").slice(0, 48) || null,
+        decimals: Number(t.decimals ?? 18) || 18,
+        icon: t.icon_url ?? null,
+        usd: t.exchange_rate != null ? Number(t.exchange_rate) : null,
+        holders: Number(t.holders_count ?? t.holders ?? 0) || 0,
+      });
+    }
+    if (!d.next_page_params) break;
+    params = "&" + new URLSearchParams(d.next_page_params).toString();
+  }
+  return out;
+}
+
 async function buildTokenList(store) {
   const seen = new Map();
   const add = async (address) => {
@@ -152,6 +188,7 @@ async function buildTokenList(store) {
         symbol: info.symbol,
         decimals: info.decimals,
         usdPerToken: info.usdPerToken,
+        active: true, // seen trading in a contested pool
       });
     } catch {
       /* not an ERC-20 we can describe */
@@ -177,9 +214,37 @@ async function buildTokenList(store) {
     }
   }
 
+  // Fold in the explorer registry: names and icons for tokens we already
+  // list, and the long tail of listed-but-quiet tokens for the search modal.
+  try {
+    for (const t of await blockscoutTokens()) {
+      const hit = seen.get(t.address);
+      if (hit) {
+        hit.name = hit.name ?? t.name;
+        hit.icon = hit.icon ?? t.icon;
+        hit.holders = t.holders;
+        if (hit.usdPerToken == null && t.usd != null) hit.usdPerToken = t.usd;
+      } else {
+        seen.set(t.address, {
+          address: t.address,
+          symbol: t.symbol,
+          name: t.name,
+          decimals: t.decimals,
+          usdPerToken: t.usd,
+          icon: t.icon,
+          holders: t.holders,
+          active: false,
+        });
+      }
+    }
+  } catch {
+    /* explorer unreachable — the tradable core is enough */
+  }
+
   return [...seen.values()].sort((a, b) => {
-    const rank = (t) => (t.address === WETH ? 0 : t.address === USDG ? 1 : t.usdPerToken ? 2 : 3);
-    return rank(a) - rank(b) || a.symbol.localeCompare(b.symbol);
+    const rank = (t) =>
+      t.address === WETH ? 0 : t.address === USDG ? 1 : t.active ? 2 : t.usdPerToken ? 3 : 4;
+    return rank(a) - rank(b) || (b.holders ?? 0) - (a.holders ?? 0) || a.symbol.localeCompare(b.symbol);
   });
 }
 

@@ -7,16 +7,13 @@
   <meta name="description" content="Private submission, revert protection, backrun auctions, and MEV revenue sharing for Robinhood Chain." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <nav>
     <div class="wrap">
-      <a class="logo" href="/">
-        <svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="13" stroke="#e2622e" stroke-width="2"/><circle cx="16" cy="16" r="4" fill="#e2622e"/></svg>
-        OrdoFi
-      </a>
+      <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
       <div class="nav-links">
         <a href="/trade">Trade</a><a href="/explorer">Explorer</a>
         <a href="/searchers">Searchers</a>
@@ -24,8 +21,8 @@
         <a href="/portal">Portal</a>
         <a href="/operators">Operators</a>
         <a href="/docs">Docs</a>
-        <a class="btn" href="/docs#quickstart">Start building</a>
       </div>
+      <div class="nav-side"><a class="btn" href="/docs#quickstart">Start building</a></div>
     </div>
   </nav>
 
@@ -42,7 +39,7 @@
       <div class="frame">
         <span class="ctl"></span><span class="ctr"></span>
         <svg viewBox="0 0 880 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Isometric diagram of ordered transaction blocks with an auctioned backrun">
-          <g stroke="#e2622e" stroke-width="1.6" stroke-linejoin="round">
+          <g stroke="#ff6414" stroke-width="1.6" stroke-linejoin="round">
             <!-- bottom plate -->
             <path d="M160 420 L440 490 L440 506 L160 436 Z" fill="#f7ded1"/>
             <path d="M720 420 L440 490 L440 506 L720 436 Z" fill="#efd0bf"/>
@@ -68,9 +65,9 @@
               <path d="M408 74 L382 89 L382 111 L408 96 Z" fill="#efd0bf"/>
             </g>
             <!-- auctioned backrun (highlighted) -->
-            <g stroke="#c8511f">
-              <path d="M430 83 L456 98 L430 113 L404 98 Z" fill="#e2622e"/>
-              <path d="M404 98 L430 113 L430 135 L404 120 Z" fill="#c8511f"/>
+            <g stroke="#e35505">
+              <path d="M430 83 L456 98 L430 113 L404 98 Z" fill="#ff6414"/>
+              <path d="M404 98 L430 113 L430 135 L404 120 Z" fill="#e35505"/>
               <path d="M456 98 L430 113 L430 135 L456 120 Z" fill="#a8410f"/>
             </g>
             <g>
@@ -80,12 +77,12 @@
             </g>
           </g>
           <!-- flow connectors -->
-          <g stroke="#e2622e" stroke-width="1.4" stroke-dasharray="5 7" opacity="0.65">
+          <g stroke="#ff6414" stroke-width="1.4" stroke-dasharray="5 7" opacity="0.65">
             <path d="M440 186 L440 190" />
             <path d="M440 346 L440 350" />
             <path d="M770 150 L810 150 L810 300 L770 300" fill="none"/>
           </g>
-          <g font-family="JetBrains Mono, monospace" font-size="13" fill="#8d857a">
+          <g font-family="Fira Code, monospace" font-size="13" fill="#8d857a">
             <text x="748" y="112">block n</text>
             <text x="748" y="272">n+1</text>
             <text x="748" y="432">n+2</text>
@@ -280,7 +277,7 @@
     <div class="wrap">
       <div class="footer-grid">
         <div class="footer-brand">
-          <div class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="13" stroke="#e2622e" stroke-width="2"/><circle cx="16" cy="16" r="4" fill="#e2622e"/></svg> OrdoFi</div>
+          <div class="logo">ordo<span class="logo-app">app</span></div>
           <p>The execution layer for Robinhood Chain. Private transactions, backrun auctions, and MEV revenue back to the apps and users who create it.</p>
         </div>
         <div class="footer-col">

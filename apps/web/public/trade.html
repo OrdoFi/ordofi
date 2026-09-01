@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OrdoFi Trade — MEV-protected swaps on Robinhood Chain</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
   <style>
     html, body { height: 100%; }
@@ -38,7 +38,7 @@
     /* chart panel */
     .cpanel { display: flex; flex-direction: column; }
     .ctools { display: flex; align-items: center; gap: 4px; padding: 7px 12px; border-bottom: 1px solid var(--border); flex: none; }
-    .tf { font-family: var(--mono); font-size: 11.5px; padding: 4px 10px; border-radius: 5px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; }
+    .tf { font-family: var(--mono); font-size: 11.5px; padding: 4px 10px; border-radius: 0; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; }
     .tf:hover { color: var(--text); }
     .tf.on { border-color: var(--border-light); background: var(--bg-elev); color: var(--text); font-weight: 700; }
     .ctools .note { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
@@ -70,22 +70,22 @@
     .sides button.on-sell { background: var(--card); color: #c0392b; border-bottom-color: #c0392b; }
     .ticket { padding: 14px 16px 16px; }
     .tick-mode { display: flex; gap: 6px; margin-bottom: 12px; align-items: center; }
-    .chip { font-family: var(--mono); font-size: 10.5px; padding: 4px 9px; border-radius: 5px; border: 1px solid var(--border-light); color: var(--text-dim); background: var(--bg-elev); }
+    .chip { font-family: var(--mono); font-size: 10.5px; padding: 4px 9px; border-radius: 0; border: 1px solid var(--border-light); color: var(--text-dim); background: var(--bg-elev); }
     .chip.act { border-color: var(--accent); color: var(--accent); font-weight: 700; }
     .tick-mode .slip { margin-left: auto; cursor: pointer; }
     .tick-mode .slip:hover { border-color: var(--accent); color: var(--accent); }
-    .box { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; }
+    .box { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 0; padding: 11px 13px; }
     .box + .box { margin-top: 6px; }
     .box .lab { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
     .box .row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
     .box input { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: var(--mono); font-size: 21px; color: var(--text); font-weight: 600; }
     .box input::placeholder { color: #b9b3a6; }
-    .tokbtn { display: flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border-light); border-radius: 7px; padding: 6px 10px; font-weight: 700; font-size: 13.5px; cursor: pointer; white-space: nowrap; font-family: var(--sans); }
+    .tokbtn { display: flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border-light); border-radius: 0; padding: 6px 10px; font-weight: 700; font-size: 13.5px; cursor: pointer; white-space: nowrap; font-family: var(--sans); }
     .tokbtn:hover { border-color: var(--accent); }
     .tokbtn .chev { font-size: 9px; color: var(--muted); }
     .usd { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 3px; min-height: 14px; }
     .qamt { display: flex; gap: 5px; margin-top: 7px; }
-    .qamt button { flex: 1; font-family: var(--mono); font-size: 10.5px; padding: 4px 0; border-radius: 5px; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); cursor: pointer; }
+    .qamt button { flex: 1; font-family: var(--mono); font-size: 10.5px; padding: 4px 0; border-radius: 0; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); cursor: pointer; }
     .qamt button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
     .qamt button:disabled { opacity: .45; cursor: default; }
 
@@ -94,7 +94,7 @@
     .qd .l b { font-family: var(--mono); color: var(--text); font-weight: 500; }
     .qd .warn b { color: var(--danger); }
 
-    .action { width: 100%; margin-top: 12px; padding: 13px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; font-family: var(--sans); transition: background .15s; }
+    .action { width: 100%; margin-top: 12px; padding: 13px; border-radius: 0; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; font-family: var(--sans); transition: background .15s; }
     .action:hover:not(:disabled) { background: var(--accent-dim); }
     .action:disabled { opacity: .55; cursor: default; }
     .status { margin-top: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.65; color: var(--text-dim); word-break: break-word; }
@@ -126,16 +126,20 @@
     /* ---------- token modal ---------- */
     .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 11vh; z-index: 200; }
     .modal.open { display: flex; }
-    .modal .sheet { background: var(--card); border: 1px solid var(--border); border-radius: 13px; width: 400px; max-height: 62vh; overflow: hidden; display: flex; flex-direction: column; }
+    .modal .sheet { background: var(--card); border: 1px solid var(--border); border-radius: 0; width: 400px; max-height: 62vh; overflow: hidden; display: flex; flex-direction: column; }
     .sheet .mh { padding: 15px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; }
     .sheet .mh span { cursor: pointer; color: var(--muted); }
-    .sheet input { margin: 12px 18px; padding: 10px 13px; border: 1px solid var(--border); border-radius: 8px; font-family: var(--mono); font-size: 13px; background: var(--bg-elev); outline: none; color: var(--text); }
+    .sheet input { margin: 12px 18px; padding: 10px 13px; border: 1px solid var(--border); border-radius: 0; font-family: var(--mono); font-size: 13px; background: var(--bg-elev); outline: none; color: var(--text); }
     .sheet .list { overflow-y: auto; }
-    .tokrow { display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; cursor: pointer; }
+    .tokrow { display: flex; align-items: center; gap: 11px; padding: 9px 18px; cursor: pointer; }
     .tokrow:hover { background: var(--bg-elev); }
-    .tokrow .sym { font-weight: 700; font-size: 14px; }
-    .tokrow .addr { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
-    .tokrow .pr { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+    .tokrow .ticon { width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 600; overflow: hidden; }
+    .tokrow .ticon img { width: 100%; height: 100%; object-fit: cover; }
+    .tokrow .tmain { flex: 1; min-width: 0; }
+    .tokrow .sym { font-weight: 700; font-size: 13.5px; display: flex; align-items: center; gap: 7px; }
+    .tokrow .sym .live-dot { width: 5px; height: 5px; border-radius: 50%; background: #1e9e6a; display: inline-block; }
+    .tokrow .addr { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tokrow .pr { font-family: var(--mono); font-size: 12px; color: var(--text-dim); text-align: right; flex: none; }
 
     /* mid-size windows: keep the terminal, drop the tape column first */
     @media (max-width: 1180px) {
@@ -154,12 +158,12 @@
 <body class="term">
   <nav>
     <div class="wrap">
-      <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#e2622e" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#e2622e"/></svg> OrdoFi</a>
+      <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
       <div class="nav-links">
         <a href="/">Home</a><a href="/trade">Trade</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
         <a href="/apps">Apps</a><a href="/docs">Docs</a>
-        <a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a>
       </div>
+      <div class="nav-side"><a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a></div>
     </div>
   </nav>
 
@@ -339,7 +343,7 @@
     // ---------- chart ----------
     function initChart() {
       chart = LightweightCharts.createChart($("chart"), {
-        layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "JetBrains Mono, monospace", fontSize: 11 },
+        layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "Fira Code, monospace", fontSize: 11 },
         grid: { vertLines: { color: "rgba(0,0,0,0.045)" }, horzLines: { color: "rgba(0,0,0,0.045)" } },
         rightPriceScale: { borderColor: "#dedad1", scaleMargins: { top: 0.06, bottom: 0.22 } },
         timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: false },
@@ -467,10 +471,17 @@
     }
     function renderList(q) {
       q = q.toLowerCase();
-      const rows = tokens.filter((t) => !q || t.symbol.toLowerCase().includes(q) || t.address.includes(q));
-      $("tok-list").innerHTML = rows.map((t) =>
+      const rows = tokens.filter((t) => !q || t.symbol.toLowerCase().includes(q) || (t.name ?? "").toLowerCase().includes(q) || t.address.includes(q));
+      const icon = (t) => t.icon
+        ? `<img src="${t.icon}" alt="" loading="lazy" onerror="this.parentElement.textContent='${t.symbol.slice(0, 3)}'">`
+        : t.symbol.slice(0, 3);
+      $("tok-list").innerHTML = rows.slice(0, 120).map((t) =>
         `<div class="tokrow" data-i="${tokens.indexOf(t)}">
-           <div><div class="sym">${t.symbol}</div><div class="addr">${t.address === NATIVE ? "native" : short(t.address)}</div></div>
+           <div class="ticon">${icon(t)}</div>
+           <div class="tmain">
+             <div class="sym">${t.symbol}${t.active ? '<span class="live-dot" title="actively traded"></span>' : ""}</div>
+             <div class="addr">${t.name ? t.name + " · " : ""}${t.address === NATIVE ? "native" : short(t.address)}</div>
+           </div>
            <div class="pr">${t.usdPerToken ? "$" + fmtPx(t.usdPerToken) : ""}</div>
          </div>`).join("") || `<div style="padding:18px;color:var(--muted);font-size:13px">${tokens.length ? "no match" : "token list still loading…"}</div>`;
       [...$("tok-list").children].forEach((el) => el.addEventListener("click", () => {
