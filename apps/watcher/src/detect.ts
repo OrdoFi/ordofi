@@ -120,28 +120,35 @@ export function analyzeBlock(
     const nativeSpent = txValues?.get(r.transactionHash.toLowerCase()) ?? 0n;
     if (nativeSpent > 0n) senderNet.set(WETH, (senderNet.get(WETH) ?? 0n) - nativeSpent);
 
-    // Best quote-denominated profit the searcher itself ends up holding.
-    let bestQuoteToken: string | undefined;
-    let bestQuoteWei = 0n;
-    let spentAQuoteAsset = false;
-    for (const [token, v] of senderNet) {
-      if (!isQuoteToken(token)) continue;
-      if (v < 0n) spentAQuoteAsset = true;
-      if (v > bestQuoteWei) {
-        bestQuoteWei = v;
-        bestQuoteToken = token;
+    // A closed loop ends holding more of something and less of nothing: every
+    // leg is bought and sold within the transaction, so intermediate tokens
+    // net to zero and only the profit remains. If the sender is down on
+    // anything, they paid for the position rather than arbitraged it.
+    //
+    // Checking only quote assets was not enough. Someone selling a tokenised
+    // stock for USDG is down SPY and up USDG, and with SPY unchecked the whole
+    // sale was booked as extracted value — most of a $45M/day chain-wide
+    // figure. Dust from rounding can now cost a real arb its price, which
+    // undercounts, and that is the right direction for a floor.
+    let soldSomething = false;
+    for (const v of senderNet.values()) {
+      if (v < 0n) {
+        soldSomething = true;
+        break;
       }
     }
 
-    // A closed loop ends holding more of something and less of nothing. If the
-    // sender is down on any quote asset then they bought that position rather
-    // than arbitraged it, and booking the proceeds as profit counts the output
-    // of an ordinary trade as extracted value — which is how a chain-wide
-    // figure of $3.2M an hour appeared. Genuine arbitrage is unaffected: a
-    // WETH -> USDG -> WETH round trip nets zero USDG and positive WETH.
-    if (spentAQuoteAsset) {
-      bestQuoteToken = undefined;
-      bestQuoteWei = 0n;
+    // Best quote-denominated profit the searcher itself ends up holding.
+    let bestQuoteToken: string | undefined;
+    let bestQuoteWei = 0n;
+    if (!soldSomething) {
+      for (const [token, v] of senderNet) {
+        if (!isQuoteToken(token)) continue;
+        if (v > bestQuoteWei) {
+          bestQuoteWei = v;
+          bestQuoteToken = token;
+        }
+      }
     }
 
     // Fallback: sender-centric pure-positive token arb (unpriced inventory).

@@ -173,6 +173,29 @@ test("spending a quote asset rules out a quote profit", () => {
   );
 });
 
+test("selling a token for a stablecoin is not extracted value", () => {
+  // The dominant case on this chain: someone sells a tokenised stock for USDG.
+  // Checking only quote assets for the spent side missed it entirely, because
+  // the thing being sold is not a quote asset — and that was most of a
+  // $45M/day chain-wide figure.
+  const SPY = "0x9999999999999999999999999999999999999999";
+  const spyOut = {
+    address: SPY,
+    topics: [TRANSFER_TOPIC, addrTopic(searcher), addrTopic(poolA)],
+    data: amount(400_000_000_000_000_000_000n),
+    transactionHash: "0xfeed",
+    transactionIndex: "0x0",
+    logIndex: "0x3",
+  };
+
+  const { arbs } = analyzeBlock(100, 1234, swapReceipt([spyOut]) as any);
+  assert.equal(
+    arbs.filter((a) => a.profitIsQuote).length,
+    0,
+    "the USDG is the proceeds of a sale, not profit",
+  );
+});
+
 test("a genuine round trip still counts", () => {
   // WETH -> USDG -> WETH: the USDG nets to zero and the WETH is real profit.
   // The fix must not silence the thing we are trying to measure.
