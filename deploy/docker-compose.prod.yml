@@ -26,7 +26,10 @@ services:
       SERVICE: gateway
       ORDO_PORT: 8547
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
-      ORDO_RPC_URLS: ${ORDO_RPC_URLS:-}
+      # Light traffic rides the authenticated quota-limited upstream first
+      # (ORDO_RPC_URLS_LIGHT); the watcher's bulk volume stays on the public
+      # list so it cannot burn through that quota.
+      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
       ORDO_API_KEYS: ${ORDO_API_KEYS:-}
       ORDO_ALLOW_ANON: ${ORDO_ALLOW_ANON:-1}
       # Without this the gateway looks for the auction on its own localhost,
@@ -45,7 +48,7 @@ services:
       SERVICE: auction
       ORDO_AUCTION_PORT: 8548
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
-      ORDO_RPC_URLS: ${ORDO_RPC_URLS:-}
+      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
       ORDO_SETTLEMENT_ADDRESS: ${ORDO_SETTLEMENT_ADDRESS:-}
       # Hot key for the auctioneer address the settlement contract authorizes.
       # Without it the auction still runs and still writes settlement records,
@@ -65,7 +68,7 @@ services:
       SERVICE: web
       ORDO_WEB_PORT: 3000
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
-      ORDO_RPC_URLS: ${ORDO_RPC_URLS:-}
+      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
       ORDO_SETTLEMENT_ADDRESS: ${ORDO_SETTLEMENT_ADDRESS:-}
       # Same reason as the gateway: the explorer's auction panel goes blank
       # without it.
@@ -84,7 +87,7 @@ services:
       ORDO_AUCTION_WS: ws://auction:8548/searcher
       ORDO_SETTLEMENT_ADDRESS: ${ORDO_SETTLEMENT_ADDRESS:-}
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
-      ORDO_RPC_URLS: ${ORDO_RPC_URLS:-}
+      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
       SEARCHER_KEY: ${ORDO_HOUSE_SEARCHER_KEY:-}
       ORDO_MAX_BID_ETH: ${ORDO_HOUSE_MAX_BID_ETH:-0.0001}
     depends_on: [auction]
