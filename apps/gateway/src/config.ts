@@ -56,17 +56,43 @@ export function loadApiKeys(): Map<string, ApiKey> {
 export const CONFIG = {
   port: Number(process.env.ORDO_PORT ?? 8547),
   allowAnon: process.env.ORDO_ALLOW_ANON === "1",
-  /** Methods anonymous callers may use when allowAnon is on. */
+  /**
+   * Requests per minute an anonymous IP may make. Wallets poll aggressively
+   * (block number, balances, receipts every few seconds), so this is sized
+   * for a person with a wallet open, not for a bot.
+   */
+  anonRateLimit: Number(process.env.ORDO_ANON_RATE_LIMIT ?? 600),
+  /**
+   * Methods anonymous callers may use when allowAnon is on: everything a
+   * wallet needs to function once the endpoint is added as its network RPC,
+   * including a revert-protected send. Wallets cannot attach an API key
+   * header, so without this the endpoint would be read-only for exactly the
+   * users it exists for. Auction routing, bundles and the bundler stay keyed.
+   */
   anonMethods: new Set([
     "eth_chainId",
+    "net_version",
+    "web3_clientVersion",
     "eth_blockNumber",
+    "eth_syncing",
     "eth_gasPrice",
+    "eth_maxPriorityFeePerGas",
+    "eth_feeHistory",
     "eth_getBalance",
+    "eth_getCode",
+    "eth_getStorageAt",
+    "eth_getTransactionCount",
     "eth_call",
+    "eth_estimateGas",
+    "eth_getLogs",
     "eth_getBlockByNumber",
+    "eth_getBlockByHash",
+    "eth_getBlockReceipts",
     "eth_getTransactionReceipt",
     "eth_getTransactionByHash",
-    "net_version",
+    "eth_getTransactionByBlockNumberAndIndex",
+    "eth_sendRawTransaction",
+    "ordo_simulate",
   ]),
 };
 

@@ -114,8 +114,24 @@ function authenticate(
   return null;
 }
 
+function clientIp(req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } }): string {
+  const fwd = req.headers["x-forwarded-for"];
+  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
+  return first || req.socket?.remoteAddress || "unknown";
+}
+
 const server = createServer((req, res) => {
   const url = req.url ?? "/";
+
+  // Browser dapps call the RPC straight from the page; wallets do not need
+  // this, but nothing here is origin-sensitive, so allow it.
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-headers", "content-type, x-api-key, authorization");
+  res.setHeader("access-control-allow-methods", "POST, GET, OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.writeHead(204).end();
+    return;
+  }
 
   if (req.method === "GET" && url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -166,19 +182,22 @@ const server = createServer((req, res) => {
           };
         }
 
-        if (auth !== "anon") {
-          const rl = limiter.check(auth.key, auth.rateLimit);
-          if (!rl.ok) {
-            metrics.inc("rpc_rate_limited_total", { key: auth.label });
-            return {
-              jsonrpc: "2.0",
-              id: msg.id,
-              error: {
-                code: -32005,
-                message: `rate limit exceeded, retry in ${Math.ceil(rl.retryAfterMs / 1000)}s`,
-              },
-            };
-          }
+        // Keys are limited per key; anonymous callers per source IP (the
+        // first x-forwarded-for hop is the client when Caddy fronts us).
+        const rl =
+          auth === "anon"
+            ? limiter.check(`anon:${clientIp(req)}`, CONFIG.anonRateLimit)
+            : limiter.check(auth.key, auth.rateLimit);
+        if (!rl.ok) {
+          metrics.inc("rpc_rate_limited_total", { key: auth === "anon" ? "anon" : auth.label });
+          return {
+            jsonrpc: "2.0",
+            id: msg.id,
+            error: {
+              code: -32005,
+              message: `rate limit exceeded, retry in ${Math.ceil(rl.retryAfterMs / 1000)}s`,
+            },
+          };
         }
 
         try {

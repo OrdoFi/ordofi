@@ -22,3 +22,14 @@ test("separate keys have separate windows", () => {
   assert.equal(rl.check("a", 1).ok, false);
   assert.equal(rl.check("b", 1).ok, true, "different key unaffected");
 });
+
+test("anonymous tier covers what a wallet needs, including a protected send", async () => {
+  const { CONFIG } = await import("../src/config.ts");
+  for (const m of ["eth_getTransactionCount", "eth_estimateGas", "eth_feeHistory", "eth_sendRawTransaction", "eth_getLogs"]) {
+    assert.ok(CONFIG.anonMethods.has(m), `${m} must be usable without a key`);
+  }
+  for (const m of ["ordo_sendBundle", "ordo_sendPrivateTransaction", "ordo_bundlerInfo"]) {
+    assert.ok(!CONFIG.anonMethods.has(m), `${m} stays keyed`);
+  }
+  assert.ok(CONFIG.anonRateLimit > 0, "anonymous callers are rate limited per IP");
+});
