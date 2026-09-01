@@ -7,167 +7,262 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
   <style>
-    .tr { padding: 26px 0 60px; }
-    .tr .maxw { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+    html, body { height: 100%; }
+    body.term { display: flex; flex-direction: column; overflow: hidden; }
+    body.term nav .wrap { height: 52px; }
+    body.term nav .logo { font-size: 17px; }
+    body.term nav .logo .mark { width: 22px; height: 22px; }
+    body.term .nav-links { gap: 22px; }
+    body.term .nav-links a { font-size: 13.5px; }
 
-    /* pair strip */
-    .strip { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; margin-bottom: 16px; }
-    .strip .pair { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
-    .strip .px { font-family: var(--mono); font-size: 24px; font-weight: 700; color: var(--accent); }
-    .kv { display: flex; flex-direction: column; }
-    .kv .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-    .kv .v { font-family: var(--mono); font-size: 14px; color: var(--text); margin-top: 2px; }
-    .badge-prot { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-light); border-radius: 6px; padding: 8px 14px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
-    .badge-prot .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    /* ---------- instrument bar ---------- */
+    .ibar { display: flex; align-items: stretch; gap: 0; border-bottom: 1px solid var(--border); background: var(--card); overflow-x: auto; scrollbar-width: none; flex: none; }
+    .ibar::-webkit-scrollbar { display: none; }
+    .ibar .cell { padding: 9px 18px; border-right: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; white-space: nowrap; }
+    .ibar .pairname { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+    .ibar .pairfee { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+    .ibar .bigpx { font-family: var(--mono); font-size: 19px; font-weight: 700; transition: color .25s; }
+    .ibar .bigpx.up { color: #1e9e6a; } .ibar .bigpx.dn { color: #c0392b; }
+    .ibar .k { font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+    .ibar .v { font-family: var(--mono); font-size: 13px; color: var(--text); margin-top: 2px; }
+    .ibar .v.up { color: #1e9e6a; } .ibar .v.dn { color: #c0392b; }
+    .ibar .spacer { flex: 1; border-right: none; }
+    .ibar .prot { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); padding: 0 18px; border-left: 1px solid var(--border); }
+    .ibar .prot .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
 
-    .grid { display: grid; grid-template-columns: 1fr 400px; gap: 18px; align-items: start; }
-    .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+    /* ---------- main grid ---------- */
+    .main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 252px 332px; gap: 1px; background: var(--border); }
+    .main > * { background: var(--card); min-height: 0; }
 
-    /* chart */
-    .chartwrap { padding: 14px; }
-    #chart { width: 100%; height: 460px; }
-    .chart-foot { display: flex; gap: 18px; padding: 8px 6px 2px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); flex-wrap: wrap; }
+    /* chart panel */
+    .cpanel { display: flex; flex-direction: column; }
+    .ctools { display: flex; align-items: center; gap: 4px; padding: 7px 12px; border-bottom: 1px solid var(--border); flex: none; }
+    .tf { font-family: var(--mono); font-size: 11.5px; padding: 4px 10px; border-radius: 5px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; }
+    .tf:hover { color: var(--text); }
+    .tf.on { border-color: var(--border-light); background: var(--bg-elev); color: var(--text); font-weight: 700; }
+    .ctools .note { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+    #chart { flex: 1; min-height: 0; }
 
-    /* swap card */
-    .swap { padding: 20px; }
-    .swap h3 { font-size: 15px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
-    .swap h3 .cfg { font-family: var(--mono); font-size: 11.5px; color: var(--muted); font-weight: 400; cursor: pointer; }
-    .box { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+    /* trades panel */
+    .tpanel { display: flex; flex-direction: column; }
+    .phead { padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; letter-spacing: .02em; display: flex; justify-content: space-between; align-items: center; flex: none; }
+    .phead .sub { font-family: var(--mono); font-size: 10px; color: var(--muted); font-weight: 400; }
+    .tcols { display: grid; grid-template-columns: 1.2fr 1fr .9fr; padding: 5px 14px; font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--border); flex: none; }
+    .tcols span:nth-child(2), .trow span:nth-child(2) { text-align: right; }
+    .tcols span:nth-child(3), .trow span:nth-child(3) { text-align: right; }
+    .tlist { flex: 1; overflow-y: auto; min-height: 0; }
+    .trow { display: grid; grid-template-columns: 1.2fr 1fr .9fr; padding: 3px 14px; font-family: var(--mono); font-size: 11.5px; cursor: pointer; }
+    .trow:hover { background: var(--bg-elev); }
+    .trow.buy span:first-child { color: #1e9e6a; }
+    .trow.sell span:first-child { color: #c0392b; }
+    .trow span:nth-child(2) { color: var(--text-dim); }
+    .trow span:nth-child(3) { color: var(--muted); font-size: 10.5px; }
+    .trow.fresh { animation: freshrow 1.2s ease-out; }
+    @keyframes freshrow { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
+    .tempty { padding: 18px 14px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+
+    /* ticket panel */
+    .spanel { display: flex; flex-direction: column; overflow-y: auto; }
+    .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-bottom: 1px solid var(--border); flex: none; }
+    .sides button { padding: 11px 0; border: none; background: var(--bg-elev); color: var(--muted); font-family: var(--sans); font-size: 13.5px; font-weight: 700; cursor: pointer; border-bottom: 2px solid transparent; }
+    .sides button.on-buy { background: var(--card); color: #1e9e6a; border-bottom-color: #1e9e6a; }
+    .sides button.on-sell { background: var(--card); color: #c0392b; border-bottom-color: #c0392b; }
+    .ticket { padding: 14px 16px 16px; }
+    .tick-mode { display: flex; gap: 6px; margin-bottom: 12px; align-items: center; }
+    .chip { font-family: var(--mono); font-size: 10.5px; padding: 4px 9px; border-radius: 5px; border: 1px solid var(--border-light); color: var(--text-dim); background: var(--bg-elev); }
+    .chip.act { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+    .tick-mode .slip { margin-left: auto; cursor: pointer; }
+    .tick-mode .slip:hover { border-color: var(--accent); color: var(--accent); }
+    .box { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; }
     .box + .box { margin-top: 6px; }
-    .box .lab { font-size: 11.5px; color: var(--muted); display: flex; justify-content: space-between; }
-    .box .row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-    .box input { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: var(--mono); font-size: 24px; color: var(--text); font-weight: 600; }
+    .box .lab { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
+    .box .row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+    .box input { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: var(--mono); font-size: 21px; color: var(--text); font-weight: 600; }
     .box input::placeholder { color: #b9b3a6; }
-    .tokbtn { display: flex; align-items: center; gap: 7px; background: var(--card); border: 1px solid var(--border-light); border-radius: 8px; padding: 8px 12px; font-weight: 700; font-size: 15px; cursor: pointer; white-space: nowrap; }
+    .tokbtn { display: flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border-light); border-radius: 7px; padding: 6px 10px; font-weight: 700; font-size: 13.5px; cursor: pointer; white-space: nowrap; font-family: var(--sans); }
     .tokbtn:hover { border-color: var(--accent); }
-    .tokbtn .chev { font-size: 10px; color: var(--muted); }
-    .flip { display: flex; justify-content: center; margin: -2px 0; position: relative; z-index: 2; }
-    .flip button { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--card); cursor: pointer; font-size: 15px; color: var(--text-dim); }
-    .flip button:hover { color: var(--accent); border-color: var(--accent); }
-    .usd { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .tokbtn .chev { font-size: 9px; color: var(--muted); }
+    .usd { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 3px; min-height: 14px; }
+    .qamt { display: flex; gap: 5px; margin-top: 7px; }
+    .qamt button { flex: 1; font-family: var(--mono); font-size: 10.5px; padding: 4px 0; border-radius: 5px; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); cursor: pointer; }
+    .qamt button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .qamt button:disabled { opacity: .45; cursor: default; }
 
-    .qd { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 12px; font-size: 13px; }
-    .qd .l { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--muted); }
+    .qd { margin-top: 11px; border-top: 1px dashed var(--border); padding-top: 10px; font-size: 12px; }
+    .qd .l { display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--muted); }
     .qd .l b { font-family: var(--mono); color: var(--text); font-weight: 500; }
     .qd .warn b { color: var(--danger); }
 
-    .action { width: 100%; margin-top: 14px; padding: 15px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; font-family: var(--sans); transition: background .15s; }
+    .action { width: 100%; margin-top: 12px; padding: 13px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; font-family: var(--sans); transition: background .15s; }
     .action:hover:not(:disabled) { background: var(--accent-dim); }
     .action:disabled { opacity: .55; cursor: default; }
-    .action.alt { background: transparent; color: var(--text); border-color: var(--border-light); }
-    .status { margin-top: 12px; font-family: var(--mono); font-size: 12px; line-height: 1.7; color: var(--text-dim); word-break: break-all; }
+    .status { margin-top: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.65; color: var(--text-dim); word-break: break-word; }
     .status a { color: var(--accent); text-decoration: underline; }
 
-    /* token modal */
-    .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 200; }
+    /* ---------- bottom panel ---------- */
+    .bpanel { flex: none; height: 192px; border-top: 1px solid var(--border); background: var(--card); display: flex; flex-direction: column; }
+    .btabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex: none; }
+    .btabs button { padding: 9px 18px; border: none; background: none; font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; letter-spacing: .02em; }
+    .btabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+    .bbody { flex: 1; overflow-y: auto; min-height: 0; padding: 0 18px; }
+    .bbody table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .bbody th, .bbody td { text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--border); }
+    .bbody th { color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: var(--card); }
+    .bbody td { font-family: var(--mono); font-size: 11.5px; }
+    .bbody a { color: var(--accent); }
+    .bbody .empty { padding: 16px 0; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+    .prot-copy { padding: 12px 0; font-size: 12.5px; color: var(--muted); line-height: 1.7; max-width: 900px; }
+    .prot-copy b { color: var(--text); }
+    .prot-copy a { color: var(--accent); }
+
+    /* ---------- status bar ---------- */
+    .sbar { flex: none; display: flex; align-items: center; gap: 18px; height: 27px; padding: 0 14px; border-top: 1px solid var(--border); background: var(--bg-elev); font-family: var(--mono); font-size: 10.5px; color: var(--muted); overflow: hidden; white-space: nowrap; }
+    .sbar .live { display: inline-flex; align-items: center; gap: 6px; color: var(--text-dim); }
+    .sbar .live i { width: 6px; height: 6px; border-radius: 50%; background: #1e9e6a; display: inline-block; }
+    .sbar .right { margin-left: auto; display: flex; gap: 14px; }
+    .sbar a:hover { color: var(--accent); }
+
+    /* ---------- token modal ---------- */
+    .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 11vh; z-index: 200; }
     .modal.open { display: flex; }
-    .modal .sheet { background: var(--card); border: 1px solid var(--border); border-radius: 14px; width: 400px; max-height: 60vh; overflow: hidden; display: flex; flex-direction: column; }
-    .sheet .mh { padding: 16px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; }
+    .modal .sheet { background: var(--card); border: 1px solid var(--border); border-radius: 13px; width: 400px; max-height: 62vh; overflow: hidden; display: flex; flex-direction: column; }
+    .sheet .mh { padding: 15px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; }
     .sheet .mh span { cursor: pointer; color: var(--muted); }
-    .sheet input { margin: 12px 18px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 8px; font-family: var(--mono); font-size: 13.5px; background: var(--bg-elev); outline: none; color: var(--text); }
+    .sheet input { margin: 12px 18px; padding: 10px 13px; border: 1px solid var(--border); border-radius: 8px; font-family: var(--mono); font-size: 13px; background: var(--bg-elev); outline: none; color: var(--text); }
     .sheet .list { overflow-y: auto; }
-    .tokrow { display: flex; justify-content: space-between; align-items: center; padding: 11px 18px; cursor: pointer; }
+    .tokrow { display: flex; justify-content: space-between; align-items: center; padding: 10px 18px; cursor: pointer; }
     .tokrow:hover { background: var(--bg-elev); }
-    .tokrow .sym { font-weight: 700; }
-    .tokrow .addr { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-    .tokrow .pr { font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); }
+    .tokrow .sym { font-weight: 700; font-size: 14px; }
+    .tokrow .addr { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+    .tokrow .pr { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
 
-    /* fills + pitch */
-    .below { display: grid; grid-template-columns: 1fr 400px; gap: 18px; margin-top: 18px; }
-    .fills { padding: 18px 20px; }
-    .fills h3 { font-size: 15px; margin-bottom: 12px; }
-    .fills table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-    .fills th, .fills td { text-align: left; padding: 8px 8px; border-bottom: 1px solid var(--border); }
-    .fills th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
-    .fills td { font-family: var(--mono); font-size: 12px; }
-    .fills a { color: var(--accent); }
-    .pitch { padding: 18px 20px; }
-    .pitch h3 { font-size: 15px; margin-bottom: 10px; }
-    .pitch p { font-size: 13.5px; color: var(--muted); line-height: 1.65; margin-bottom: 10px; }
-    .pitch .mono { color: var(--accent-dim); font-size: 12px; }
-
-    @media (max-width: 1020px) { .grid, .below { grid-template-columns: 1fr; } #chart { height: 340px; } }
+    /* mid-size windows: keep the terminal, drop the tape column first */
+    @media (max-width: 1180px) {
+      .main { grid-template-columns: minmax(0, 1fr) 320px; }
+      .tpanel { display: none; }
+    }
+    @media (max-width: 900px) {
+      body.term { overflow: auto; }
+      .main { grid-template-columns: 1fr; }
+      .cpanel { height: 380px; }
+      .tpanel { display: flex; height: 300px; }
+      .bpanel { height: auto; min-height: 160px; }
+    }
   </style>
 </head>
-<body>
+<body class="term">
   <nav>
     <div class="wrap">
       <a class="logo" href="/"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#e2622e" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#e2622e"/></svg> OrdoFi</a>
       <div class="nav-links">
         <a href="/">Home</a><a href="/trade">Trade</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
         <a href="/apps">Apps</a><a href="/docs">Docs</a>
-        <a class="btn ghost" id="nav-connect" href="#" style="padding:9px 18px">Connect</a>
+        <a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a>
       </div>
     </div>
   </nav>
 
-  <div class="tr">
-    <div class="maxw">
-      <div class="strip">
-        <div class="pair" id="pair-title">ETH / USDG</div>
-        <div class="px" id="last-px">—</div>
-        <div class="kv"><div class="k">Window change</div><div class="v" id="chg">—</div></div>
-        <div class="kv"><div class="k">Window volume</div><div class="v" id="vol">—</div></div>
-        <div class="kv"><div class="k">Pool</div><div class="v" id="poolinfo">—</div></div>
-        <div class="badge-prot"><span class="dot"></span> MEV-protected via rpc.ordofi.network</div>
+  <!-- instrument bar -->
+  <div class="ibar">
+    <div class="cell">
+      <div class="pairname"><span id="pair-title">ETH / USDG</span></div>
+      <div class="pairfee" id="pair-sub">Uniswap V3 · deepest pool</div>
+    </div>
+    <div class="cell"><div class="bigpx" id="last-px">—</div></div>
+    <div class="cell"><div class="k">1h change</div><div class="v" id="chg1h">—</div></div>
+    <div class="cell"><div class="k">Window change</div><div class="v" id="chg">—</div></div>
+    <div class="cell"><div class="k">Window volume</div><div class="v" id="vol">—</div></div>
+    <div class="cell"><div class="k">Liquidity</div><div class="v" id="tvl">—</div></div>
+    <div class="cell"><div class="k">Fee tier</div><div class="v" id="feetier">—</div></div>
+    <div class="cell"><div class="k">Pool</div><div class="v"><a id="poolinfo" target="_blank" style="color:inherit">—</a></div></div>
+    <div class="cell spacer"></div>
+    <div class="prot"><span class="dot"></span> MEV-protected · rpc.ordofi.network</div>
+  </div>
+
+  <!-- chart | trades | ticket -->
+  <div class="main">
+    <div class="cpanel">
+      <div class="ctools">
+        <button class="tf on" data-tf="1">1m</button>
+        <button class="tf" data-tf="5">5m</button>
+        <button class="tf" data-tf="15">15m</button>
+        <button class="tf" data-tf="60">1h</button>
+        <span class="note" id="cf-src">pool tape — no oracles</span>
       </div>
+      <div id="chart"></div>
+    </div>
 
-      <div class="grid">
-        <div class="panel chartwrap">
-          <div id="chart"></div>
-          <div class="chart-foot">
-            <span id="cf-src">tape: pool Swap events, 1m candles</span>
-            <span id="cf-sw"></span>
-            <span style="margin-left:auto">no oracles — this is the pool's own tape</span>
-          </div>
-        </div>
+    <div class="tpanel">
+      <div class="phead">Trades <span class="sub" id="tp-sub"></span></div>
+      <div class="tcols"><span>Price</span><span id="tc-size">Size</span><span>Time</span></div>
+      <div class="tlist" id="tlist"><div class="tempty">waiting for tape…</div></div>
+    </div>
 
-        <div class="panel swap">
-          <h3>Swap <span class="cfg" id="slip-btn" title="click to change slippage">slippage 0.5%</span></h3>
-          <div class="box">
-            <div class="lab"><span>You pay</span><span id="bal-in"></span></div>
-            <div class="row">
-              <input id="amt-in" placeholder="0.0" inputmode="decimal" autocomplete="off" />
-              <button class="tokbtn" id="tok-in-btn"><span id="tok-in-sym">ETH</span><span class="chev">▼</span></button>
-            </div>
-            <div class="usd" id="usd-in"></div>
-          </div>
-          <div class="flip"><button id="flip" title="flip">↕</button></div>
-          <div class="box">
-            <div class="lab"><span>You receive</span><span id="bal-out"></span></div>
-            <div class="row">
-              <input id="amt-out" placeholder="0.0" readonly />
-              <button class="tokbtn" id="tok-out-btn"><span id="tok-out-sym">USDG</span><span class="chev">▼</span></button>
-            </div>
-            <div class="usd" id="usd-out"></div>
-          </div>
-
-          <div class="qd" id="qd" style="display:none">
-            <div class="l"><span>Rate</span><b id="q-rate">—</b></div>
-            <div class="l"><span>Price impact</span><b id="q-imp">—</b></div>
-            <div class="l"><span>Min received</span><b id="q-min">—</b></div>
-            <div class="l"><span>Route</span><b id="q-route">—</b></div>
-          </div>
-
-          <button class="action" id="action" disabled>Connect wallet</button>
-          <div class="status" id="status">Every swap here is signed by your wallet and submitted through OrdoFi's protected RPC — never the public mempoolless default. Private routing, no frontrunning, rebates as the auction fills.</div>
-        </div>
+    <div class="spanel">
+      <div class="sides">
+        <button id="side-buy" class="on-buy">Buy</button>
+        <button id="side-sell">Sell</button>
       </div>
+      <div class="ticket">
+        <div class="tick-mode">
+          <span class="chip act">Market</span>
+          <span class="chip" title="protected routing is always on">Protected</span>
+          <span class="chip slip" id="slip-btn" title="click to change slippage">slippage 0.5%</span>
+        </div>
 
-      <div class="below">
-        <div class="panel fills">
-          <h3>Your fills <span class="cfg" style="font-family:var(--mono);font-size:11px;color:var(--muted);font-weight:400">stored locally, only you see these</span></h3>
-          <table><thead><tr><th>When</th><th>Swap</th><th>Received</th><th>Tx</th></tr></thead><tbody id="fills"><tr><td colspan="4" style="color:var(--muted)">No fills yet.</td></tr></tbody></table>
+        <div class="box">
+          <div class="lab"><span>You pay</span><span id="bal-in"></span></div>
+          <div class="row">
+            <input id="amt-in" placeholder="0.0" inputmode="decimal" autocomplete="off" />
+            <button class="tokbtn" id="tok-in-btn"><span id="tok-in-sym">USDG</span><span class="chev">▼</span></button>
+          </div>
+          <div class="usd" id="usd-in"></div>
+          <div class="qamt">
+            <button data-pct="25">25%</button><button data-pct="50">50%</button><button data-pct="100">Max</button>
+          </div>
         </div>
-        <div class="panel pitch">
-          <h3>What "protected" means here</h3>
-          <p><b>Private submission.</b> Your transaction goes to the sequencer through OrdoFi's gateway, not a public endpoint that leaks your intent to latency bots.</p>
-          <p><b>The backrun pays you.</b> If your trade moves a pool, OrdoFi auctions the right to rebalance it and the winning bid is charged on-chain — 90% of it flows back as rebates instead of vanishing to a bot.</p>
-          <p><b>Receipts.</b> Auction outcomes are signed and anchored on-chain. <a class="mono" href="/docs#receipts">Verify any fill →</a></p>
+        <div class="box">
+          <div class="lab"><span>You receive</span><span id="bal-out"></span></div>
+          <div class="row">
+            <input id="amt-out" placeholder="0.0" readonly />
+            <button class="tokbtn" id="tok-out-btn"><span id="tok-out-sym">ETH</span><span class="chev">▼</span></button>
+          </div>
+          <div class="usd" id="usd-out"></div>
         </div>
+
+        <div class="qd" id="qd" style="display:none">
+          <div class="l"><span>Rate</span><b id="q-rate">—</b></div>
+          <div class="l"><span>Est. price impact</span><b id="q-imp">—</b></div>
+          <div class="l"><span>Min received</span><b id="q-min">—</b></div>
+          <div class="l"><span>Route</span><b id="q-route">—</b></div>
+          <div class="l"><span>Submission</span><b>private · rpc.ordofi.network</b></div>
+        </div>
+
+        <button class="action" id="action" disabled>Connect wallet</button>
+        <div class="status" id="status">Swaps are signed by your wallet and submitted through OrdoFi's protected RPC — private routing, no frontrunning, rebates as the auction fills.</div>
       </div>
     </div>
+  </div>
+
+  <!-- bottom tabs -->
+  <div class="bpanel">
+    <div class="btabs">
+      <button class="on" data-tab="fills">Your fills</button>
+      <button data-tab="balances">Balances</button>
+      <button data-tab="protection">Protection</button>
+    </div>
+    <div class="bbody" id="bbody"></div>
+  </div>
+
+  <div class="sbar">
+    <span class="live"><i></i> live</span>
+    <span id="sb-tape">tape: —</span>
+    <span id="sb-pool"></span>
+    <span class="right">
+      <a href="/docs">Docs</a><a href="/explorer">Explorer</a>
+      <span>© 2026 OrdoFi Labs · not affiliated with Robinhood Markets</span>
+    </span>
   </div>
 
   <div class="modal" id="modal">
@@ -183,6 +278,19 @@
   (() => {
     const $ = (id) => document.getElementById(id);
     const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+    const EXPLORER_FALLBACK = "https://robinhoodchain.blockscout.com";
+
+    // ---------- fetch with a deadline ----------
+    async function jfetch(url, ms = 25_000) {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), ms);
+      try {
+        const r = await fetch(url, { signal: ctl.signal });
+        const d = await r.json();
+        if (d && d.error) throw new Error(d.error);
+        return d;
+      } finally { clearTimeout(t); }
+    }
 
     // ---------- units ----------
     const parseUnits = (s, d) => {
@@ -197,28 +305,43 @@
       const whole = v / base; let frac = (v % base).toString().padStart(d, "0").slice(0, prec).replace(/0+$/, "");
       return whole.toString() + (frac ? "." + frac : "");
     };
+    const fmtPx = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n >= 1 ? n.toFixed(2) : n.toPrecision(4);
+    const fmtAmt = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : n >= 1 ? n.toFixed(3) : n.toPrecision(3);
+    const fmtUsd = (n) => "$" + (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : n.toFixed(2));
+    const hhmmss = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
 
     // ---------- state ----------
     const NATIVE = "eth";
-    let CHAIN = null;
+    // The chart pair is fixed base/quote; Buy/Sell picks the ticket direction.
+    let baseTok = { address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: null };
+    let quoteTok = { address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", symbol: "USDG", decimals: 6, usdPerToken: 1 };
+    let side = "buy"; // buy = pay quote, receive base
     let tokens = [];
-    let tokIn = { address: NATIVE, symbol: "ETH", decimals: 18 };
-    let tokOut = null; // USDG once the list arrives
+    let CHAIN = null;
     let account = null;
     let provider = window.ethereum ?? null;
     let quote = null;
     let quoteSeq = 0;
     let slippageBps = 50;
     let modalSide = null;
-    let chart, series;
+    let tfMin = 1;
+    let candles1m = [];
+    let lastPx = null;
+    let myBalances = null;
+    let chart, series, volSeries;
+
+    const tokIn = () => (side === "buy" ? quoteTok : baseTok);
+    const tokOut = () => (side === "buy" ? baseTok : quoteTok);
+    const moneyRank = (t) => (t.symbol === "USDG" ? 3 : t.address === NATIVE || t.symbol === "WETH" ? 2 : 1);
 
     // ---------- chart ----------
     function initChart() {
       chart = LightweightCharts.createChart($("chart"), {
-        layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "JetBrains Mono, monospace" },
-        grid: { vertLines: { color: "rgba(0,0,0,0.05)" }, horzLines: { color: "rgba(0,0,0,0.05)" } },
-        rightPriceScale: { borderColor: "#dedad1" },
+        layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "JetBrains Mono, monospace", fontSize: 11 },
+        grid: { vertLines: { color: "rgba(0,0,0,0.045)" }, horzLines: { color: "rgba(0,0,0,0.045)" } },
+        rightPriceScale: { borderColor: "#dedad1", scaleMargins: { top: 0.06, bottom: 0.22 } },
         timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: false },
+        crosshair: { mode: 0 },
         autoSize: true,
       });
       series = chart.addCandlestickSeries({
@@ -226,48 +349,115 @@
         wickUpColor: "#1e9e6a", wickDownColor: "#c0392b",
         priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
       });
+      volSeries = chart.addHistogramSeries({ priceScaleId: "", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+      volSeries.priceScale().applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    }
+
+    function aggregate(cs, min) {
+      if (min === 1) return cs;
+      const w = min * 60, out = new Map();
+      for (const c of cs) {
+        const b = Math.floor(c.time / w) * w;
+        const cur = out.get(b);
+        if (!cur) out.set(b, { time: b, open: c.open, high: c.high, low: c.low, close: c.close, vol: c.vol ?? 0 });
+        else { cur.high = Math.max(cur.high, c.high); cur.low = Math.min(cur.low, c.low); cur.close = c.close; cur.vol += c.vol ?? 0; }
+      }
+      return [...out.values()].sort((a, b) => a.time - b.time);
+    }
+
+    function renderChart() {
+      const cs = aggregate(candles1m, tfMin);
+      series.setData(cs.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+      volSeries.setData(cs.map((c) => ({ time: c.time, value: c.vol ?? 0, color: c.close >= c.open ? "rgba(30,158,106,.45)" : "rgba(192,57,43,.45)" })));
+      chart.timeScale().fitContent();
     }
 
     async function loadChart() {
-      const base = tokIn.address === NATIVE ? "eth" : tokIn.address;
-      const quoteT = tokOut.address === NATIVE ? "eth" : tokOut.address;
-      $("pair-title").textContent = `${tokIn.symbol} / ${tokOut.symbol}`;
+      $("pair-title").textContent = `${baseTok.symbol} / ${quoteTok.symbol}`;
       try {
-        const d = await (await fetch(`/api/trade/candles?base=${base}&quote=${quoteT}`)).json();
-        if (d.error) throw new Error(d.error);
-        series.setData(d.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
-        chart.timeScale().fitContent();
-        const first = d.candles[0]?.open, last = d.last;
-        $("last-px").textContent = last ? fmtPx(last) + " " + d.quote.symbol : "—";
-        const chg = first && last ? ((last / first - 1) * 100) : null;
-        $("chg").textContent = chg == null ? "—" : (chg >= 0 ? "+" : "") + chg.toFixed(2) + "%";
-        $("chg").style.color = chg >= 0 ? "#1e9e6a" : "#c0392b";
+        const d = await jfetch(`/api/trade/candles?base=${baseTok.address}&quote=${quoteTok.address}`, 45_000);
+        candles1m = d.candles;
+        renderChart();
+        setPx(d.last);
+        const first = d.candles[0]?.open;
+        setDelta("chg", first && d.last ? (d.last / first - 1) * 100 : null);
+        const hourAgo = Math.floor(Date.now() / 1000) - 3600;
+        const c1h = d.candles.filter((c) => c.time <= hourAgo).pop();
+        setDelta("chg1h", c1h && d.last ? (d.last / c1h.close - 1) * 100 : null);
         $("vol").textContent = d.volumeQuote ? fmtPx(d.volumeQuote) + " " + d.quote.symbol : "—";
-        $("poolinfo").textContent = short(d.pool) + " · " + (d.fee / 10000).toFixed(2) + "%";
-        $("cf-sw").textContent = d.swaps.toLocaleString() + " swaps in window";
+        $("sb-tape").textContent = `tape: ${d.source} · ${d.swaps.toLocaleString()} swaps · ${d.candles.length} candles`;
+        $("cf-src").textContent = `pool tape — no oracles · source: ${d.source}`;
       } catch (e) {
-        series.setData([]);
-        $("last-px").textContent = "—";
-        $("poolinfo").textContent = "no direct pool";
-        $("cf-sw").textContent = String(e.message || "chart unavailable");
+        $("sb-tape").textContent = "tape: " + (e.message ?? "unavailable");
       }
     }
-    const fmtPx = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n >= 1 ? n.toFixed(2) : n.toPrecision(4);
+    function setDelta(id, v) {
+      const el = $(id);
+      if (v == null) { el.textContent = "—"; el.className = "v"; return; }
+      el.textContent = (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+      el.className = "v " + (v >= 0 ? "up" : "dn");
+    }
+    function setPx(v) {
+      if (v == null) return;
+      const el = $("last-px");
+      el.textContent = fmtPx(v) + " " + quoteTok.symbol;
+      if (lastPx != null && v !== lastPx) el.className = "bigpx " + (v > lastPx ? "up" : "dn");
+      lastPx = v;
+    }
+
+    // ---------- pair stats ----------
+    async function loadPair() {
+      try {
+        const d = await jfetch(`/api/trade/pair?base=${baseTok.address}&quote=${quoteTok.address}`);
+        $("tvl").textContent = d.tvlUsd ? fmtUsd(d.tvlUsd) : "—";
+        $("feetier").textContent = (d.fee / 10000).toFixed(2) + "%";
+        const pl = $("poolinfo");
+        pl.textContent = short(d.pool);
+        pl.href = `${(CHAIN?.explorer ?? EXPLORER_FALLBACK)}/address/${d.pool}`;
+        $("sb-pool").textContent = "pool " + short(d.pool);
+      } catch { $("tvl").textContent = "—"; $("feetier").textContent = "—"; }
+    }
+
+    // ---------- trades tape ----------
+    let seenTrades = new Set();
+    async function loadTrades() {
+      try {
+        const d = await jfetch(`/api/trade/trades?base=${baseTok.address}&quote=${quoteTok.address}&limit=40`, 20_000);
+        $("tc-size").textContent = "Size " + baseTok.symbol;
+        $("tp-sub").textContent = baseTok.symbol + "/" + quoteTok.symbol;
+        if (!d.trades.length) { $("tlist").innerHTML = `<div class="tempty">no swaps in the last few minutes</div>`; return; }
+        const isNew = (t) => !seenTrades.has(t.tx + t.logIndex);
+        $("tlist").innerHTML = d.trades.map((t) =>
+          `<div class="trow ${t.side}${isNew(t) && seenTrades.size ? " fresh" : ""}" data-tx="${t.tx}">
+            <span>${fmtPx(t.price)}</span><span>${fmtAmt(t.sizeBase)}</span><span>${hhmmss(t.time)}</span>
+          </div>`).join("");
+        seenTrades = new Set(d.trades.map((t) => t.tx + t.logIndex));
+        [...$("tlist").children].forEach((el) => el.addEventListener("click", () =>
+          window.open(`${(CHAIN?.explorer ?? EXPLORER_FALLBACK)}/tx/${el.dataset.tx}`, "_blank")));
+        setPx(d.trades[0].price);
+      } catch { /* tape hiccup — keep old rows */ }
+    }
 
     // ---------- tokens ----------
-    async function loadTokens() {
-      const list = await (await fetch("/api/trade/tokens")).json();
-      tokens = [{ address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: list.find((t) => t.symbol === "WETH")?.usdPerToken ?? null }, ...list];
-      tokOut = tokens.find((t) => t.symbol === "USDG") ?? tokens[1];
-      renderTokenButtons();
-      loadChart();
+    async function loadTokens(attempt = 0) {
+      try {
+        const list = await jfetch("/api/trade/tokens", 20_000);
+        tokens = [{ address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: list.find((t) => t.symbol === "WETH")?.usdPerToken ?? null }, ...list];
+        const b = tokens.find((t) => t.address === baseTok.address);
+        const q = tokens.find((t) => t.address === quoteTok.address);
+        if (b) baseTok = b;
+        if (q) quoteTok = q;
+        renderTokenButtons();
+      } catch {
+        if (attempt < 4) setTimeout(() => loadTokens(attempt + 1), 6000);
+      }
     }
     function renderTokenButtons() {
-      $("tok-in-sym").textContent = tokIn.symbol;
-      $("tok-out-sym").textContent = tokOut.symbol;
+      $("tok-in-sym").textContent = tokIn().symbol;
+      $("tok-out-sym").textContent = tokOut().symbol;
     }
-    function openModal(side) {
-      modalSide = side;
+    function openModal(which) {
+      modalSide = which;
       $("modal").classList.add("open");
       $("tok-search").value = "";
       renderList("");
@@ -276,19 +466,43 @@
     function renderList(q) {
       q = q.toLowerCase();
       const rows = tokens.filter((t) => !q || t.symbol.toLowerCase().includes(q) || t.address.includes(q));
-      $("tok-list").innerHTML = rows.map((t, i) =>
+      $("tok-list").innerHTML = rows.map((t) =>
         `<div class="tokrow" data-i="${tokens.indexOf(t)}">
            <div><div class="sym">${t.symbol}</div><div class="addr">${t.address === NATIVE ? "native" : short(t.address)}</div></div>
            <div class="pr">${t.usdPerToken ? "$" + fmtPx(t.usdPerToken) : ""}</div>
-         </div>`).join("") || `<div style="padding:18px;color:var(--muted);font-size:13px">no match</div>`;
+         </div>`).join("") || `<div style="padding:18px;color:var(--muted);font-size:13px">${tokens.length ? "no match" : "token list still loading…"}</div>`;
       [...$("tok-list").children].forEach((el) => el.addEventListener("click", () => {
         const t = tokens[Number(el.dataset.i)];
         if (!t) return;
-        if (modalSide === "in") { if (t.address === tokOut.address) tokOut = tokIn; tokIn = t; }
-        else { if (t.address === tokIn.address) tokIn = tokOut; tokOut = t; }
+        // Assign to the side that was clicked, then re-orient so the chart
+        // keeps money (USDG > ETH > rest) on the quote side.
+        const inSide = modalSide === "in";
+        const paysQuote = side === "buy";
+        if (inSide === paysQuote) { if (t.address === baseTok.address) baseTok = quoteTok; quoteTok = t; }
+        else { if (t.address === quoteTok.address) quoteTok = baseTok; baseTok = t; }
+        if (moneyRank(baseTok) > moneyRank(quoteTok)) { const x = baseTok; baseTok = quoteTok; quoteTok = x; side = side === "buy" ? "sell" : "buy"; setSide(side); }
         $("modal").classList.remove("open");
-        renderTokenButtons(); refreshBalances(); requestQuote(); loadChart();
+        pairChanged();
       }));
+    }
+
+    function pairChanged() {
+      renderTokenButtons();
+      $("amt-in").value = ""; $("amt-out").value = ""; $("qd").style.display = "none"; quote = null;
+      lastPx = null; seenTrades = new Set();
+      $("tlist").innerHTML = `<div class="tempty">waiting for tape…</div>`;
+      loadChart(); loadPair(); loadTrades(); refreshBalances(); setAction();
+    }
+
+    // ---------- buy/sell ----------
+    function setSide(s) {
+      side = s;
+      $("side-buy").className = s === "buy" ? "on-buy" : "";
+      $("side-sell").className = s === "sell" ? "on-sell" : "";
+      renderTokenButtons();
+      $("amt-in").value = ""; $("amt-out").value = ""; $("qd").style.display = "none"; quote = null;
+      updateBalHints();
+      setAction();
     }
 
     // ---------- wallet ----------
@@ -297,18 +511,18 @@
       const [a] = await provider.request({ method: "eth_requestAccounts" });
       account = a;
       $("nav-connect").textContent = short(a);
-      await ensureChain();
+      await ensureChain().catch(() => {});
       refreshBalances();
       requestQuote();
+      setAction();
     }
     async function ensureChain() {
-      if (!CHAIN) CHAIN = await (await fetch("/api/trade/chain")).json();
+      if (!CHAIN) CHAIN = await jfetch("/api/trade/chain");
       const current = await provider.request({ method: "eth_chainId" });
       if (current === CHAIN.idHex) return true;
       try {
         await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN.idHex }] });
       } catch (e) {
-        // 4902: unknown chain — add it, with the protected RPC as the endpoint.
         await provider.request({
           method: "wallet_addEthereumChain",
           params: [{
@@ -322,13 +536,21 @@
       }
       return (await provider.request({ method: "eth_chainId" })) === CHAIN.idHex;
     }
+
     async function refreshBalances() {
       if (!account) return;
       try {
-        const q = new URLSearchParams({ tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: "1", from: account });
-        const d = await (await fetch("/api/trade/quote?" + q)).json();
-        if (d.account) $("bal-in").textContent = "balance " + formatUnits(d.account.balance, tokIn.decimals ?? d.tokenIn.decimals, 5);
-      } catch { /* balances are cosmetic */ }
+        myBalances = await jfetch(`/api/trade/balances?address=${account}`, 30_000);
+        updateBalHints();
+        if (activeTab === "balances") renderTab();
+      } catch { /* cosmetic */ }
+    }
+    const balOf = (t) => myBalances?.tokens.find((r) => r.address === t.address)?.amount ?? null;
+    function updateBalHints() {
+      const bi = balOf(tokIn()), bo = balOf(tokOut());
+      $("bal-in").textContent = bi != null ? "balance " + fmtAmt(bi) : "";
+      $("bal-out").textContent = bo != null ? "balance " + fmtAmt(bo) : "";
+      document.querySelectorAll(".qamt button").forEach((b) => { b.disabled = bi == null; });
     }
 
     // ---------- quoting ----------
@@ -338,28 +560,27 @@
     async function fetchQuote() {
       const seq = ++quoteSeq;
       quote = null;
-      const raw = parseUnits($("amt-in").value, tokIn.decimals);
+      const tin = tokIn(), tout = tokOut();
+      const raw = parseUnits($("amt-in").value, tin.decimals);
       if (!raw || raw <= 0n) { $("qd").style.display = "none"; $("amt-out").value = ""; setAction(); return; }
       setStatus("quoting…");
       try {
-        const q = new URLSearchParams({ tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: raw.toString(), slippageBps: String(slippageBps) });
+        const q = new URLSearchParams({ tokenIn: tin.address, tokenOut: tout.address, amountIn: raw.toString(), slippageBps: String(slippageBps) });
         if (account) q.set("from", account);
-        const d = await (await fetch("/api/trade/quote?" + q)).json();
-        if (seq !== quoteSeq) return; // superseded
-        if (d.error) throw new Error(d.error);
+        const d = await jfetch("/api/trade/quote?" + q, 30_000);
+        if (seq !== quoteSeq) return;
         quote = d;
         $("amt-out").value = formatUnits(d.amountOut, d.tokenOut.decimals, 6);
         const rate = Number(formatUnits(d.amountOut, d.tokenOut.decimals, 8)) / Number($("amt-in").value || 1);
-        $("q-rate").textContent = `1 ${tokIn.symbol} ≈ ${fmtPx(rate)} ${tokOut.symbol}`;
+        $("q-rate").textContent = `1 ${tin.symbol} ≈ ${fmtPx(rate)} ${tout.symbol}`;
         $("q-imp").textContent = d.priceImpactBps == null ? "—" : (d.priceImpactBps / 100).toFixed(2) + "%";
         $("q-imp").parentElement.classList.toggle("warn", d.priceImpactBps > 100);
-        $("q-min").textContent = formatUnits(d.minOut, d.tokenOut.decimals, 6) + " " + tokOut.symbol;
+        $("q-min").textContent = formatUnits(d.minOut, d.tokenOut.decimals, 6) + " " + tout.symbol;
         $("q-route").textContent = d.route.hops === 1 ? `direct · ${(d.route.fees[0] / 10000).toFixed(2)}%` : `${d.route.hops} hops`;
-        const usdIn = tokens.find((t) => t.address === tokIn.address)?.usdPerToken;
-        $("usd-in").textContent = usdIn ? "≈ $" + fmtPx(usdIn * Number($("amt-in").value)) : "";
-        const usdOut = tokens.find((t) => t.address === tokOut.address)?.usdPerToken;
-        $("usd-out").textContent = usdOut ? "≈ $" + fmtPx(usdOut * Number($("amt-out").value)) : "";
-        if (d.account) $("bal-in").textContent = "balance " + formatUnits(d.account.balance, d.tokenIn.decimals, 5);
+        const usdIn = tokens.find((t) => t.address === tin.address)?.usdPerToken ?? (tin.symbol === "USDG" ? 1 : null);
+        $("usd-in").textContent = usdIn ? "≈ " + fmtUsd(usdIn * Number($("amt-in").value)) : "";
+        const usdOut = tokens.find((t) => t.address === tout.address)?.usdPerToken ?? (tout.symbol === "USDG" ? 1 : null);
+        $("usd-out").textContent = usdOut ? "≈ " + fmtUsd(usdOut * Number($("amt-out").value)) : "";
         $("qd").style.display = "block";
         setStatus("");
       } catch (e) {
@@ -371,15 +592,16 @@
     }
     setInterval(() => { if ($("amt-in").value && document.visibilityState === "visible") fetchQuote(); }, 15000);
 
-    // ---------- action button ----------
+    // ---------- action ----------
     function setAction() {
       const b = $("action");
+      const verb = side === "buy" ? "Buy " + baseTok.symbol : "Sell " + baseTok.symbol;
       if (!provider) { b.textContent = "Install a wallet"; b.disabled = false; return; }
       if (!account) { b.textContent = "Connect wallet"; b.disabled = false; return; }
-      if (!quote) { b.textContent = "Enter an amount"; b.disabled = true; return; }
-      if (quote.account && !quote.account.sufficient) { b.textContent = "Insufficient " + tokIn.symbol; b.disabled = true; return; }
-      if (quote.approval) { b.textContent = "Approve " + tokIn.symbol; b.disabled = false; return; }
-      b.textContent = "Swap"; b.disabled = false;
+      if (!quote) { b.textContent = verb; b.disabled = true; return; }
+      if (quote.account && !quote.account.sufficient) { b.textContent = "Insufficient " + tokIn().symbol; b.disabled = true; return; }
+      if (quote.approval) { b.textContent = "Approve " + tokIn().symbol; b.disabled = false; return; }
+      b.textContent = verb; b.disabled = false;
     }
     function setStatus(html) { $("status").innerHTML = html || ""; }
 
@@ -405,10 +627,10 @@
           setStatus("approval sent — waiting…");
           await waitReceipt(hash);
           await fetchQuote();
-          setStatus("approved. Ready to swap.");
+          setStatus("approved. Ready to trade.");
           return;
         }
-        setStatus("confirm the swap in your wallet…");
+        setStatus("confirm in your wallet…");
         const hash = await provider.request({
           method: "eth_sendTransaction",
           params: [{ from: account, to: quote.tx.to, data: quote.tx.data, value: quote.tx.value }],
@@ -420,9 +642,9 @@
           ? `filled ✓ &nbsp;<a target="_blank" href="${CHAIN.explorer}/tx/${hash}">receipt</a> · routed privately via rpc.ordofi.network`
           : `reverted — <a target="_blank" href="${CHAIN.explorer}/tx/${hash}">inspect</a> (price likely moved past your slippage)`));
         if (ok) {
-          saveFill({ t: Date.now(), inS: `${$("amt-in").value} ${tokIn.symbol}`, outS: `${$("amt-out").value} ${tokOut.symbol}`, hash });
+          saveFill({ t: Date.now(), inS: `${$("amt-in").value} ${tokIn().symbol}`, outS: `${$("amt-out").value} ${tokOut().symbol}`, hash });
           $("amt-in").value = ""; $("amt-out").value = ""; $("qd").style.display = "none"; quote = null;
-          refreshBalances();
+          refreshBalances(); loadTrades();
         }
       } catch (e) {
         setStatus("cancelled or failed: " + (e?.message ?? e).toString().slice(0, 140));
@@ -432,19 +654,40 @@
       }
     }
 
-    // ---------- fills ----------
+    // ---------- bottom tabs ----------
+    let activeTab = "fills";
     const fills = JSON.parse(localStorage.getItem("ordofi.fills") ?? "[]");
-    function saveFill(f) { fills.unshift(f); localStorage.setItem("ordofi.fills", JSON.stringify(fills.slice(0, 30))); renderFills(); }
-    function renderFills() {
-      if (!fills.length) return;
-      $("fills").innerHTML = fills.map((f) =>
-        `<tr><td>${new Date(f.t).toLocaleTimeString()}</td><td>${f.inS}</td><td>${f.outS}</td>
-         <td><a target="_blank" href="${(CHAIN?.explorer ?? "https://robinhoodchain.blockscout.com")}/tx/${f.hash}">${f.hash.slice(0, 10)}…</a></td></tr>`).join("");
+    function saveFill(f) { fills.unshift(f); localStorage.setItem("ordofi.fills", JSON.stringify(fills.slice(0, 30))); renderTab(); }
+    function renderTab() {
+      const el = $("bbody");
+      if (activeTab === "fills") {
+        el.innerHTML = fills.length
+          ? `<table><thead><tr><th>When</th><th>Paid</th><th>Received</th><th>Tx</th></tr></thead><tbody>` +
+            fills.map((f) => `<tr><td>${new Date(f.t).toLocaleTimeString()}</td><td>${f.inS}</td><td>${f.outS}</td>
+              <td><a target="_blank" href="${(CHAIN?.explorer ?? EXPLORER_FALLBACK)}/tx/${f.hash}">${f.hash.slice(0, 10)}…</a></td></tr>`).join("") +
+            `</tbody></table>`
+          : `<div class="empty">No fills yet — they're stored locally, only you see them.</div>`;
+      } else if (activeTab === "balances") {
+        if (!account) { el.innerHTML = `<div class="empty">Connect a wallet to see balances.</div>`; return; }
+        if (!myBalances) { el.innerHTML = `<div class="empty">loading balances…</div>`; refreshBalances(); return; }
+        el.innerHTML = myBalances.tokens.length
+          ? `<table><thead><tr><th>Asset</th><th>Amount</th><th>Value</th></tr></thead><tbody>` +
+            myBalances.tokens.map((r) => `<tr><td>${r.symbol}</td><td>${fmtAmt(r.amount)}</td><td>${r.usd != null ? fmtUsd(r.usd) : "—"}</td></tr>`).join("") +
+            `</tbody></table>`
+          : `<div class="empty">No balances on Robinhood Chain yet.</div>`;
+      } else {
+        el.innerHTML = `<div class="prot-copy">
+          <b>Private submission.</b> Your transaction reaches the sequencer through OrdoFi's gateway — never a public endpoint that leaks your intent to latency bots. &nbsp;
+          <b>The backrun pays you.</b> If your trade moves a pool, OrdoFi auctions the right to rebalance it; the winning bid is charged on-chain and 90% flows back as rebates. &nbsp;
+          <b>Receipts.</b> Auction outcomes are signed and anchored on-chain — <a href="/docs#receipts">verify any fill</a>.
+        </div>`;
+      }
     }
 
     // ---------- events ----------
     $("amt-in").addEventListener("input", requestQuote);
-    $("flip").addEventListener("click", () => { const t = tokIn; tokIn = tokOut; tokOut = t; renderTokenButtons(); $("amt-in").value = ""; $("amt-out").value = ""; $("qd").style.display = "none"; loadChart(); setAction(); });
+    $("side-buy").addEventListener("click", () => setSide("buy"));
+    $("side-sell").addEventListener("click", () => setSide("sell"));
     $("tok-in-btn").addEventListener("click", () => openModal("in"));
     $("tok-out-btn").addEventListener("click", () => openModal("out"));
     $("modal-x").addEventListener("click", () => $("modal").classList.remove("open"));
@@ -457,37 +700,59 @@
       const n = Number(v);
       if (Number.isFinite(n) && n > 0 && n <= 30) { slippageBps = Math.round(n * 100); $("slip-btn").textContent = `slippage ${n}%`; requestQuote(); }
     });
+    document.querySelectorAll(".qamt button").forEach((b) => b.addEventListener("click", () => {
+      const bal = balOf(tokIn());
+      if (bal == null) return;
+      let v = bal * (Number(b.dataset.pct) / 100);
+      // Native ETH: leave a sliver for gas when maxing out.
+      if (tokIn().address === NATIVE && Number(b.dataset.pct) === 100) v = Math.max(0, v - 0.0003);
+      $("amt-in").value = v > 0 ? String(Number(v.toPrecision(8))) : "";
+      requestQuote();
+    }));
+    document.querySelectorAll(".btabs button").forEach((b) => b.addEventListener("click", () => {
+      document.querySelectorAll(".btabs button").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on");
+      activeTab = b.dataset.tab;
+      renderTab();
+    }));
+    document.querySelectorAll(".tf").forEach((b) => b.addEventListener("click", () => {
+      document.querySelectorAll(".tf").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on");
+      tfMin = Number(b.dataset.tf);
+      renderChart();
+    }));
     if (provider) {
-      provider.on?.("accountsChanged", (a) => { account = a[0] ?? null; $("nav-connect").textContent = account ? short(account) : "Connect"; setAction(); });
+      provider.on?.("accountsChanged", (a) => { account = a[0] ?? null; myBalances = null; $("nav-connect").textContent = account ? short(account) : "Connect"; if (account) refreshBalances(); updateBalHints(); setAction(); renderTab(); });
       provider.on?.("chainChanged", () => setAction());
     }
 
-    // ---------- boot ----------
+    // ---------- boot: nothing gates on anything else ----------
     initChart();
-    const qp = new URLSearchParams(location.search);
+    renderTokenButtons();
+    renderTab();
+    setAction();
+    loadChart(); loadPair(); loadTrades();
+    jfetch("/api/trade/chain").then((c) => { CHAIN = c; renderTab(); }).catch(() => {});
     loadTokens().then(() => {
-      // Deep links: /trade?pay=eth&receive=USDG&amt=0.5 (symbol or address).
+      // Deep links: /trade?pay=eth&receive=AAPL&amt=0.5 (symbol or address).
+      const qp = new URLSearchParams(location.search);
       const bySym = (v) => v && tokens.find((t) => t.symbol.toLowerCase() === v.toLowerCase() || t.address === v.toLowerCase());
       const pIn = bySym(qp.get("pay")), pOut = bySym(qp.get("receive"));
-      if (pIn && pIn.address !== (pOut ?? tokOut).address) tokIn = pIn;
-      if (pOut && pOut.address !== tokIn.address) tokOut = pOut;
-      renderTokenButtons();
-      if (pIn || pOut) loadChart();
+      if (pIn || pOut) {
+        let tin = pIn ?? tokIn(), tout = pOut ?? tokOut();
+        if (tin.address !== tout.address) {
+          if (moneyRank(tin) >= moneyRank(tout)) { quoteTok = tin; baseTok = tout; side = "buy"; }
+          else { baseTok = tin; quoteTok = tout; side = "sell"; }
+          setSide(side);
+          pairChanged();
+        }
+      }
       if (qp.get("amt")) { $("amt-in").value = qp.get("amt"); requestQuote(); }
-      setAction();
     });
-    fetch("/api/trade/chain").then((r) => r.json()).then((c) => { CHAIN = c; renderFills(); });
-    setInterval(loadChart, 60_000);
+    setInterval(loadChart, 30_000);
+    setInterval(loadPair, 60_000);
+    setInterval(() => { if (document.visibilityState === "visible") loadTrades(); }, 5_000);
   })();
   </script>
-
-  <footer class="site-footer">
-    <div class="wrap">
-      <div class="footer-bottom">
-        <div class="disclaimer">Swaps execute on Robinhood Chain through the canonical Uniswap V3 router; OrdoFi routes and protects but never holds funds. Quotes are indicative until your wallet signs. © 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc.</div>
-        <div class="socials"><a href="/docs">Docs</a><a href="/explorer">Explorer</a></div>
-      </div>
-    </div>
-  </footer>
 </body>
 </html>

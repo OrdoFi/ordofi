@@ -111,23 +111,27 @@ export async function getTokenInfo(address: string): Promise<TokenInfo> {
 
   let symbol = key.slice(0, 8);
   let decimals = 18;
+  let resolved = true;
   try {
     symbol = decodeStringReturn(await ethCall(address, SYMBOL_SIG)) ?? symbol;
   } catch {
-    /* fallback */
+    resolved = false;
   }
   try {
     const dec = await ethCall(address, DECIMALS_SIG);
     if (dec && dec !== "0x") decimals = parseInt(dec, 16);
+    else resolved = false;
   } catch {
-    /* fallback */
+    resolved = false;
   }
 
   const anchor = QUOTE_TOKENS[key];
   const usdPerToken = anchor === undefined ? null : anchor === "eth" ? await ethUsd() : anchor;
 
   const info: TokenInfo = { address: key, symbol, decimals, usdPerToken };
-  cache.set(key, info);
+  // A throttled RPC must not freeze an address-prefix symbol or the default
+  // 18 decimals into the cache — retry on the next ask instead.
+  if (resolved) cache.set(key, info);
   return info;
 }
 

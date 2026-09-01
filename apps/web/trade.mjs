@@ -117,17 +117,36 @@ async function call(to, abi, functionName, args = []) {
 // ---------------------------------------------------------------------------
 
 let tokenCache = null; // { at, list }
+let tokenRefreshing = null;
 
+/**
+ * Stale-while-revalidate: the list takes dozens of RPC round-trips to build,
+ * so a cold cache must never block the page. Serve whatever we have and
+ * rebuild in the background; only the very first call ever waits.
+ */
 export async function tradeTokens(store) {
-  if (tokenCache && Date.now() - tokenCache.at < 600_000) return tokenCache.list;
+  const stale = !tokenCache || Date.now() - tokenCache.at >= 600_000;
+  if (stale && !tokenRefreshing) {
+    tokenRefreshing = buildTokenList(store)
+      .then((list) => { tokenCache = { at: Date.now(), list }; })
+      .catch(() => { /* keep the stale list */ })
+      .finally(() => { tokenRefreshing = null; });
+  }
+  if (tokenCache) return tokenCache.list;
+  await tokenRefreshing;
+  return tokenCache?.list ?? [];
+}
 
+async function buildTokenList(store) {
   const seen = new Map();
   const add = async (address) => {
     const a = address.toLowerCase();
     if (seen.has(a)) return;
     try {
       const info = await getTokenInfo(a);
-      if (!info.symbol || info.symbol === "?") return;
+      // An address-prefix symbol means the lookup was throttled; leave the
+      // token out rather than list something nobody can recognize.
+      if (!info.symbol || info.symbol === "?" || /^0x[0-9a-f]{6}$/i.test(info.symbol)) return;
       seen.set(a, {
         address: a,
         symbol: info.symbol,
@@ -158,12 +177,10 @@ export async function tradeTokens(store) {
     }
   }
 
-  const list = [...seen.values()].sort((a, b) => {
+  return [...seen.values()].sort((a, b) => {
     const rank = (t) => (t.address === WETH ? 0 : t.address === USDG ? 1 : t.usdPerToken ? 2 : 3);
     return rank(a) - rank(b) || a.symbol.localeCompare(b.symbol);
   });
-  tokenCache = { at: Date.now(), list };
-  return list;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,5 +521,177 @@ async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks, befor
   const candles = [...buckets.values()].sort((a, c) => a.time - c.time);
   const data = { candles, truncated };
   candleCache.set(cacheKey, { at: Date.now(), data });
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Pair stats: what the instrument bar shows
+// ---------------------------------------------------------------------------
+
+const int256 = (word) => {
+  const v = BigInt("0x" + word);
+  return v >= 2n ** 255n ? v - 2n ** 256n : v;
+};
+
+const pairCache = new Map(); // pool -> { at, data }
+
+export async function tradePair({ base, quote }) {
+  const b = (base === NATIVE ? WETH : base).toLowerCase();
+  const q = (quote === NATIVE ? WETH : quote).toLowerCase();
+  const found = await bestPool(b, q);
+  if (!found) throw new Error("no direct V3 pool for this pair");
+
+  const hit = pairCache.get(found.pool);
+  if (hit && Date.now() - hit.at < 60_000) return hit.data;
+
+  const [infoB, infoQ, balB, balQ] = await Promise.all([
+    getTokenInfo(b),
+    getTokenInfo(q),
+    call(b, ERC20_ABI, "balanceOf", [found.pool]),
+    call(q, ERC20_ABI, "balanceOf", [found.pool]),
+  ]);
+  const wholeB = toWhole(balB, infoB.decimals);
+  const wholeQ = toWhole(balQ, infoQ.decimals);
+  const tvlUsd =
+    (infoB.usdPerToken ? wholeB * infoB.usdPerToken : 0) +
+    (infoQ.usdPerToken ? wholeQ * infoQ.usdPerToken : 0);
+
+  const data = {
+    pool: found.pool,
+    fee: found.fee,
+    tvlUsd,
+    reserves: { base: wholeB, quote: wholeQ },
+    base: { address: b, symbol: infoB.symbol, usdPerToken: infoB.usdPerToken },
+    quote: { address: q, symbol: infoQ.symbol, usdPerToken: infoQ.usdPerToken },
+  };
+  pairCache.set(found.pool, { at: Date.now(), data });
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Trades tape: the pool's most recent individual swaps
+// ---------------------------------------------------------------------------
+
+const tradesCache = new Map(); // pool -> { at, data }
+
+export async function tradeTrades({ base, quote, limit = 40 }) {
+  const b = (base === NATIVE ? WETH : base).toLowerCase();
+  const q = (quote === NATIVE ? WETH : quote).toLowerCase();
+  const found = await bestPool(b, q);
+  if (!found) throw new Error("no direct V3 pool for this pair");
+
+  const hit = tradesCache.get(found.pool);
+  if (hit && Date.now() - hit.at < 5_000) return hit.data;
+
+  const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
+  const [infoB, infoQ] = await Promise.all([getTokenInfo(b), getTokenInfo(q)]);
+
+  // Recent-only walk: a couple of minutes of blocks is plenty for the busy
+  // pools and stays inside every upstream's non-archive window.
+  const logs = [];
+  let hi = head;
+  let span = 900;
+  let budget = 5;
+  while (logs.length < limit && budget-- > 0 && hi > head - 30_000) {
+    const lo = Math.max(0, hi - span + 1);
+    try {
+      const part = await rpcFetch("eth_getLogs", [
+        {
+          address: found.pool,
+          topics: [V3_SWAP_TOPIC],
+          fromBlock: "0x" + lo.toString(16),
+          toBlock: "0x" + hi.toString(16),
+        },
+      ]);
+      logs.push(...part);
+      hi = lo - 1;
+      if (part.length < limit) span = Math.min(span * 3, 6_000);
+    } catch {
+      if (span > 150) span = Math.floor(span / 2);
+      else break;
+    }
+  }
+
+  const scale = 10 ** (infoB.decimals - infoQ.decimals);
+  const now = Math.floor(Date.now() / 1000);
+  const rows = [];
+  for (const l of logs) {
+    const data = l.data.slice(2);
+    if (data.length < 5 * 64) continue;
+    const a0 = int256(data.slice(0, 64));
+    const a1 = int256(data.slice(64, 128));
+    const sqrt = Number(BigInt("0x" + data.slice(128, 192)));
+    const p = (sqrt / 2 ** 96) ** 2;
+    const price = (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const amtBase = found.base0 ? a0 : a1;
+    const amtQuote = found.base0 ? a1 : a0;
+    const block = Number(BigInt(l.blockNumber));
+    rows.push({
+      block,
+      time: now - Math.round((head - block) * 0.1),
+      tx: l.transactionHash,
+      logIndex: Number(BigInt(l.logIndex ?? "0x0")),
+      price,
+      sizeBase: Math.abs(toWhole(amtBase < 0n ? -amtBase : amtBase, infoB.decimals)),
+      sizeQuote: Math.abs(toWhole(amtQuote < 0n ? -amtQuote : amtQuote, infoQ.decimals)),
+      // Positive base delta means the pool received base: someone sold it.
+      side: amtBase > 0n ? "sell" : "buy",
+    });
+  }
+  rows.sort((x, y) => y.block - x.block || y.logIndex - x.logIndex);
+
+  const data = {
+    pool: found.pool,
+    base: { address: b, symbol: infoB.symbol },
+    quote: { address: q, symbol: infoQ.symbol },
+    trades: rows.slice(0, limit),
+  };
+  tradesCache.set(found.pool, { at: Date.now(), data });
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Wallet balances across every listed token
+// ---------------------------------------------------------------------------
+
+const balancesCache = new Map(); // address -> { at, data }
+
+export async function tradeBalances(store, address) {
+  const a = String(address ?? "").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error("bad address");
+  const hit = balancesCache.get(a);
+  if (hit && Date.now() - hit.at < 30_000) return hit.data;
+
+  const list = await tradeTokens(store);
+  const rows = [];
+  const weth = list.find((t) => t.address === WETH);
+  try {
+    const eth = BigInt(await rpcFetch("eth_getBalance", [a, "latest"]));
+    if (eth > 0n) {
+      const amount = toWhole(eth, 18);
+      rows.push({ symbol: "ETH", address: NATIVE, amount, usd: weth?.usdPerToken ? amount * weth.usdPerToken : null });
+    }
+  } catch { /* show what we can */ }
+
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: 5 }, async () => {
+      while (i < list.length) {
+        const t = list[i++];
+        try {
+          const bal = await call(t.address, ERC20_ABI, "balanceOf", [a]);
+          if (bal > 0n) {
+            const amount = toWhole(bal, t.decimals);
+            rows.push({ symbol: t.symbol, address: t.address, amount, usd: t.usdPerToken ? amount * t.usdPerToken : null });
+          }
+        } catch { /* token contract said no — skip */ }
+      }
+    }),
+  );
+  rows.sort((x, y) => (y.usd ?? 0) - (x.usd ?? 0));
+
+  const data = { address: a, tokens: rows, at: new Date().toISOString() };
+  balancesCache.set(a, { at: Date.now(), data });
   return data;
 }

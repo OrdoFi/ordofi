@@ -4,7 +4,7 @@ import { join, extname } from "node:path";
 import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
 import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
-import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN } from "./trade.mjs";
+import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances } from "./trade.mjs";
 
 /**
  * The index is the query path. NDJSON is kept as the raw record and used as a
@@ -490,6 +490,49 @@ createServer(async (req, res) => {
     return;
   }
 
+  if (path === "/api/trade/pair") {
+    try {
+      const data = await tradePair({
+        base: (url.searchParams.get("base") ?? "").toLowerCase(),
+        quote: (url.searchParams.get("quote") ?? "").toLowerCase(),
+      });
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=30" });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (path === "/api/trade/trades") {
+    try {
+      const data = await tradeTrades({
+        base: (url.searchParams.get("base") ?? "").toLowerCase(),
+        quote: (url.searchParams.get("quote") ?? "").toLowerCase(),
+        limit: Math.max(5, Math.min(100, Number(url.searchParams.get("limit") ?? 40))),
+      });
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (path === "/api/trade/balances") {
+    try {
+      const data = await tradeBalances(store, url.searchParams.get("address") ?? "");
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
   if (path === "/api/report") {
     const rep = loadReport();
     res.writeHead(200, { "content-type": "application/json" });
@@ -559,3 +602,7 @@ createServer(async (req, res) => {
   res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
   res.end(readFileSync(file));
 }).listen(PORT, () => console.log(`OrdoFi web | http://localhost:${PORT}  (dashboard at /dashboard)`));
+
+// Warm the token list at boot: building it takes dozens of RPC round-trips,
+// and the first page load should never be the one paying for that.
+tradeTokens(store).catch(() => {});
