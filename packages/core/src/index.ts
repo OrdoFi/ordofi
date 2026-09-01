@@ -29,6 +29,19 @@ export function normalizePrivateKey(
   return withPrefix as `0x${string}`;
 }
 
+/**
+ * Sent on every upstream RPC call. The public endpoint sits behind Cloudflare
+ * bot detection that scores undici's default fingerprint poorly — the same
+ * server saw curl pass while the services got 403s. An honest, identifying
+ * agent string is the cheapest thing that helps, and the decent thing to send
+ * regardless.
+ */
+export const RPC_HEADERS = {
+  "content-type": "application/json",
+  accept: "application/json",
+  "user-agent": "OrdoFi/0.1 (+https://app.ordofi.network)",
+} as const;
+
 export const ENDPOINTS = {
   rpc: process.env.ORDO_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
   sequencerFeed:

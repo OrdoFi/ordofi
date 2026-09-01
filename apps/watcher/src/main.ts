@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ENDPOINTS } from "@ordofi/core";
+import { ENDPOINTS, RPC_HEADERS } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { analyzeBlock } from "./detect.js";
 
@@ -36,7 +36,7 @@ let rpcId = 0;
 async function rpc<T = any>(method: string, params: unknown[] = []): Promise<T> {
   const res = await fetch(RPC, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: RPC_HEADERS,
     body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
   });
   if (!res.ok) throw new Error(`RPC HTTP ${res.status}`);
@@ -156,9 +156,11 @@ async function main() {
   );
   console.log(`ordo watcher | writing ${swapsFile} and ${arbsFile}`);
 
+  let consecutiveFailures = 0;
   for (;;) {
     try {
       const head = parseInt(await rpc<string>("eth_blockNumber"), 16);
+      // (reset below only after the whole batch succeeds)
       // Cap catch-up batches so we never hammer the public RPC.
       const target = Math.min(head, next + 10);
       while (next <= target) {
@@ -169,9 +171,15 @@ async function main() {
         // Throttle so backfills don't trip the public RPC's rate limit.
         if (BLOCK_DELAY_MS > 0) await new Promise((r) => setTimeout(r, BLOCK_DELAY_MS));
       }
+      consecutiveFailures = 0;
     } catch (err) {
-      console.error(`[error] ${(err as Error).message} — retrying`);
-      await new Promise((r) => setTimeout(r, 2000));
+      // A flat 2s retry kept the IP hot enough that Cloudflare's challenge
+      // never expired. Backing off exponentially is what actually ends a
+      // 403 episode; capping it keeps recovery reasonably prompt.
+      consecutiveFailures++;
+      const waitMs = Math.min(60_000, 2_000 * 2 ** Math.min(consecutiveFailures - 1, 5));
+      console.error(`[error] ${(err as Error).message} — backing off ${Math.round(waitMs / 1000)}s (failure ${consecutiveFailures})`);
+      await new Promise((r) => setTimeout(r, waitMs));
     }
     await new Promise((r) => setTimeout(r, POLL_MS));
   }

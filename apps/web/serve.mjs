@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { createPublicClient, http, parseAbiItem, formatEther } from "viem";
+import { RPC_HEADERS } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 
 /**
@@ -132,9 +133,27 @@ const DEPOSITED_EVENT = parseAbiItem(
 );
 const CLAIMED_EVENT = parseAbiItem("event Claimed(address indexed beneficiary, uint256 amount)");
 
+let lastOnchain = null; // { data, at } — survives upstream challenges
+
 async function onchainStats(address) {
   if (!address) return { deployed: false, note: "ORDO_SETTLEMENT_ADDRESS not set" };
-  const client = createPublicClient({ transport: http(RPC) });
+  try {
+    const data = await onchainStatsFresh(address);
+    lastOnchain = { data, at: Date.now() };
+    return data;
+  } catch (e) {
+    // The public RPC intermittently refuses our log scans (rate limit / bot
+    // challenge). Serving the last good snapshot, marked stale, is honest;
+    // reporting a deployed contract as "deployed: false" is not.
+    if (lastOnchain) {
+      return { ...lastOnchain.data, stale: true, asOf: new Date(lastOnchain.at).toISOString() };
+    }
+    throw e;
+  }
+}
+
+async function onchainStatsFresh(address) {
+  const client = createPublicClient({ transport: http(RPC, { fetchOptions: { headers: RPC_HEADERS } }) });
   const head = await client.getBlockNumber();
   // Scan a recent window; a production indexer would persist a cursor.
   const fromBlock = head > 500000n ? head - 500000n : 0n;
@@ -192,7 +211,7 @@ const VIEW_ABI = [
 ];
 
 async function accountView(address) {
-  const client = createPublicClient({ transport: http(RPC) });
+  const client = createPublicClient({ transport: http(RPC, { fetchOptions: { headers: RPC_HEADERS } }) });
   const [bond, claimable] = SETTLEMENT
     ? await Promise.all([
         client.readContract({ address: SETTLEMENT, abi: VIEW_ABI, functionName: "bond", args: [address] }),

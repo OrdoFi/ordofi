@@ -1,4 +1,4 @@
-import { ENDPOINTS, ETH_USD, QUOTE_TOKENS } from "./index.js";
+import { ENDPOINTS, ETH_USD, QUOTE_TOKENS, RPC_HEADERS } from "./index.js";
 
 /**
  * Minimal on-chain metadata + USD valuation for tokens.
@@ -17,7 +17,7 @@ let rpcId = 0;
 async function ethCall(to: string, data: string): Promise<string> {
   const res = await fetch(RPC, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: RPC_HEADERS,
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: ++rpcId,
