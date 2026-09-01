@@ -28,7 +28,6 @@ const NAME = flag("name", "Robinhood Chain");
 const POOLS = (flag("pools", "") || "").split(",").map((p) => p.trim()).filter(Boolean);
 const AS_JSON = args.includes("--json");
 const DB = flag("db", process.env.ORDO_DB ?? "data/ordo.db");
-const ETH_USD = Number(process.env.ORDO_ETH_USD ?? 2250);
 const REBATE_USER = Number(process.env.ORDO_REBATE_USER ?? 0.9);
 const REBATE_APP = Number(process.env.ORDO_REBATE_APP ?? 0.05);
 

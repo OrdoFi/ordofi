@@ -144,7 +144,17 @@ export const ENDPOINTS = {
 export const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
 export const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
 
-export const ETH_USD = Number(process.env.ORDO_ETH_USD ?? 2250);
+/**
+ * Static fallback only. `ethUsd()` in pricing.ts reads the live rate off the
+ * chain; this is what it falls back to when that read fails. Number("") is 0,
+ * so an empty variable has to be treated as unset or every WETH figure becomes
+ * worthless rather than merely stale.
+ */
+export const ETH_USD = (() => {
+  const raw = process.env.ORDO_ETH_USD;
+  const n = raw === undefined || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 2450;
+})();
 
 /** address (lowercase) -> USD value of 1 whole token, or "eth" to use ETH_USD. */
 export const QUOTE_TOKENS: Record<string, number | "eth"> = {

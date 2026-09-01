@@ -1,4 +1,4 @@
-import { ENDPOINTS, ETH_USD, QUOTE_TOKENS, RPC_HEADERS } from "./index.js";
+import { ETH_USD, QUOTE_TOKENS, WETH, rpcFetch } from "./index.js";
 
 /**
  * Minimal on-chain metadata + USD valuation for tokens.
@@ -9,25 +9,13 @@ import { ENDPOINTS, ETH_USD, QUOTE_TOKENS, RPC_HEADERS } from "./index.js";
  * only quote-denominated value keeps the headline number honest.
  */
 
-const RPC = ENDPOINTS.rpc;
 const DECIMALS_SIG = "0x313ce567";
 const SYMBOL_SIG = "0x95d89b41";
+const SLOT0_SIG = "0x3850c7bd";
+const TOKEN0_SIG = "0x0dfe1681";
 
-let rpcId = 0;
 async function ethCall(to: string, data: string): Promise<string> {
-  const res = await fetch(RPC, {
-    method: "POST",
-    headers: RPC_HEADERS,
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: ++rpcId,
-      method: "eth_call",
-      params: [{ to, data }, "latest"],
-    }),
-  });
-  const body = (await res.json()) as { result?: string; error?: { message: string } };
-  if (body.error) throw new Error(body.error.message);
-  return body.result ?? "0x";
+  return (await rpcFetch("eth_call", [{ to, data }, "latest"])) as string;
 }
 
 export interface TokenInfo {
@@ -58,10 +46,68 @@ function decodeStringReturn(hex: string): string | null {
   }
 }
 
+/**
+ * ETH in dollars, read off the chain rather than assumed.
+ *
+ * A hardcoded default is wrong the day after it is written and wrong silently:
+ * it was 2250 against a real rate of ~2445, so every WETH-denominated figure
+ * ran about 9% light and would have drifted further. Set ORDO_ETH_USD to pin
+ * it; otherwise it comes from the deepest WETH/stablecoin pool.
+ */
+const ETH_USD_POOL = (process.env.ORDO_ETH_USD_POOL ?? "0x52e65b17fb6e5ba00ed806f37afcd2daa50271ca").toLowerCase();
+const ETH_USD_TTL_MS = Number(process.env.ORDO_ETH_USD_TTL_MS ?? 600_000);
+// Parsed here rather than reusing the ETH_USD constant, which index.ts fixes
+// at its own load time. Empty counts as unset: compose passes
+// `${ORDO_ETH_USD:-}` through, so the variable exists but says nothing, and
+// reading that as a pin would leave the on-chain price permanently unused.
+const ETH_USD_PIN = (() => {
+  const raw = process.env.ORDO_ETH_USD;
+  if (raw === undefined || raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+})();
+
+let ethUsdCache: { value: number; at: number } | null = null;
+
+export async function ethUsd(): Promise<number> {
+  if (ETH_USD_PIN !== null) return ETH_USD_PIN;
+  if (ethUsdCache && Date.now() - ethUsdCache.at < ETH_USD_TTL_MS) return ethUsdCache.value;
+
+  try {
+    const [slot0, token0] = await Promise.all([
+      ethCall(ETH_USD_POOL, SLOT0_SIG),
+      ethCall(ETH_USD_POOL, TOKEN0_SIG),
+    ]);
+    // slot0 packs sqrtPriceX96 into the first word; token0 decides which way
+    // round the pair is quoted.
+    const sqrt = BigInt("0x" + slot0.slice(2, 66));
+    if (sqrt === 0n) throw new Error("pool has no price");
+    const wethIsToken0 = ("0x" + token0.slice(26)).toLowerCase() === WETH;
+
+    // (sqrtPriceX96 / 2^96)^2 gives token1 per token0 in raw units; the
+    // decimal shift converts that to whole tokens.
+    const raw = Number(sqrt * sqrt) / Number(2n ** 192n);
+    const price = wethIsToken0 ? raw * 10 ** 12 : (1 / raw) * 10 ** -12;
+    if (!Number.isFinite(price) || price <= 0) throw new Error(`implausible price ${price}`);
+
+    ethUsdCache = { value: price, at: Date.now() };
+    return price;
+  } catch {
+    // A price that cannot be read is not a reason to stop reporting; the
+    // static anchor is stale but bounded.
+    return ETH_USD;
+  }
+}
+
 export async function getTokenInfo(address: string): Promise<TokenInfo> {
   const key = address.toLowerCase();
   const hit = cache.get(key);
-  if (hit) return hit;
+  // Symbol and decimals never change; the price does, so it is refreshed even
+  // on a cache hit rather than frozen at whatever it was on first sight.
+  if (hit) {
+    const anchor = QUOTE_TOKENS[key];
+    return { ...hit, usdPerToken: anchor === "eth" ? await ethUsd() : hit.usdPerToken };
+  }
 
   let symbol = key.slice(0, 8);
   let decimals = 18;
@@ -78,7 +124,7 @@ export async function getTokenInfo(address: string): Promise<TokenInfo> {
   }
 
   const anchor = QUOTE_TOKENS[key];
-  const usdPerToken = anchor === undefined ? null : anchor === "eth" ? ETH_USD : anchor;
+  const usdPerToken = anchor === undefined ? null : anchor === "eth" ? await ethUsd() : anchor;
 
   const info: TokenInfo = { address: key, symbol, decimals, usdPerToken };
   cache.set(key, info);
