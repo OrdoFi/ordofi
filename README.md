@@ -244,9 +244,11 @@ AUCTIONEER=0x... TREASURY=0x... ./deploy.sh
 
 ## Production deployment
 
-- **Own Nitro node** (`deploy/nitro-node/`) — full node for Robinhood Chain with
-  `--http.api` including `debug` (enables `debug_traceTransaction` for honest MEV
-  numbers) and archive mode. Colocate in AWS us-east-2 (the sequencer's region).
+- **Own Nitro node** (`deploy/nitro-node/`) — pruned full node with `debug_*`
+  enabled, restored from a published snapshot rather than synced from genesis
+  (the chain's early L1 blobs are past ordinary beacon retention). Specced for
+  Vultr bare metal in New Jersey at $350/month; disk grows ~230 GB/month, which
+  is the number that actually decides the machine. See its README.
 - **Edge + services** (`deploy/docker-compose.prod.yml` + `deploy/Caddyfile`) —
   gateway, auction, web, and watcher behind Caddy with automatic TLS at
   `rpc.ordofi.network`, `auction.ordofi.network`, `app.ordofi.network`. The apex
@@ -351,8 +353,9 @@ The auction serves its own, also CORS-open: `GET /receipts`, `/receipts/root`,
 ## Roadmap
 
 1. **Phase 1 (this repo):** execution services — gateway, auction, measurement.
-2. **Phase 2:** own Nitro node colocated in us-east-2, sequencer-feed decoding
+2. **Phase 2:** own Nitro node close to the sequencer, sequencer-feed decoding
    for sub-block latency, on-chain settlement contract for trustless rebates.
+   The feed relay and settlement contract are live; the node is specced.
 3. **Phase 3:** sequencer integration with Robinhood — verifiable ordering
    attestations, programmable per-app sequencing, Timeboost-style express-lane
    auctions, and true atomic bundles.

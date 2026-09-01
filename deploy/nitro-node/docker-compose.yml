@@ -1,30 +1,61 @@
-# OrdoFi Nitro full node for Robinhood Chain.
+# OrdoFi Nitro full node for Robinhood Chain (chain ID 4663).
 #
-# This is the single highest-leverage piece of infrastructure:
-#   1. No public-RPC rate limits (sustained measurement + serving).
-#   2. --http.api includes `debug`, enabling debug_traceTransaction — the
-#      prestate diff our trace analyzer needs for honest USD MEV numbers.
-#   3. Colocated in AWS us-east-2 (the sequencer's region) for the latency
-#      needed to actually WIN first-come-first-served backrun races.
+# The public endpoint is not a foundation: no debug_*, no historical state, it
+# rate limits hard, and it serves Foundry a Cloudflare challenge. It is also
+# somewhere else, and on a first-come-first-served chain the distance to the
+# sequencer is the product.
 #
-# Deploy on an AWS us-east-2 instance (recommend r6i.xlarge + gp3 SSD).
-# The chain info JSON is published by Robinhood ("Run a full node" docs);
-# drop it at ./chain-info.json before starting.
+# Pruned, not archive. Backrun attribution traces transactions as they land,
+# which a pruned node does fine; retaining every historical state root costs
+# roughly twice the disk and grows 14 GB/day for history nothing here reads.
+#
+# Machine spec, restore procedure, and the L1 prerequisites are in README.md.
+# Copy this file and ./config to /opt/ordofi-node on the host.
 services:
   nitro:
-    image: offchainlabs/nitro-node:v3.2.1-d81324d
+    image: offchainlabs/nitro-node:v3.11.2-3599aca
     restart: unless-stopped
-    ports:
-      - "8547:8547" # http rpc
-      - "8548:8548" # ws rpc
+    # Nitro flushes state on shutdown. Killing it mid-flush can cost a resync,
+    # which here means re-downloading several hundred gigabytes.
+    stop_grace_period: 10m
     volumes:
-      - nitro-data:/home/user/.arbitrum
-      - ./chain-info.json:/chain-info.json:ro
+      # The image runs as the `nitro` user; mounting anywhere else leaves the
+      # node unable to persist chain data, and it will not tell you why.
+      - ${NITRO_DATA_DIR:-/data/arbitrum}:/home/nitro/.arbitrum
+      - ${NITRO_INIT_DIR:-/data/init}:/init
+      - ./config:/home/nitro/config:ro
+    ports:
+      # Localhost only. The app server reaches this over the private link, and
+      # an open node with debug_* enabled is someone else's free infrastructure.
+      - "127.0.0.1:8547:8547"
+      - "127.0.0.1:8548:8548"
     command:
+      - --chain.info-files=/home/nitro/config/robinhood-chain-info.json
+      - --init.genesis-json-file=/home/nitro/config/robinhood-genesis.json
+
+      # Restoring beats syncing from genesis, and not only on time. The chain
+      # launched in July 2026, so its early L1 blobs are long past the ~18 day
+      # retention of an ordinary beacon node — a genesis sync would need a blob
+      # archive, which restoring makes unnecessary.
+      #
+      # The URL is a directory with a trailing slash. Nitro reads .manifest.txt
+      # inside it, downloads each part, checks sha256, joins and extracts.
+      - --init.url=${NITRO_INIT_URL}
+      # Must be outside the data directory. Nitro refuses to initialise into a
+      # non-empty data dir, so with the default staging path a crashed download
+      # leaves files behind that permanently block the next start.
+      - --init.download-path=/init
+
       - --parent-chain.connection.url=${L1_RPC_URL}
       - --parent-chain.blob-client.beacon-url=${L1_BEACON_URL}
-      - --chain.id=4663
-      - --chain.info-json=/chain-info.json
+
+      - --node.feed.input.url=wss://feed.mainnet.chain.robinhood.com
+      - --node.staker.enable=false
+      # A reader, not a sequencer: forward anything submitted to it upstream.
+      - --execution.forwarding-target=https://rpc.mainnet.chain.robinhood.com
+
+      # debug is the whole point — debug_traceTransaction is what turns guessed
+      # MEV into measured MEV. arb exposes the L1 gas breakdown.
       - --http.addr=0.0.0.0
       - --http.port=8547
       - --http.api=net,web3,eth,debug,arb
@@ -33,9 +64,7 @@ services:
       - --ws.addr=0.0.0.0
       - --ws.port=8548
       - --ws.api=net,web3,eth
-      - --node.feed.input.url=wss://feed.mainnet.chain.robinhood.com
-      - --execution.caching.archive # archive mode: required for historical traces
-    stop_grace_period: 2m
 
-volumes:
-  nitro-data:
+      # Deliberately NOT setting --execution.caching.state-scheme=path. The
+      # published pruned snapshot is hash-scheme (see its metadata.json), and a
+      # node whose scheme disagrees with its snapshot cannot use it.
