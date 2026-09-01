@@ -36,6 +36,7 @@ import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
  *   ORDO_ARB_MIN_PROFIT_ETH   floor net profit to fire (default 0.000004)
  *   ORDO_ARB_GAS_RESERVE_ETH  ETH kept back for gas, never traded (default 0.0008)
  *   ORDO_ARB_MAX_NOTIONAL_ETH cap per trade (default: whole tradable balance)
+ *   ORDO_ARB_DAILY_GAS_CAP_ETH stop firing once gas burned in a rolling day passes this (default 0.01)
  *   ORDO_ARB_INTERVAL_MS      scan cadence (default 4000)
  */
 
@@ -64,6 +65,17 @@ const MAX_NOTIONAL = process.env.ORDO_ARB_MAX_NOTIONAL_ETH
   ? parseEther(process.env.ORDO_ARB_MAX_NOTIONAL_ETH)
   : null;
 const INTERVAL_MS = Number(process.env.ORDO_ARB_INTERVAL_MS ?? 12000);
+// Circuit breaker. Every lost race costs gas and nothing else, but a long run
+// of them unattended would still bleed the wallet; past this much gas in a
+// rolling day the bot keeps scanning and stops sending.
+const DAILY_GAS_CAP = parseEther(process.env.ORDO_ARB_DAILY_GAS_CAP_ETH ?? "0.01");
+const gasLedger: { at: number; wei: bigint }[] = [];
+function gasBurnedToday(): bigint {
+  const cutoff = Date.now() - 86_400_000;
+  while (gasLedger.length && gasLedger[0].at < cutoff) gasLedger.shift();
+  return gasLedger.reduce((n, e) => n + e.wei, 0n);
+}
+let breakerLogged = false;
 const MAX_CYCLES = Number(process.env.ORDO_ARB_MAX_CYCLES ?? 160);
 
 const FACTORY_ABI = [
@@ -299,6 +311,14 @@ async function scan(cycles: Cycle[]): Promise<void> {
     return;
   }
 
+  const burned = gasBurnedToday();
+  if (burned >= DAILY_GAS_CAP) {
+    if (!breakerLogged) console.warn(`[arb] circuit breaker: ${formatEther(burned)} ETH of gas burned in 24h ≥ cap ${formatEther(DAILY_GAS_CAP)} — scanning only until it rolls off`);
+    breakerLogged = true;
+    return;
+  }
+  breakerLogged = false;
+
   const nonce = parseInt((await rpcFetch("eth_getTransactionCount", [account.address, "pending"])) as string, 16);
   const raw = await account.signTransaction({
     chainId: CHAIN_ID, to: ROUTER as Hex, data: data as Hex, value: best.amountIn,
@@ -318,6 +338,7 @@ async function confirm(hash: string): Promise<void> {
     if (!rec) continue;
     const gasUsed = BigInt(rec.gasUsed);
     const gasPrice = BigInt(rec.effectiveGasPrice ?? maxFeePerGas);
+    gasLedger.push({ at: Date.now(), wei: gasUsed * gasPrice });
     if (rec.status === "0x1") {
       console.log(`[arb] WON ${hash} — round trip cleared (gas ${formatEther(gasUsed * gasPrice)} ETH)`);
     } else {
@@ -337,7 +358,7 @@ const rankCycles = (cs: Cycle[]) => cs.sort((a, b) => a.fees.length - b.fees.len
 let cycles = rankCycles(await discoverCycles());
 const midCount = new Set(cycles.map((c) => c.tokens.join(">"))).size;
 console.log(`OrdoFi arb bot | ${cycles.length} cycles (cross-tier + triangular) across ${midCount} routes`);
-console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas reserve ${formatEther(GAS_RESERVE)} ETH · scan ${INTERVAL_MS}ms`);
+console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas reserve ${formatEther(GAS_RESERVE)} ETH · per-trade cap ${MAX_NOTIONAL ? formatEther(MAX_NOTIONAL) + " ETH" : "none"} · daily gas cap ${formatEther(DAILY_GAS_CAP)} ETH · scan ${INTERVAL_MS}ms`);
 
 await refreshGas();
 setInterval(() => { refreshGas().catch(() => {}); }, 20_000);
