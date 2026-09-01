@@ -103,3 +103,14 @@ test("isRetryableRpcError recognises throttling but not real failures", async ()
   assert.equal(isRetryableRpcError({ message: "nonce too low" }), false);
   assert.equal(isRetryableRpcError({ code: -32000, message: "intrinsic gas too low" }), false);
 });
+
+test("a host without the history fails over to one that keeps it", async () => {
+  const { rpcFetch } = await freshRpcFetch();
+  stub({
+    [A]: rpcError("Archive requests require a personal token. Get one at: https://example"),
+    [B]: ok([]),
+  });
+
+  assert.deepEqual(await rpcFetch("eth_getLogs", [{}]), []);
+  assert.deepEqual(calls, [A, B], "a retention policy is not an answer about the chain");
+});

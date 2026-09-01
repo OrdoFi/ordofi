@@ -242,8 +242,11 @@ async function v4PoolKeys(headBlock) {
     /* first run */
   }
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   let from = cache.scannedTo + 1;
   let span = 3_000_000;
+  let backoffMs = 0;
+  let stuck = 0;
   while (from <= headBlock) {
     const to = Math.min(from + span - 1, headBlock);
     try {
@@ -270,15 +273,27 @@ async function v4PoolKeys(headBlock) {
       }
       cache.scannedTo = to;
       from = to + 1;
+      backoffMs = 0;
+      stuck = 0;
+      // Wide historical getLogs back to back is exactly what trips the
+      // official endpoint's rate limiter; a short breath between chunks
+      // avoids spending far longer in backoff.
+      await sleep(300);
     } catch (e) {
-      // Providers cap ranges and result counts differently; halve until the
-      // chunk fits. Below the floor something else is wrong — keep what we
-      // have rather than looping forever.
-      if (span > 20_000) {
+      const msg = String(e?.message ?? e);
+      // Too many results is the one failure a smaller window actually fixes.
+      if (/exceeds limit|response size|more than|query returned/i.test(msg) && span > 20_000) {
         span = Math.floor(span / 2);
         continue;
       }
-      console.error(`v4 Initialize scan stalled at block ${from}: ${e.message ?? e}`);
+      // Everything else — rate limits, every upstream refusing at once — is
+      // about when we ask, not what we asked: same chunk, after a pause.
+      if (++stuck <= 12) {
+        backoffMs = Math.min(backoffMs > 0 ? backoffMs * 2 : 2_000, 20_000);
+        await sleep(backoffMs);
+        continue;
+      }
+      console.error(`v4 Initialize scan stalled at block ${from}: ${msg}`);
       break;
     }
   }

@@ -75,11 +75,18 @@ class UpstreamRpcError extends Error {
  * backwards: being throttled is the one RPC-level error where asking someone
  * else is the entire remedy. Treating it as fatal meant the watcher sat out
  * its backoff against a busy endpoint while a healthy fallback went unused.
+ *
+ * Capability refusals are the same shape: publicnode answers historical
+ * eth_getLogs with "Archive requests require a personal token", which says
+ * nothing about the request and everything about that host's retention.
+ * Another upstream may simply have the data.
  */
 export function isRetryableRpcError(err: unknown): boolean {
   const e = err as { code?: number; message?: string };
   if (e?.code === -32005 || e?.code === 429) return true;
-  return /rate.?limit|too many requests|throttl|capacity|try again/i.test(e?.message ?? "");
+  return /rate.?limit|too many requests|throttl|capacity|try again|archive|personal token/i.test(
+    e?.message ?? "",
+  );
 }
 
 /**
