@@ -393,14 +393,10 @@ async function confirm(hash: string, cycle: string, amountIn: bigint, minReturn:
 // --- main --------------------------------------------------------------------
 
 console.log(`OrdoFi arb bot | ${account.address}`);
-// Cross-tier cycles (shorter paths) sort first, so the cap keeps the cheapest,
-// most-liquid routes when the discovered set is larger than the budget allows.
-const rankCycles = (cs: Cycle[]) => cs.sort((a, b) => a.fees.length - b.fees.length).slice(0, MAX_CYCLES);
-let cycles = rankCycles(await discoverCycles());
-const midCount = new Set(cycles.map((c) => c.tokens.join(">"))).size;
-console.log(`OrdoFi arb bot | ${cycles.length} cycles (cross-tier + triangular) across ${midCount} routes`);
-console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas reserve ${formatEther(GAS_RESERVE)} ETH · per-trade cap ${MAX_NOTIONAL ? formatEther(MAX_NOTIONAL) + " ETH" : "none"} · daily gas cap ${formatEther(DAILY_GAS_CAP)} ETH · scan ${INTERVAL_MS}ms`);
+let cycles: Cycle[] = [];
 
+// Status first, discovery second: the desk page should say "live, discovering"
+// during the minute or two of factory lookups, not "offline".
 tele.serve(STATUS_PORT, {
   address: account.address,
   chainId: CHAIN_ID,
@@ -427,6 +423,14 @@ tele.serve(STATUS_PORT, {
   dailyGasCap: DAILY_GAS_CAP,
   breaker: () => gasBurnedToday() >= DAILY_GAS_CAP,
 });
+
+// Cross-tier cycles (shorter paths) sort first, so the cap keeps the cheapest,
+// most-liquid routes when the discovered set is larger than the budget allows.
+const rankCycles = (cs: Cycle[]) => cs.sort((a, b) => a.fees.length - b.fees.length).slice(0, MAX_CYCLES);
+cycles = rankCycles(await discoverCycles());
+const midCount = new Set(cycles.map((c) => c.tokens.join(">"))).size;
+console.log(`OrdoFi arb bot | ${cycles.length} cycles (cross-tier + triangular) across ${midCount} routes`);
+console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas reserve ${formatEther(GAS_RESERVE)} ETH · per-trade cap ${MAX_NOTIONAL ? formatEther(MAX_NOTIONAL) + " ETH" : "none"} · daily gas cap ${formatEther(DAILY_GAS_CAP)} ETH · scan ${INTERVAL_MS}ms`);
 
 await refreshGas();
 setInterval(() => { refreshGas().catch(() => {}); }, 20_000);
