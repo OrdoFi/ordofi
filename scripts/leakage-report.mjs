@@ -56,7 +56,11 @@ for (const row of d.profitByToken) {
   byToken.push({ token: row.token, symbol: info.symbol, amount, usd: value, arbs: row.arbs });
 }
 
-const days = Math.max(window.spanHours / 24, 1 / 24);
+// Same floor the homepage uses: a daily rate extrapolated from minutes is a
+// number that gets the whole document dismissed by the one reader who checks.
+const MIN_EXTRAPOLATION_HOURS = 1;
+const perDayUsd =
+  window.spanHours >= MIN_EXTRAPOLATION_HOURS ? pricedUsd / (window.spanHours / 24) : null;
 const usd = (n) => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 if (AS_JSON) {
@@ -72,6 +76,7 @@ if (AS_JSON) {
         pricedProfitUsd: pricedUsd,
         byToken: byToken.map((b) => ({ ...b, amount: Number(b.amount.toFixed(6)) })),
         note: "priced figures are a floor; long-tail token profit is counted but not valued",
+        pricedProfitUsdPerDay: perDayUsd,
         ifRouted: {
           toUsersUsd: pricedUsd * REBATE_USER,
           toAppUsd: pricedUsd * REBATE_APP,
@@ -98,7 +103,11 @@ console.log(`Distinct searchers  : ${d.searchers.toLocaleString()}   (all compet
 console.log(`Priced arbitrages   : ${d.pricedArbs.toLocaleString()} of ${d.arbs.toLocaleString()}`);
 console.log("");
 console.log(`Extracted (floor)   : ≈ ${usd(pricedUsd)}`);
-console.log(`  per day           : ≈ ${usd(pricedUsd / days)}`);
+console.log(
+  perDayUsd === null
+    ? `  per day           : not extrapolated — needs at least ${MIN_EXTRAPOLATION_HOURS}h of samples`
+    : `  per day           : ≈ ${usd(perDayUsd)}`,
+);
 for (const b of byToken) {
   const valued = b.usd === null ? "unpriced" : usd(b.usd);
   console.log(`    ${b.symbol.padEnd(8)} ${b.amount.toFixed(6).padStart(18)}  ${valued}  (${b.arbs.toLocaleString()} arbs)`);
