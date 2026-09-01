@@ -117,9 +117,38 @@ if (bondBefore < BID) {
   console.log(`  bond now ${formatEther(await bondOf(searcher.address))} ETH`);
 }
 
+// --- prefetch and pre-sign ------------------------------------------------------
+//
+// The auction's bid window is 200ms, and a real searcher spends none of it on
+// RPC round trips. Everything remote happens here, before the WebSocket opens:
+// fees, nonces, and a gas estimate (hardcoding 21000 is wrong on an Arbitrum
+// chain — intrinsic gas includes the L1 data-posting component, and the
+// sequencer rejects the transaction outright with "intrinsic gas too low").
+// Both transactions are independent of the opportunity, so they are signed
+// before the auction ever sees us; the opportunity handler only signs the
+// EIP-712 bid, which is local and takes microseconds.
+
+const [fees, searcherNonce, userNonce, selfTransferGas] = await Promise.all([
+  pub.estimateFeesPerGas(),
+  pub.getTransactionCount({ address: searcher.address }),
+  pub.getTransactionCount({ address: user.address }),
+  pub.estimateGas({ account: user.address, to: user.address, value: 0n }),
+]);
+const gasLimit = (selfTransferGas * 3n) / 2n; // headroom for L1-component drift
+const txDefaults = {
+  chainId: CHAIN_ID,
+  value: 0n,
+  gas: gasLimit,
+  maxFeePerGas: fees.maxFeePerGas * 2n,
+  maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+  type: "eip1559",
+};
+const rawUserTx = await user.signTransaction({ ...txDefaults, to: user.address, nonce: userNonce });
+const rawBackrunTx = await searcher.signTransaction({ ...txDefaults, to: searcher.address, nonce: searcherNonce });
+console.log(`\nprefetched: gas limit ${gasLimit}, fees ${fees.maxFeePerGas} wei, nonces ${searcherNonce}/${userNonce}`);
+
 // --- the loop -----------------------------------------------------------------
 
-const fees = await pub.estimateFeesPerGas();
 const ws = new WebSocket(`${AUCTION.replace(/^http/, "ws")}/searcher`);
 let finished = false;
 
@@ -135,23 +164,11 @@ ws.on("message", async (raw) => {
   if (msg.type === "welcome") {
     console.log("\n[searcher] connected to the auction feed");
 
-    const nonce = await pub.getTransactionCount({ address: user.address });
-    const rawTx = await user.signTransaction({
-      chainId: CHAIN_ID,
-      to: user.address,
-      value: 0n,
-      gas: 21000n,
-      maxFeePerGas: fees.maxFeePerGas,
-      maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
-      nonce,
-      type: "eip1559",
-    });
-
     console.log("[user] submitting a transaction through the auction...");
     const res = await fetch(`${AUCTION}/submit`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rawTx, originLabel: "loop-proof", rebateAddress: APP }),
+      body: JSON.stringify({ rawTx: rawUserTx, originLabel: "loop-proof", rebateAddress: APP }),
     });
     const out = await res.json();
 
@@ -208,28 +225,15 @@ ws.on("message", async (raw) => {
       },
     });
 
-    // A real searcher's backrun goes here. A self-transfer is enough to prove
-    // the plumbing: what is being tested is the bid, the auction and the
-    // settlement, not the trade.
-    const nonce = await pub.getTransactionCount({ address: searcher.address });
-    const backrunRawTx = await searcher.signTransaction({
-      chainId: CHAIN_ID,
-      to: searcher.address,
-      value: 0n,
-      gas: 21000n,
-      maxFeePerGas: fees.maxFeePerGas,
-      maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
-      nonce,
-      type: "eip1559",
-    });
-
+    // The backrun was pre-signed at startup — a self-transfer is enough to
+    // prove the plumbing, and nothing here may wait on the network.
     ws.send(
       JSON.stringify({
         type: "bid",
         opportunityId: msg.opportunity.id,
         searcher: searcher.address,
         bidWei: BID.toString(),
-        backrunRawTx,
+        backrunRawTx: rawBackrunTx,
         bidSig,
       }),
     );
