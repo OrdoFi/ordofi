@@ -62,10 +62,13 @@ Bare metal beats the cloud plans on every axis that matters here: the closest
 64 GB NVMe cloud instance in `ord` is $390/month for 800 GB, and shared-tenancy
 vCPU is the wrong thing to put under a node in a latency race.
 
-64 GB is Robinhood's stated minimum against a recommendation of 128 GB. Taking
-the minimum buys twice the disk and a faster CPU — and single-core speed is
-what their guidance actually emphasises. If memory turns out to be the
-constraint, `voc-m-16c-128gb-1600s-amd` is the fallback at $785/month.
+64 GB is Robinhood's stated minimum against a recommendation of 128 GB. The
+128 GB bare metal machines (`vbm-8c-132gb`, `-v2`) carry comparable NVMe but
+are not offered in Chicago, so taking them would mean giving up both the
+private link to the app server and the shorter hop to Ohio — and they are
+slower per core, at 3.2–3.7 GHz against 3.9, which is the figure Robinhood's
+guidance actually emphasises. If memory turns out to be the binding constraint,
+`voc-m-16c-128gb-1600s-amd` is the in-region fallback at $785/month.
 
 ### Disk is the real cost, and it compounds
 
