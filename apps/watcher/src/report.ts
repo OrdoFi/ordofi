@@ -85,7 +85,7 @@ async function main() {
   console.log(`  priced (quote P&L): ${pricedArbs}`);
   console.log(`  unpriced (tokens) : ${unpricedArbs}`);
   console.log(`Unique searchers    : ${uniqueSearchers}`);
-  if (spanHours > 0) {
+  if (spanHours >= 1) {
     console.log("");
     console.log(`Arb activity / day  : ${perDay(arbs.length).toLocaleString(undefined, { maximumFractionDigits: 0 })} atomic arbs (extrapolated)`);
     console.log(`Swap activity / day : ${perDay(swaps.length).toLocaleString(undefined, { maximumFractionDigits: 0 })} swaps (extrapolated)`);
@@ -126,7 +126,12 @@ async function main() {
       gasUsd: gasUsdSpent,
       netSearcherProfitUsd: usdTotal - gasUsdSpent,
     },
-    perDay: { extractableUsd: perDay(usdTotal), arbs: perDay(arbs.length) },
+    // Withheld below an hour of samples: the multiplier turns a short burst
+    // into a figure that discredits every honest number next to it.
+    perDay:
+      spanHours >= 1
+        ? { extractableUsd: perDay(usdTotal), arbs: perDay(arbs.length) }
+        : { extractableUsd: null, arbs: null },
     byQuoteToken: Object.fromEntries(usdBySymbol),
     topPools: [...poolLeak.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),
     topSearchers: [...searcherCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20),

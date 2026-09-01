@@ -328,7 +328,9 @@
         '<span class="k">unique_searchers</span>     ' + fmt(t.uniqueSearchers) + '  <span class="c">competing for the same flow</span>',
         '<span class="k">pools_tracked</span>        ' + fmt(t.uniquePools),
         '<span class="k">swaps_analyzed</span>       ' + fmt(t.swaps),
-        '<span class="k">arbs_per_day</span>         <span class="s">' + num(rep.perDay.arbs) + '</span>  <span class="c">extrapolated</span>',
+        rep.perDay.arbs == null
+          ? '<span class="k">arbs_per_day</span>         <span class="c">— needs at least an hour of samples</span>'
+          : '<span class="k">arbs_per_day</span>         <span class="s">' + num(rep.perDay.arbs) + '</span>  <span class="c">extrapolated</span>',
         '',
         '<span class="c">// USD extractable value requires call-trace attribution.</span>',
         '<span class="c">// Counts above are exact, measured on-chain.</span>',

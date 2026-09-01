@@ -76,6 +76,19 @@ function recentArbs(n) {
     .filter(Boolean);
 }
 
+/**
+ * Shortest sample a daily rate may be extrapolated from. Below this the
+ * multiplier is large enough to turn a normal burst of activity into a number
+ * nobody would believe: a few seconds of blocks once implied 769,745 arbs a
+ * day, which is nine a second.
+ */
+const MIN_EXTRAPOLATION_HOURS = 1;
+
+export function perDayArbs(arbs, spanHours) {
+  if (!(spanHours >= MIN_EXTRAPOLATION_HOURS)) return null;
+  return (arbs / spanHours) * 24;
+}
+
 /** Headline figures straight from the index, when it has data. */
 function indexedReport() {
   if (!store) return null;
@@ -91,7 +104,7 @@ function indexedReport() {
         uniquePools: totals.pools,
         swaps: store.swapCount(),
       },
-      perDay: { arbs: w.spanHours > 0 ? (totals.arbs / w.spanHours) * 24 : 0 },
+      perDay: { arbs: perDayArbs(totals.arbs, w.spanHours) },
       topSearchers: store.topSearchers(10).map((s) => [s.address, s.count]),
       topPools: store.topPools(10).map((p) => [p.pool, p.count]),
       source: "index",
@@ -206,7 +219,8 @@ createServer(async (req, res) => {
         searchers: rep?.totals?.uniqueSearchers ?? 0,
         pools: rep?.totals?.uniquePools ?? 0,
         swaps: rep?.totals?.swaps ?? 0,
-        arbsPerDay: Math.round(rep?.perDay?.arbs ?? 0),
+        // null until the sample is long enough to extrapolate honestly.
+        arbsPerDay: rep?.perDay?.arbs == null ? null : Math.round(rep.perDay.arbs),
         settlement: onchain.deployed
           ? {
               deployed: true,
