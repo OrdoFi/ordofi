@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { landingHtml } from "./landing.ts";
 import { join } from "node:path";
 import { ENDPOINTS, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
@@ -120,6 +121,14 @@ function clientIp(req: { headers: Record<string, string | string[] | undefined>;
   return first || req.socket?.remoteAddress || "unknown";
 }
 
+const LANDING = landingHtml({
+  chainId: 4663,
+  explorer: "https://robinhoodchain.blockscout.com",
+  docs: "https://app.ordofi.network/docs",
+  portal: "https://app.ordofi.network/portal",
+  app: "https://app.ordofi.network",
+});
+
 const server = createServer((req, res) => {
   const url = req.url ?? "/";
 
@@ -133,6 +142,11 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "GET" && (url === "/" || url === "/index.html")) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" });
+    res.end(LANDING);
+    return;
+  }
   if (req.method === "GET" && url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ status: "ok", upstream: UPSTREAM, uptimeSeconds: metrics.json().uptimeSeconds }));
@@ -149,7 +163,8 @@ const server = createServer((req, res) => {
     return;
   }
   if (req.method !== "POST") {
-    res.writeHead(405).end();
+    res.writeHead(req.method === "GET" ? 404 : 405, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "JSON-RPC is served over POST; see https://rpc.ordofi.network/ for usage" }));
     return;
   }
 
