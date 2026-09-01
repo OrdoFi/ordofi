@@ -10,6 +10,25 @@ export const robinhoodChain = defineChain({
   },
 });
 
+/**
+ * Accepts a private key as MetaMask exports it (no 0x) or as viem wants it
+ * (with 0x). Absent or empty returns undefined; present but malformed throws
+ * with a message that names the variable, because the alternative was a
+ * crash-looping service whose log said only "command failed".
+ */
+export function normalizePrivateKey(
+  value: string | undefined,
+  name = "private key",
+): `0x${string}` | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const withPrefix = trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(withPrefix)) {
+    throw new Error(`${name} is not a 32-byte hex key (got ${trimmed.length} chars)`);
+  }
+  return withPrefix as `0x${string}`;
+}
+
 export const ENDPOINTS = {
   rpc: process.env.ORDO_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
   sequencerFeed:

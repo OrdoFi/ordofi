@@ -12,7 +12,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import { createWalletClient, http, type Address, type Hex } from "viem";
-import { ENDPOINTS, robinhoodChain } from "@ordofi/core";
+import { ENDPOINTS, normalizePrivateKey, robinhoodChain } from "@ordofi/core";
 import {
   merkleRoot,
   opportunityIdToBytes32,
@@ -26,7 +26,7 @@ import {
 import type { Bid } from "./types.js";
 
 const CHAIN_ID = 4663;
-const AUCTIONEER_KEY = process.env.ORDO_AUCTIONEER_KEY as Hex | undefined;
+const AUCTIONEER_KEY = normalizePrivateKey(process.env.ORDO_AUCTIONEER_KEY, "ORDO_AUCTIONEER_KEY");
 const LOG = process.env.ORDO_RECEIPT_LOG ?? "data/receipts.ndjson";
 const KEEP = Number(process.env.ORDO_RECEIPT_KEEP ?? 5000);
 

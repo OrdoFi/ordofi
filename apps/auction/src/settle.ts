@@ -1,6 +1,6 @@
 import { createWalletClient, http, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { ENDPOINTS, robinhoodChain } from "@ordofi/core";
+import { ENDPOINTS, normalizePrivateKey, robinhoodChain } from "@ordofi/core";
 import type { SettlementRecord } from "./types.js";
 
 /**
@@ -16,7 +16,7 @@ import type { SettlementRecord } from "./types.js";
  */
 
 const SETTLEMENT = process.env.ORDO_SETTLEMENT_ADDRESS as Hex | undefined;
-const AUCTIONEER_KEY = process.env.ORDO_AUCTIONEER_KEY as Hex | undefined;
+const AUCTIONEER_KEY = normalizePrivateKey(process.env.ORDO_AUCTIONEER_KEY, "ORDO_AUCTIONEER_KEY");
 const ZERO = "0x0000000000000000000000000000000000000000" as Hex;
 
 const SETTLE_ABI = [

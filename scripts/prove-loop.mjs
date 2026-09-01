@@ -19,6 +19,15 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
+// MetaMask exports keys without the 0x prefix; viem requires it.
+const normalizeKey = (v, name) => {
+  const t = v?.trim();
+  if (!t) return undefined;
+  const k = t.startsWith("0x") ? t : "0x" + t;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(k)) die(`${name} is not a 32-byte hex key`);
+  return k;
+};
+
 const RPC = process.env.ORDO_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com";
 const AUCTION = process.env.ORDO_AUCTION_URL ?? "http://auction:8548";
 const SETTLEMENT = process.env.ORDO_SETTLEMENT_ADDRESS;
@@ -42,8 +51,8 @@ const chain = {
   rpcUrls: { default: { http: [RPC] } },
 };
 
-const searcher = privateKeyToAccount(process.env.ORDO_SEARCHER_KEY);
-const user = privateKeyToAccount(process.env.ORDO_USER_KEY);
+const searcher = privateKeyToAccount(normalizeKey(process.env.ORDO_SEARCHER_KEY, "ORDO_SEARCHER_KEY"));
+const user = privateKeyToAccount(normalizeKey(process.env.ORDO_USER_KEY, "ORDO_USER_KEY"));
 const pub = createPublicClient({ chain, transport: http(RPC) });
 
 const VIEW = (name) => [
