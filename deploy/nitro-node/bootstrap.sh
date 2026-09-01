@@ -7,7 +7,11 @@
 # disk mounted, or no L1 endpoint — wastes hours and someone's bandwidth bill.
 #
 #   sudo ./bootstrap.sh              # prepare, using an existing /data mount
-#   sudo RAID0=yes ./bootstrap.sh    # also stripe the free NVMe disks (DESTRUCTIVE)
+#   sudo RAID0=yes ./bootstrap.sh    # also claim the free NVMe disks (DESTRUCTIVE)
+#
+# On Vultr's "No RAID, extra disks unformatted" there is exactly one free disk
+# — the OS holds the other — so the second form formats that one and mounts it.
+# It only stripes when it finds two or more genuinely unused disks.
 set -euo pipefail
 
 INSTALL_DIR=/opt/ordofi-node

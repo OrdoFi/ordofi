@@ -52,11 +52,19 @@ same way: the app server is already there, so the two can talk over a private
 network instead of the public internet, and Chicago is nearer to the
 sequencer's region (AWS us-east-2, Ohio) than New Jersey is.
 
-Provision it with the two disks **striped, not mirrored** (`disk_mode` of
-`raid0`, or `none` and let `bootstrap.sh` stripe them). Mirrored gives 1.9 TB
-usable and works, but the restore alone peaks near 930 GB — downloaded parts
-plus the extracted database — so it would start life with about four months of
-runway instead of fourteen.
+Choose **No RAID, extra disks unformatted**. Vultr offers no RAID 0 on this
+plan, and of what it does offer this is the one to take: the OS lands on the
+first disk and the second stays raw, so `bootstrap.sh` formats it and mounts
+all 1945 GB at `/data`.
+
+RAID 1 is the wrong trade for this workload. The node's data is re-downloadable
+from a published snapshot, so mirroring buys little that a restore does not
+already cover, and it would cap the data volume at 1945 GB permanently.
+Unmirrored, the first disk keeps roughly 1.8 TB unused, which `/data` can be
+extended into with LVM later — a ceiling near 3.8 TB rather than half that.
+
+Budget about **four months** of runway from the restore before that extension
+is needed.
 
 Bare metal beats the cloud plans on every axis that matters here: the closest
 64 GB NVMe cloud instance in `ord` is $390/month for 800 GB, and shared-tenancy
@@ -82,9 +90,10 @@ Measured from the published snapshot sizes on consecutive dates:
 
 At 0.1s blocks this chain produces about 26 million blocks a month, and a
 pruned node keeps every block and receipt forever — only state is pruned. So
-3.89 TB striped gives roughly **fourteen months** after a restore, and this is
-a standing ~230 GB/month commitment rather than a one-time purchase. Plan on
-migrating to a larger box eventually, not on the number staying still.
+the 1945 GB data disk gives roughly **four months** after a restore, extending
+`/data` onto the OS disk buys about a year in total, and past that the machine
+has to grow. This is a standing ~230 GB/month commitment rather than a one-time
+purchase; plan on it, rather than on the number staying still.
 
 ## L1 prerequisites
 
