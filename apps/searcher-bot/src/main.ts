@@ -97,7 +97,17 @@ async function ensureBond(): Promise<void> {
   const topUp = BOND_TARGET - bond;
   const balanceHex = (await rpcFetch("eth_getBalance", [account.address, "latest"])) as string;
   const balance = BigInt(balanceHex);
-  const gasBudget = gasLimit * maxFeePerGas;
+
+  // Bonding runs OrdoSettlement.receive(), which writes storage. The
+  // self-transfer estimate is nowhere near enough: reusing it sent three
+  // transactions that each burned their whole 31,500 gas limit and reverted,
+  // leaving the bond at zero while the wallet drained.
+  const bondGasHex = (await rpcFetch("eth_estimateGas", [
+    { from: account.address, to: SETTLEMENT, value: "0x" + topUp.toString(16) },
+  ])) as string;
+  const bondGas = (BigInt(bondGasHex) * 3n) / 2n;
+
+  const gasBudget = bondGas * maxFeePerGas;
   if (balance < topUp + gasBudget) {
     console.warn(
       `[bot] bond is ${formatEther(bond)} ETH (target ${formatEther(BOND_TARGET)}) but the wallet ` +
@@ -110,14 +120,31 @@ async function ensureBond(): Promise<void> {
     chainId: 4663,
     to: SETTLEMENT,
     value: topUp,
-    gas: gasLimit,
+    gas: bondGas,
     maxFeePerGas,
     maxPriorityFeePerGas: 0n,
     nonce: nonce++,
     type: "eip1559",
   });
-  const hash = await rpcFetch("eth_sendRawTransaction", [raw]);
-  console.log(`[bot] bonded ${formatEther(topUp)} ETH — ${hash}`);
+  const hash = (await rpcFetch("eth_sendRawTransaction", [raw])) as string;
+
+  // Confirm rather than assume. A silently reverting bond looks identical to
+  // a pending one from the next loop's point of view, so the bot just retries
+  // forever and pays gas each time.
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const receipt = (await rpcFetch("eth_getTransactionReceipt", [hash]).catch(() => null)) as
+      | { status: string; gasUsed: string }
+      | null;
+    if (!receipt) continue;
+    if (receipt.status === "0x1") {
+      console.log(`[bot] bonded ${formatEther(topUp)} ETH — ${hash}`);
+    } else {
+      console.error(`[bot] bond REVERTED (gas used ${parseInt(receipt.gasUsed, 16)}) — ${hash}`);
+    }
+    return;
+  }
+  console.warn(`[bot] bond ${hash} not confirmed within 15s; will re-check next cycle`);
 }
 
 // --- the bot -------------------------------------------------------------------

@@ -62,6 +62,9 @@ export class OrdoSearcher {
   private ws?: WebSocket;
   readonly account: Account;
   private cfg: SearcherConfig;
+  private closed = false;
+  private backoffMs = 1_000;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(cfg: SearcherConfig) {
     this.cfg = cfg;
@@ -98,7 +101,6 @@ export class OrdoSearcher {
     const ws = new WebSocket(this.cfg.auctionWsUrl);
     this.ws = ws;
 
-    ws.on("open", () => console.log(`[ordo-sdk] connected as ${this.address}`));
     ws.on("message", async (raw) => {
       let msg: any;
       try {
@@ -123,11 +125,35 @@ export class OrdoSearcher {
         }),
       );
     });
-    ws.on("close", () => console.log("[ordo-sdk] disconnected"));
-    ws.on("error", (e) => console.error("[ordo-sdk] ws error", (e as Error).message));
+    // Reconnect unless close() was called. A searcher that goes quiet after
+    // one dropped socket looks exactly like a searcher that is running fine,
+    // which is the worst possible failure: no error, no bids, no revenue.
+    // Every auction restart would otherwise retire its whole searcher set.
+    const scheduleReconnect = () => {
+      if (this.closed || this.reconnectTimer) return;
+      const delay = this.backoffMs;
+      this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+      console.log(`[ordo-sdk] disconnected — reconnecting in ${Math.round(delay / 1000)}s`);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = null;
+        this.connect();
+      }, delay);
+    };
+
+    ws.on("open", () => {
+      this.backoffMs = 1_000;
+      console.log(`[ordo-sdk] connected as ${this.address}`);
+    });
+    ws.on("close", scheduleReconnect);
+    ws.on("error", (e) => {
+      console.error("[ordo-sdk] ws error", (e as Error).message);
+      scheduleReconnect();
+    });
   }
 
   close(): void {
+    this.closed = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
   }
 }
