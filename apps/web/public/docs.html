@@ -80,6 +80,52 @@ curl -X POST http://localhost:8547 <span class="k">\</span>
     </div>
     <p>Auctions are sealed-bid, second-price: the highest bidder wins and pays the second-highest price. The winning backrun is dispatched immediately after the user transaction.</p>
 
+    <h2 id="receipts">Verifiable outcomes <span class="pill">signed</span></h2>
+    <p>A sealed-bid auction asks you to take the operator's word for the losing bids. You don't have to. Every bid is acknowledged the moment it lands, and every closed auction publishes a receipt &mdash; both signed by the auctioneer under EIP-712, so a discrepancy between them is evidence rather than a complaint.</p>
+    <div class="code">
+<span class="c">// the reply to your bid — keep it, it is your leverage</span>
+{ <span class="k">"type"</span>: <span class="s">"bid_ack"</span>, <span class="k">"opportunityId"</span>: <span class="s">"…"</span>, <span class="k">"accepted"</span>: true,
+  <span class="k">"ack"</span>: { <span class="k">"opportunityId"</span>: <span class="s">"0x…"</span>, <span class="k">"searcher"</span>: <span class="s">"0xyou"</span>,
+           <span class="k">"bidWei"</span>: <span class="s">"1000000000000000"</span>, <span class="k">"receivedAt"</span>: 1756…, <span class="k">"signature"</span>: <span class="s">"0x…"</span> } }
+
+<span class="c">// the receipt for the round, once it closes</span>
+{ <span class="k">"opportunityId"</span>: <span class="s">"0x…"</span>, <span class="k">"winner"</span>: <span class="s">"0x…"</span>, <span class="k">"clearingPriceWei"</span>: <span class="s">"…"</span>,
+  <span class="k">"bids"</span>: [ { <span class="k">"searcher"</span>: <span class="s">"0x…"</span>, <span class="k">"bidWei"</span>: <span class="s">"…"</span>, <span class="k">"receivedAt"</span>: 1756…,
+             <span class="k">"bidSig"</span>: <span class="s">"0x…"</span> } ], <span class="k">"closedAt"</span>: 1756…, <span class="k">"signature"</span>: <span class="s">"0x…"</span> }
+    </div>
+    <p>Three things are checkable from those two objects alone, with no trust in anything the auctioneer says afterwards:</p>
+    <table>
+      <tr><th>Claim</th><th>How it is checked</th></tr>
+      <tr><td>Your bid was not dropped</td><td>The acknowledged bid must appear in the receipt, at the acknowledged amount</td></tr>
+      <tr><td>No bids were invented</td><td>Each bid carries the searcher's own settlement signature, which cannot be forged for an address you do not hold</td></tr>
+      <tr><td>Second price was honoured</td><td>The winner must be the highest bidder, and must be charged the second-highest bid</td></tr>
+    </table>
+    <div class="code">
+<span class="k">import</span> { auditReceipt } <span class="k">from</span> <span class="s">"@ordofi/core/receipt"</span>;
+
+<span class="k">const</span> { receipt } = <span class="k">await</span> fetch(<span class="s">`https://auction.ordofi.network/receipts/${id}`</span>).then(r =&gt; r.json());
+<span class="k">const</span> finding = <span class="k">await</span> auditReceipt(receipt, ack, 4663, auctioneer, SETTLEMENT_ADDRESS);
+<span class="k">if</span> (!finding.ok) console.error(finding.reason); <span class="c">// signed proof of what went wrong</span>
+    </div>
+    <p>Signatures make one receipt unforgeable; they do not stop a receipt being swapped out after you have read it. So the auctioneer batches a Merkle root over every receipt it has ever issued into <code>OrdoReceiptLog</code> on-chain. <code>anchoredCount</code> is the prefix that is already immutable, so the gap between it and <code>count</code> is exactly what an operator could still retract.</p>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Returns</th></tr>
+      <tr><td>GET</td><td>/receipts?n=20</td><td>Recent receipts, and the auctioneer address to check them against</td></tr>
+      <tr><td>GET</td><td>/receipts/:opportunityId</td><td>One receipt, by uuid or bytes32</td></tr>
+      <tr><td>GET</td><td>/receipts/root</td><td><code>{ root, count, anchoredCount, auctioneer }</code></td></tr>
+    </table>
+
+    <h2 id="feed">Sequencer feed <span class="pill">ws /feed</span></h2>
+    <p>MEV here is a latency race rather than a fee auction, and the sequencer feed is where that race starts: transactions appear on it before they are in a block you can query. OrdoFi holds one upstream connection, decodes the Nitro batch framing, and fans the result out &mdash; so a searcher gets raw transactions without writing a feed decoder of their own.</p>
+    <div class="code">
+<span class="c">// ws://host:8548/feed</span>
+{ <span class="k">"type"</span>: <span class="s">"feed_txs"</span>, <span class="k">"sequenceNumber"</span>: 51709518, <span class="k">"blockNumber"</span>: 51654343,
+  <span class="k">"timestamp"</span>: 1756…, <span class="k">"receivedAt"</span>: 1756…,
+  <span class="k">"txs"</span>: [ { <span class="k">"hash"</span>: <span class="s">"0x…"</span>, <span class="k">"raw"</span>: <span class="s">"0x02f8…"</span> } ] }
+    </div>
+    <p><code>receivedAt</code> is stamped when OrdoFi received the message, so you can measure the relay's own added latency rather than take it on faith. Throughput and upstream health are at <code>GET /feed/stats</code>: <code>{ upstream, clients, sequencerMessages, txsRelayed, lastSequenceNumber, reconnects }</code>.</p>
+    <p style="color:#8a909a;font-size:13px;"><strong>What this is not:</strong> the feed carries transactions the sequencer has already accepted and ordered. It is a head start on decoding, not a preview of pending order flow — that is what the auction is for.</p>
+
     <h2 id="submit">Submitting order flow <span class="pill">POST /submit</span></h2>
     <p>Wallets and apps route user transactions through the auction to earn rebates:</p>
     <div class="code">
@@ -98,6 +144,16 @@ curl -X POST http://localhost:8548/submit <span class="k">\</span>
       <tr><td>Protocol</td><td>5%</td><td>ORDO_REBATE_PROTOCOL</td></tr>
     </table>
 
+    <h2 id="keys">Getting a key <span class="pill">/portal</span></h2>
+    <p>Mint one at <a href="/portal">the portal</a>, or from a script. Supply a <code>rebateAddress</code> and the key routes your order flow through the auction with rebates credited to that address; omit it and the key is protected passthrough only.</p>
+    <div class="code">
+curl -X POST https://app.ordofi.network/api/keys <span class="k">\</span>
+  -H <span class="s">'content-type: application/json'</span> <span class="k">\</span>
+  -d <span class="s">'{"label":"my-wallet","rebateAddress":"0xapp…"}'</span>
+    </div>
+    <p>The key is returned once and only its hash is kept, so a lost key is reissued rather than recovered. Send it as <code>x-api-key</code> to <code>https://rpc.ordofi.network</code>.</p>
+    <p>Bonds and claimable rebates for any address are readable without a key, straight from the settlement contract: <code>GET /api/account?address=0x…</code>. The portal shows the same numbers, and claims from your wallet.</p>
+
   </div>
 
   <footer class="site-footer">
@@ -107,7 +163,7 @@ curl -X POST http://localhost:8548/submit <span class="k">\</span>
           <div class="logo"><svg class="mark" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="14" stroke="#4ee6a0" stroke-width="2"/><circle cx="16" cy="16" r="3.5" fill="#4ee6a0"/></svg> OrdoFi</div>
           <p>The execution layer for Robinhood Chain.</p>
         </div>
-        <div class="footer-col"><h5>Product</h5><a href="/explorer">Explorer</a><a href="/dashboard">Settlement dashboard</a><a href="/docs">Documentation</a></div>
+        <div class="footer-col"><h5>Product</h5><a href="/explorer">Explorer</a><a href="/dashboard">Settlement dashboard</a><a href="/portal">Portal</a><a href="/docs">Documentation</a></div>
         <div class="footer-col"><h5>Participate</h5><a href="/searchers">For searchers</a><a href="/apps">For apps &amp; wallets</a><a href="/operators">For node operators</a></div>
         <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs#quickstart">Quickstart</a><a href="/docs#searcher">API reference</a></div>
       </div>

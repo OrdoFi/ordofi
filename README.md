@@ -122,6 +122,52 @@ curl localhost:8548/stats     # throughput + accrued rebates
 
 See `apps/web/public/docs.html` (served at `/docs`) for the full API.
 
+## Verifiable auction outcomes
+
+A sealed-bid auction asks searchers to take the operator's word for the bids
+they never see. They should not have to. Every bid is acknowledged the instant
+it arrives, and every closed round publishes a receipt listing all of them —
+both signed by the auctioneer under EIP-712, so a mismatch between the two is
+evidence rather than a complaint.
+
+```bash
+curl auction.ordofi.network/receipts/$OPPORTUNITY_ID   # one round, bids and all
+curl auction.ordofi.network/receipts/root              # { root, count, anchoredCount }
+```
+
+`auditReceipt()` in `packages/core/src/receipt.ts` is the check a searcher
+actually runs, and it needs to trust nothing said after the fact: the
+acknowledged bid must appear in the receipt at the acknowledged amount, every
+listed bid must carry that searcher's own settlement signature, and the winner
+must be the highest bidder charged the second-highest price.
+
+Signatures make a single receipt unforgeable but do not stop one being swapped
+out after publication, so a Merkle root over the whole history is batched into
+`OrdoReceiptLog` on-chain. `anchoredCount` is the prefix already immutable; the
+gap to `count` bounds what a malicious operator could still retract. The log is
+rehydrated from disk at boot and the committed count is read back from the
+chain, because an auction that restarted believing it had issued nothing would
+publish a shrinking root — which the contract rejects, by design.
+
+## Sequencer feed relay
+
+MEV on an FCFS chain is a latency race, and the sequencer feed is where it
+starts. The auction holds one upstream connection to
+`wss://feed.mainnet.chain.robinhood.com`, decodes the Nitro batch framing
+(sub-messages carry a **uint64** big-endian length prefix — a 4-byte reader
+silently decodes about one transaction in a thousand), and fans raw
+transactions out to searchers:
+
+```bash
+websocat ws://localhost:8548/feed     # { type: "feed_txs", txs: [{ hash, raw }], … }
+curl localhost:8548/feed/stats        # upstream health, txsRelayed, reconnects
+```
+
+`receivedAt` is stamped on arrival so searchers can measure the relay's added
+latency rather than assume it. This is a head start on decoding, not a preview
+of pending order flow — the feed carries transactions the sequencer has already
+ordered. Pending flow is what the auction is for.
+
 ## Atomic bundles
 
 `contracts/OrdoBundler.sol` is the answer to "can you do Jito bundles here". A
@@ -262,6 +308,12 @@ const s = await fetch("https://app.ordofi.network/api/stats").then(r => r.json()
 | `GET /api/explorer` | Full feed: report, recent arbs, auction stats, on-chain |
 | `GET /api/arbs/recent?n=40` | Recent atomic arbitrages |
 | `GET /api/onchain` | Settlement contract state and recent settlements |
+| `POST /api/keys` | Self-serve API key issuance (returned once, stored hashed) |
+| `GET /api/account?address=` | Bond, claimable rebates, and settlement history for one address |
+
+The auction serves its own, also CORS-open: `GET /receipts`, `/receipts/root`,
+`/receipts/:id`, `/feed/stats`, `/stats`. Keys are mintable from the browser at
+[`/portal`](https://app.ordofi.network/portal).
 
 ## Design honesty
 
