@@ -150,14 +150,15 @@ interface Cycle {
 }
 
 async function poolTiers(a: Hex, b: Hex): Promise<number[]> {
-  const tiers: number[] = [];
-  for (const fee of FEES) {
+  const hits = await Promise.all(FEES.map(async (fee) => {
     try {
       const out = await ethCall(V3_FACTORY, encodeFunctionData({ abi: FACTORY_ABI, functionName: "getPool", args: [a, b, fee] }));
-      if ((decodeFunctionResult({ abi: FACTORY_ABI, functionName: "getPool", data: out }) as string).toLowerCase() !== ZERO) tiers.push(fee);
-    } catch { /* no pool at this tier */ }
-  }
-  return tiers;
+      return (decodeFunctionResult({ abi: FACTORY_ABI, functionName: "getPool", data: out }) as string).toLowerCase() !== ZERO ? fee : null;
+    } catch {
+      return null; // no pool at this tier
+    }
+  }));
+  return hits.filter((f): f is number => f !== null);
 }
 
 /**
@@ -174,7 +175,9 @@ async function discoverCycles(): Promise<Cycle[]> {
   const wethUsdgTiers = await poolTiers(WETH, USDG);
   const wu = wethUsdgTiers[0]; // deepest-listed WETH/USDG tier for the shared leg
 
-  for (const { address, symbol } of universe) {
+  // A few tokens at a time: discovery used to be one factory call after
+  // another and took minutes, which is how long the desk sat at zero cycles.
+  await pooled(universe, 4, async ({ address, symbol }) => {
     const wethTiers = await poolTiers(WETH, address);
 
     for (const fA of wethTiers) {
@@ -183,7 +186,7 @@ async function discoverCycles(): Promise<Cycle[]> {
       }
     }
 
-    if (address === USDG || wu === undefined || wethTiers.length === 0) continue;
+    if (address === USDG || wu === undefined || wethTiers.length === 0) return;
     const usdgTiers = await poolTiers(USDG, address);
     for (const fu of usdgTiers) {
       for (const fw of wethTiers) {
@@ -191,7 +194,7 @@ async function discoverCycles(): Promise<Cycle[]> {
         cycles.push({ label: `WETH>${symbol}>USDG>WETH ${fw}/${fu}/${wu}`, tokens: [WETH, address, USDG, WETH], fees: [fw, fu, wu] });
       }
     }
-  }
+  });
   return cycles;
 }
 
