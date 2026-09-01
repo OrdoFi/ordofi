@@ -151,6 +151,23 @@ test("leakage: wei totals beyond double precision stay exact", () => {
   s.close();
 });
 
+test("arbsTouchingPool returns the transactions behind a singleton venue", () => {
+  const s = new OrdoStore(":memory:");
+  s.insertArbs([
+    { ...arb("0xa", 10, "0xbot1", ["0xSingleton"]), profitIsQuote: true, profitToken: "0xweth", profitWei: "5" },
+    { ...arb("0xb", 11, "0xbot2", ["0xsingleton", "0xother"]), profitIsQuote: false },
+    { ...arb("0xc", 12, "0xbot1", ["0xother"]) },
+  ]);
+
+  // Case-folded on both sides: logs emit lowercase, explorers paste checksummed.
+  const rows = s.arbsTouchingPool("0xSINGLETON");
+  assert.equal(rows.length, 2, "only arbs that touched the singleton");
+  assert.equal(rows[0].txHash, "0xb", "newest first");
+  assert.equal(rows[1].profitWei, "5", "profit rides along for pricing");
+  assert.equal(rows[1].profitIsQuote, true);
+  s.close();
+});
+
 test("clearing measurements keeps what the chain cannot re-derive", () => {
   const s = new OrdoStore(":memory:");
 

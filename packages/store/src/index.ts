@@ -473,6 +473,35 @@ export class OrdoStore {
     ).map((r) => ({ pool: r.pool, count: Number(r.count) }));
   }
 
+  /**
+   * Every arbitrage that touched one pool, with its booked profit. Exists for
+   * singleton venues (Uniswap V4 keeps every pool inside one contract), where
+   * the address alone says nothing and the caller needs the transactions to
+   * attribute flow any deeper.
+   */
+  arbsTouchingPool(pool: string): {
+    txHash: string;
+    profitToken?: string;
+    profitWei?: string;
+    profitIsQuote: boolean;
+  }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT a.tx_hash, a.profit_token, a.profit_wei, a.profit_is_quote
+           FROM arbs a
+           WHERE a.tx_hash IN (SELECT tx_hash FROM arb_pools WHERE LOWER(pool) = ?)
+           ORDER BY a.block DESC`,
+        )
+        .all(pool.toLowerCase()) as any[]
+    ).map((r) => ({
+      txHash: r.tx_hash,
+      profitToken: r.profit_token ?? undefined,
+      profitWei: r.profit_wei ?? undefined,
+      profitIsQuote: Boolean(r.profit_is_quote),
+    }));
+  }
+
   /** Block range and wall-clock span actually covered by the index. */
   window(): { minBlock: number; maxBlock: number; spanHours: number } {
     const r = this.db
