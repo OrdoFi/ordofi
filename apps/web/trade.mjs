@@ -13,9 +13,15 @@
  * stock-token and WETH/USDG liquidity sits there; V4 routing needs the
  * Universal Router's command encoding and comes later.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { encodeFunctionData, decodeFunctionResult, encodePacked, toEventSelector } from "viem";
 import { rpcFetch } from "@ordofi/core";
 import { getTokenInfo, toWhole } from "@ordofi/core/pricing";
+
+const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../data");
+const EXPLORER_API = "https://robinhoodchain.blockscout.com/api/v2";
+const EXPLORER_HEADERS = { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) ordofi-app" };
 
 export const CHAIN = {
   id: 4663,
@@ -52,6 +58,8 @@ const POOL_ABI = [
   { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "token1", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
   { type: "function", name: "liquidity", stateMutability: "view", inputs: [], outputs: [{ type: "uint128" }] },
+  { type: "function", name: "fee", stateMutability: "view", inputs: [], outputs: [{ type: "uint24" }] },
+  { type: "function", name: "factory", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
 ];
 
 const QUOTER_ABI = [
@@ -113,19 +121,211 @@ async function call(to, abi, functionName, args = []) {
 }
 
 // ---------------------------------------------------------------------------
-// Token list: the assets that demonstrably trade, straight from the index
+// Small JSON files under data/: survive restarts, never block a request
+// ---------------------------------------------------------------------------
+
+function loadJson(file, fallback) {
+  try {
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveJson(file, value) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    writeFileSync(file, JSON.stringify(value));
+  } catch {
+    /* read-only disk — the in-memory copy still serves */
+  }
+}
+
+async function explorerJson(path, timeoutMs = 12_000) {
+  const r = await fetch(`${EXPLORER_API}${path}`, { headers: EXPLORER_HEADERS, signal: AbortSignal.timeout(timeoutMs) });
+  if (!r.ok) throw new Error(`explorer ${r.status}`);
+  return r.json();
+}
+
+// ---------------------------------------------------------------------------
+// Persistent resolvers: look something up once, remember it across restarts
+// ---------------------------------------------------------------------------
+//
+// Robinhood Chain has ~425k Uniswap V3 pools (a launchpad mints one per
+// token), so nothing here enumerates the factory. Instead every fact is
+// resolved on first sight — pool composition, token metadata, which tiers a
+// token has against ETH/USDG — and kept in data/*.json. Misses are remembered
+// too, with a timestamp, so a dead contract is not re-asked every rebuild.
+
+class Resolver {
+  constructor(file, resolve, { concurrency = 4, retryMissMs = 86_400_000 } = {}) {
+    this.file = file;
+    this.resolve = resolve;
+    this.concurrency = concurrency;
+    this.retryMissMs = retryMissMs;
+    this.cache = new Map(Object.entries(loadJson(file, {})));
+    this.queue = [];
+    this.queued = new Set();
+    this.worker = null;
+    this.dirty = false;
+    this.onDrained = null;
+  }
+  get(key) {
+    const v = this.cache.get(key);
+    if (v?.miss && Date.now() - v.at > this.retryMissMs) return undefined; // stale miss: ask again
+    return v;
+  }
+  has(key) { return this.get(key) !== undefined; }
+  enqueue(key) {
+    if (this.has(key) || this.queued.has(key)) return;
+    this.queued.add(key);
+    this.queue.push(key);
+    if (!this.worker) this.worker = this.run().finally(() => { this.worker = null; });
+  }
+  /** Resolve now (used by on-demand lookups); still cached like the rest. */
+  async fetch(key) {
+    const hit = this.get(key);
+    if (hit) return hit;
+    const v = await this.lookup(key);
+    this.save(true);
+    return v;
+  }
+  async lookup(key) {
+    let v;
+    try { v = await this.resolve(key); } catch { v = null; }
+    v = v ?? { miss: true, at: Date.now() };
+    this.cache.set(key, v);
+    this.dirty = true;
+    return v;
+  }
+  async run() {
+    let sinceSave = 0;
+    const lane = async () => {
+      while (this.queue.length) {
+        const key = this.queue.shift();
+        this.queued.delete(key);
+        await this.lookup(key);
+        if (++sinceSave >= 50) { sinceSave = 0; this.save(); }
+      }
+    };
+    await Promise.all(Array.from({ length: this.concurrency }, lane));
+    this.save();
+    this.onDrained?.();
+  }
+  save(force = false) {
+    if (!this.dirty && !force) return;
+    saveJson(this.file, Object.fromEntries(this.cache));
+    this.dirty = false;
+  }
+  get size() { return this.cache.size; }
+  get pending() { return this.queue.length; }
+}
+
+const goodSymbol = (s) => typeof s === "string" && s.trim().length > 0 && s.trim().length <= 12 && !/^0x[0-9a-f]{6}$/i.test(s);
+const money = new Set([WETH, USDG]);
+
+/** Pool composition and provenance. Only factory pools are routable. */
+const pools = new Resolver(join(DATA_DIR, "pools.json"), async (pool) => {
+  const [t0, t1, fee, factory] = await Promise.all([
+    call(pool, POOL_ABI, "token0"),
+    call(pool, POOL_ABI, "token1"),
+    call(pool, POOL_ABI, "fee"),
+    call(pool, POOL_ABI, "factory").catch(() => null),
+  ]);
+  return { pool, token0: t0.toLowerCase(), token1: t1.toLowerCase(), fee: Number(fee), v3: (factory ?? "").toLowerCase() === V3_FACTORY };
+}, { concurrency: 4, retryMissMs: 7 * 86_400_000 });
+
+function normalizeExplorerToken(t) {
+  const address = (t.address_hash ?? t.address ?? "").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(address)) return null;
+  const symbol = (t.symbol ?? "").trim();
+  if (!goodSymbol(symbol)) return null;
+  return {
+    address,
+    symbol,
+    name: (t.name ?? "").slice(0, 48) || null,
+    decimals: Number(t.decimals ?? 18) || 18,
+    icon: t.icon_url ?? null,
+    usd: t.exchange_rate != null ? Number(t.exchange_rate) : null,
+    holders: Number(t.holders_count ?? t.holders ?? 0) || 0,
+    at: Date.now(),
+  };
+}
+
+/** Token metadata: the explorer's registry first, the contract itself second. */
+const meta = new Resolver(join(DATA_DIR, "token-meta.json"), async (address) => {
+  try {
+    const n = normalizeExplorerToken(await explorerJson(`/tokens/${address}`, 9_000));
+    if (n) return n;
+  } catch {
+    /* fall through to the contract */
+  }
+  const info = await getTokenInfo(address);
+  if (!goodSymbol(info.symbol)) return null;
+  return { address, symbol: info.symbol, name: null, decimals: info.decimals, icon: null, usd: info.usdPerToken ?? null, holders: 0, at: Date.now() };
+}, { concurrency: 3 });
+
+/** Which fee tiers a token has against ETH and USDG — i.e. whether the router can reach it. */
+const routes = new Resolver(join(DATA_DIR, "routes.json"), async (token) => {
+  const tiers = async (other) => {
+    const out = [];
+    for (const fee of FEES) {
+      try {
+        const p = (await call(V3_FACTORY, FACTORY_ABI, "getPool", [other, token, fee])).toLowerCase();
+        if (p !== "0x0000000000000000000000000000000000000000") out.push(fee);
+      } catch { /* tier absent */ }
+    }
+    return out;
+  };
+  const [weth, usdg] = await Promise.all([tiers(WETH), tiers(USDG)]);
+  return { token, weth, usdg, at: Date.now() };
+}, { concurrency: 3 });
+
+/** True/false when known, null while the check is still queued. */
+function routable(token) {
+  if (money.has(token)) return true;
+  const r = routes.get(token);
+  if (!r || r.miss) { routes.enqueue(token); return null; }
+  return r.weth.length + r.usdg.length > 0;
+}
+
+export function resolverStats() {
+  return {
+    pools: { known: pools.size, pending: pools.pending },
+    tokens: { known: meta.size, pending: meta.pending },
+    routes: { known: routes.size, pending: routes.pending },
+  };
+}
+
+/** The explorer's ERC-20 list, most-held first. */
+async function explorerTokenPages(pages) {
+  const out = [];
+  let params = "";
+  for (let i = 0; i < pages; i++) {
+    const d = await explorerJson(`/tokens?type=ERC-20${params}`, 9_000);
+    for (const t of d.items ?? []) {
+      const n = normalizeExplorerToken(t);
+      if (n) out.push(n);
+    }
+    if (!d.next_page_params) break;
+    params = "&" + new URLSearchParams(d.next_page_params).toString();
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Token list: everything the router can reach, ranked by evidence of trading
 // ---------------------------------------------------------------------------
 
 let tokenCache = null; // { at, list }
 let tokenRefreshing = null;
 
 /**
- * Stale-while-revalidate: the list takes dozens of RPC round-trips to build,
- * so a cold cache must never block the page. Serve whatever we have and
- * rebuild in the background; only the very first call ever waits.
+ * Stale-while-revalidate: the list takes dozens of round-trips to build, so a
+ * cold cache must never block the page. Serve whatever we have and rebuild in
+ * the background; only the very first call ever waits.
  */
 export async function tradeTokens(store) {
-  const stale = !tokenCache || Date.now() - tokenCache.at >= 600_000;
+  const stale = !tokenCache || Date.now() - tokenCache.at >= 300_000;
   if (stale && !tokenRefreshing) {
     tokenRefreshing = buildTokenList(store)
       .then((list) => { tokenCache = { at: Date.now(), list }; })
@@ -137,87 +337,88 @@ export async function tradeTokens(store) {
   return tokenCache?.list ?? [];
 }
 
-/**
- * The chain explorer's ERC-20 registry: names, icons, USD prices, holder
- * counts. Cloudflare shields it from some networks, so a failure here only
- * costs the extras — the pool-derived list still ships.
- */
-async function blockscoutTokens(pages = 3) {
+const IMPORTED_FILE = join(DATA_DIR, "imported-tokens.json");
+const imported = new Set(loadJson(IMPORTED_FILE, []));
+
+/** Pools the recorder saw trading in the last day (busiest first), plus the arb-contested set. */
+function activePoolList(store) {
+  const since = Math.floor(Date.now() / 1000) - 86_400;
+  const seen = new Set();
   const out = [];
-  let params = "";
-  for (let i = 0; i < pages; i++) {
-    const r = await fetch(`https://robinhoodchain.blockscout.com/api/v2/tokens?type=ERC-20${params}`, {
-      headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) ordofi-app" },
-      signal: AbortSignal.timeout(9_000),
-    });
-    if (!r.ok) throw new Error(`blockscout ${r.status}`);
-    const d = await r.json();
-    for (const t of d.items ?? []) {
-      const address = (t.address_hash ?? t.address ?? "").toLowerCase();
-      if (!/^0x[0-9a-f]{40}$/.test(address)) continue;
-      const symbol = (t.symbol ?? "").trim();
-      if (!symbol || symbol.length > 12) continue;
-      out.push({
-        address,
-        symbol,
-        name: (t.name ?? "").slice(0, 48) || null,
-        decimals: Number(t.decimals ?? 18) || 18,
-        icon: t.icon_url ?? null,
-        usd: t.exchange_rate != null ? Number(t.exchange_rate) : null,
-        holders: Number(t.holders_count ?? t.holders ?? 0) || 0,
-      });
-    }
-    if (!d.next_page_params) break;
-    params = "&" + new URLSearchParams(d.next_page_params).toString();
+  for (const r of store?.marketStats?.(since) ?? []) {
+    const p = r.pool.toLowerCase();
+    if (!seen.has(p)) { seen.add(p); out.push({ pool: p, swaps: r.swaps }); }
+  }
+  for (const { pool, count } of store?.topPools?.(60) ?? []) {
+    const p = pool.toLowerCase();
+    if (!seen.has(p)) { seen.add(p); out.push({ pool: p, swaps: count }); }
   }
   return out;
 }
 
+function tokenRow(address, m, extra = {}) {
+  return {
+    address,
+    symbol: m.symbol,
+    name: m.name ?? null,
+    decimals: m.decimals,
+    usdPerToken: m.usd ?? m.usdPerToken ?? null,
+    icon: m.icon ?? null,
+    holders: m.holders ?? 0,
+    ...extra,
+  };
+}
+
 async function buildTokenList(store) {
   const seen = new Map();
-  const add = async (address) => {
-    const a = address.toLowerCase();
-    if (seen.has(a)) return;
-    try {
-      const info = await getTokenInfo(a);
-      // An address-prefix symbol means the lookup was throttled; leave the
-      // token out rather than list something nobody can recognize.
-      if (!info.symbol || info.symbol === "?" || /^0x[0-9a-f]{6}$/i.test(info.symbol)) return;
-      seen.set(a, {
-        address: a,
-        symbol: info.symbol,
-        decimals: info.decimals,
-        usdPerToken: info.usdPerToken,
-        active: true, // seen trading in a contested pool
-      });
-    } catch {
-      /* not an ERC-20 we can describe */
-    }
-  };
+  const activity = new Map(); // token -> swaps in active pools
+  const moneyPaired = new Set(); // tokens with a factory pool against ETH/USDG
 
-  await add(WETH);
-  await add(USDG);
-
-  // Every pool the watcher has seen contested is a pool with real two-sided
-  // flow. Ask each (V3-style pools only; the V4 singleton has no token0()).
-  const pools = store?.topPools?.(60) ?? [];
-  for (const { pool } of pools) {
-    try {
-      const [t0, t1] = await Promise.all([
-        call(pool, POOL_ABI, "token0"),
-        call(pool, POOL_ABI, "token1"),
-      ]);
-      await add(t0);
-      await add(t1);
-    } catch {
-      /* singleton or exotic pool — skip */
+  // 1. Pools that demonstrably traded today. Composition comes from the pool
+  //    cache; unknown pools are queued busiest-first and join the next build.
+  for (const { pool, swaps } of activePoolList(store)) {
+    const info = pools.get(pool);
+    if (!info) { pools.enqueue(pool); continue; }
+    if (info.miss || !info.v3) continue;
+    for (const [tok, other] of [[info.token0, info.token1], [info.token1, info.token0]]) {
+      activity.set(tok, (activity.get(tok) ?? 0) + swaps);
+      if (money.has(other)) moneyPaired.add(tok);
     }
   }
 
-  // Fold in the explorer registry: names and icons for tokens we already
-  // list, and the long tail of listed-but-quiet tokens for the search modal.
+  // 2. The core pair is always described from the chain itself.
+  for (const a of [WETH, USDG]) {
+    try {
+      const info = await getTokenInfo(a);
+      seen.set(a, { address: a, symbol: info.symbol, decimals: info.decimals, usdPerToken: info.usdPerToken, active: true });
+    } catch { /* the explorer pass will still describe it */ }
+  }
+
+  // 3. Active tokens, busiest first, from cached metadata.
+  const active = [...activity.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+  for (const tok of active) {
+    if (seen.has(tok)) continue;
+    const m = meta.get(tok);
+    if (!m) { meta.enqueue(tok); continue; }
+    if (m.miss) continue;
+    seen.set(tok, tokenRow(tok, m, { active: true }));
+  }
+  // The busiest few get the chain-derived price, which beats the explorer's.
+  for (const tok of active.slice(0, 40)) {
+    const row = seen.get(tok);
+    if (!row) continue;
+    try {
+      const info = await getTokenInfo(tok);
+      if (info.usdPerToken) row.usdPerToken = info.usdPerToken;
+    } catch { /* keep the explorer's number */ }
+  }
+
+  // 4. The explorer's most-held tokens: names, icons, prices, holder counts,
+  //    and the long tail of listed-but-quiet assets for the search box.
   try {
-    for (const t of await blockscoutTokens()) {
+    for (const t of await explorerTokenPages(20)) {
+      meta.cache.set(t.address, t);
+      meta.dirty = true;
       const hit = seen.get(t.address);
       if (hit) {
         hit.name = hit.name ?? t.name;
@@ -225,27 +426,149 @@ async function buildTokenList(store) {
         hit.holders = t.holders;
         if (hit.usdPerToken == null && t.usd != null) hit.usdPerToken = t.usd;
       } else {
-        seen.set(t.address, {
-          address: t.address,
-          symbol: t.symbol,
-          name: t.name,
-          decimals: t.decimals,
-          usdPerToken: t.usd,
-          icon: t.icon,
-          holders: t.holders,
-          active: false,
-        });
+        seen.set(t.address, tokenRow(t.address, t, { active: false }));
       }
     }
+    meta.save();
   } catch {
-    /* explorer unreachable — the tradable core is enough */
+    /* explorer unreachable — the chain-derived core is enough */
   }
 
-  return [...seen.values()].sort((a, b) => {
-    const rank = (t) =>
-      t.address === WETH ? 0 : t.address === USDG ? 1 : t.active ? 2 : t.usdPerToken ? 3 : 4;
-    return rank(a) - rank(b) || (b.holders ?? 0) - (a.holders ?? 0) || a.symbol.localeCompare(b.symbol);
-  });
+  // 5. Anything a user imported by address and could trade.
+  for (const tok of imported) {
+    if (seen.has(tok)) continue;
+    const m = meta.get(tok);
+    if (m && !m.miss) seen.set(tok, tokenRow(tok, m, { active: activity.has(tok) }));
+  }
+
+  // Routability: certain from pool evidence, otherwise from the route cache.
+  for (const t of seen.values()) {
+    t.swaps24h = activity.get(t.address) ?? 0;
+    t.tradable = moneyPaired.has(t.address) ? true : routable(t.address);
+  }
+
+  const rebuild = () => { tokenCache = null; };
+  if (pools.pending) pools.onDrained = rebuild;
+  if (meta.pending) meta.onDrained = rebuild;
+  if (routes.pending) routes.onDrained = rebuild;
+
+  return [...seen.values()]
+    .filter((t) => t.tradable !== false || t.active)
+    .sort((a, b) => {
+      const rank = (t) =>
+        t.address === WETH ? 0 : t.address === USDG ? 1 : t.active ? 2 : t.tradable && t.usdPerToken ? 3 : t.tradable ? 4 : 5;
+      return rank(a) - rank(b) || b.swaps24h - a.swaps24h || (b.holders ?? 0) - (a.holders ?? 0) || a.symbol.localeCompare(b.symbol);
+    });
+}
+
+/**
+ * Import any token by address: describe it and check it is reachable. This is
+ * how the long tail past the list becomes tradable — paste the contract.
+ */
+export async function tradeToken(store, address) {
+  const a = String(address ?? "").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error("bad address");
+  const list = await tradeTokens(store);
+  const listed = list.find((t) => t.address === a);
+  if (listed && listed.tradable != null) return listed;
+  const [m, r] = await Promise.all([meta.fetch(a), routes.fetch(a)]);
+  if (m.miss) throw new Error("not an ERC-20 we can describe");
+  const tradable = money.has(a) || (r && !r.miss && r.weth.length + r.usdg.length > 0);
+  if (tradable && !imported.has(a)) {
+    imported.add(a);
+    saveJson(IMPORTED_FILE, [...imported]);
+    tokenCache = null;
+  }
+  return tokenRow(a, m, { active: Boolean(listed?.active), tradable, swaps24h: listed?.swaps24h ?? 0, tiers: r && !r.miss ? { weth: r.weth, usdg: r.usdg } : null });
+}
+
+// ---------------------------------------------------------------------------
+// Markets: every routable pair that traded today, ranked by volume
+// ---------------------------------------------------------------------------
+//
+// Built from the recorder's tape and the pool cache only — no RPC on the
+// request path — so it is cheap enough to poll. Price orientation puts money
+// on the quote side (USDG over ETH over anything else), matching the chart.
+
+const moneyRank = (a) => (a === USDG ? 3 : a === WETH ? 2 : 1);
+let marketsCache = null; // { at, data }
+
+export async function tradeMarkets(store) {
+  if (marketsCache && Date.now() - marketsCache.at < 20_000) return marketsCache.data;
+  const now = Math.floor(Date.now() / 1000);
+  const day = store?.marketStats?.(now - 86_400) ?? [];
+  const hour = new Map((store?.marketStats?.(now - 3_600) ?? []).map((r) => [r.pool, r]));
+  const tokens = await tradeTokens(store);
+  const tokenByAddr = new Map(tokens.map((t) => [t.address, t]));
+  const describe = (a) => {
+    const t = tokenByAddr.get(a);
+    if (t) return t;
+    const m = meta.get(a);
+    if (m && !m.miss) return tokenRow(a, m);
+    meta.enqueue(a);
+    return null;
+  };
+
+  const rows = [];
+  let unknownPools = 0;
+  for (const r of day) {
+    const p = pools.get(r.pool.toLowerCase());
+    if (!p) { pools.enqueue(r.pool.toLowerCase()); unknownPools++; continue; }
+    if (p.miss || !p.v3) continue; // not a factory pool → the router cannot reach it
+    const base0 = moneyRank(p.token0) <= moneyRank(p.token1);
+    const baseA = base0 ? p.token0 : p.token1;
+    const quoteA = base0 ? p.token1 : p.token0;
+    const base = describe(baseA);
+    const quote = describe(quoteA);
+    if (!base || !quote) continue;
+    const scale = 10 ** (base.decimals - quote.decimals);
+    const orient = (x) => (base0 ? x : x === 0 ? 0 : 1 / x) * scale;
+    const price = orient(r.close);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const open24 = orient(r.open);
+    const h = hour.get(r.pool);
+    const open1h = h ? orient(h.open) : null;
+    const volQuote = (base0 ? r.vol1 : r.vol0) / 10 ** quote.decimals;
+    const quoteUsd = quote.usdPerToken ?? (quoteA === USDG ? 1 : null);
+    rows.push({
+      pool: p.pool,
+      fee: p.fee,
+      base: { address: baseA === WETH ? NATIVE : baseA, symbol: baseA === WETH ? "ETH" : base.symbol, icon: base.icon ?? null, decimals: base.decimals, usdPerToken: base.usdPerToken ?? null },
+      quote: { address: quoteA === WETH ? NATIVE : quoteA, symbol: quoteA === WETH ? "ETH" : quote.symbol, decimals: quote.decimals, usdPerToken: quoteUsd },
+      price,
+      change24: open24 > 0 ? price / open24 - 1 : null,
+      change1h: open1h ? price / open1h - 1 : null,
+      high24: base0 ? orient(r.high) : orient(r.low),
+      low24: base0 ? orient(r.low) : orient(r.high),
+      volumeQuote: volQuote,
+      volumeUsd: quoteUsd ? volQuote * quoteUsd : null,
+      swaps: r.swaps,
+      lastTrade: r.lastBucket,
+    });
+  }
+
+  // One row per pair: the busiest fee tier speaks for it.
+  const byPair = new Map();
+  for (const m of rows) {
+    const k = `${m.base.address}:${m.quote.address}`;
+    const cur = byPair.get(k);
+    if (!cur || m.swaps > cur.swaps) byPair.set(k, m);
+  }
+  const markets = [...byPair.values()].sort((a, b) => (b.volumeUsd ?? 0) - (a.volumeUsd ?? 0) || b.swaps - a.swaps);
+  const data = {
+    markets,
+    coverage: { poolsTraded: day.length, poolsUnknown: unknownPools, tapeSince: day.length ? Math.min(...day.map((r) => r.firstBucket)) : null },
+    resolvers: resolverStats(),
+    at: new Date().toISOString(),
+  };
+  marketsCache = { at: Date.now(), data };
+  return data;
+}
+
+/** Warm the caches at boot so the first visitor never waits on a cold lookup. */
+export function warmTradeCaches(store) {
+  for (const { pool } of activePoolList(store).slice(0, 600)) pools.enqueue(pool);
+  return tradeTokens(store);
 }
 
 // ---------------------------------------------------------------------------
@@ -405,18 +728,18 @@ async function bestPool(base, quote) {
   const hit = poolAddrCache.get(key);
   if (hit && Date.now() - hit.at < 600_000) return hit;
 
-  const pools = [];
+  const found = [];
   for (const fee of FEES) {
     try {
       const p = (await call(V3_FACTORY, FACTORY_ABI, "getPool", [base, quote, fee])).toLowerCase();
-      if (p !== "0x0000000000000000000000000000000000000000") pools.push({ pool: p, fee });
+      if (p !== "0x0000000000000000000000000000000000000000") found.push({ pool: p, fee });
     } catch {
       /* no pool at this tier */
     }
   }
-  if (pools.length === 0) return null;
+  if (found.length === 0) return null;
   const withLiq = await Promise.all(
-    pools.map(async (p) => {
+    found.map(async (p) => {
       try {
         return { ...p, liq: await call(p.pool, POOL_ABI, "liquidity") };
       } catch {

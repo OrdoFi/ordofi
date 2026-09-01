@@ -495,6 +495,37 @@ export class OrdoStore {
     }));
   }
 
+  /**
+   * One row per pool that traded since `sinceBucket`: first open, last close,
+   * extremes, volume and swap count over the window. This is what a market
+   * list needs, and reading it here means the terminal can rank hundreds of
+   * pairs without a single RPC call.
+   */
+  marketStats(sinceBucket: number): {
+    pool: string; open: number; high: number; low: number; close: number;
+    vol0: number; vol1: number; swaps: number; firstBucket: number; lastBucket: number;
+  }[] {
+    return (
+      this.db
+        .prepare(
+          `WITH w AS (
+             SELECT pool, MIN(bucket) fb, MAX(bucket) lb, MAX(high) high, MIN(low) low,
+                    SUM(vol0) vol0, SUM(vol1) vol1, SUM(swaps) swaps
+             FROM candles WHERE bucket >= ? GROUP BY pool)
+           SELECT w.pool, f.open, w.high, w.low, l.close, w.vol0, w.vol1, w.swaps, w.fb, w.lb
+           FROM w
+           JOIN candles f ON f.pool = w.pool AND f.bucket = w.fb
+           JOIN candles l ON l.pool = w.pool AND l.bucket = w.lb
+           ORDER BY w.swaps DESC`,
+        )
+        .all(sinceBucket) as any[]
+    ).map((r) => ({
+      pool: r.pool, open: r.open, high: r.high, low: r.low, close: r.close,
+      vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
+      firstBucket: Number(r.fb), lastBucket: Number(r.lb),
+    }));
+  }
+
   /** The tape is a rolling window, not an archive; old buckets cost disk. */
   pruneCandles(olderThanBucket: number): number {
     const r = this.db.prepare(`DELETE FROM candles WHERE bucket < ?`).run(olderThanBucket);

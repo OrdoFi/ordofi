@@ -191,6 +191,35 @@ test("candles: out-of-order points still yield correct open/close", () => {
   s.close();
 });
 
+test("marketStats: per-pool window summary spans buckets correctly", () => {
+  const s = new OrdoStore(":memory:");
+  const pt = (pool: string, bucket: number, block: number, price: number, vol1 = 1) =>
+    ({ pool, bucket, price, vol0: 1, vol1, block });
+
+  // Pool A trades across three minutes; the middle minute holds the high.
+  s.upsertCandles([pt("0xa", 600, 10, 100), pt("0xa", 660, 20, 130, 5), pt("0xa", 720, 30, 110)]);
+  // Pool B has one old bucket outside the window and one inside it.
+  s.upsertCandles([pt("0xb", 60, 1, 1.0), pt("0xb", 720, 31, 2.0)]);
+
+  const rows = s.marketStats(600);
+  assert.equal(rows.length, 2);
+  const a = rows.find((r) => r.pool === "0xa")!;
+  assert.equal(a.open, 100, "open is the first bucket's open");
+  assert.equal(a.close, 110, "close is the last bucket's close");
+  assert.equal(a.high, 130);
+  assert.equal(a.low, 100);
+  assert.equal(a.swaps, 3);
+  assert.equal(a.vol1, 7);
+  assert.equal(a.firstBucket, 600);
+  assert.equal(a.lastBucket, 720);
+  assert.equal(rows[0].pool, "0xa", "busiest pool first");
+
+  const b = rows.find((r) => r.pool === "0xb")!;
+  assert.equal(b.open, 2.0, "buckets before the window do not leak into open");
+  assert.equal(b.swaps, 1);
+  s.close();
+});
+
 test("clearing measurements keeps what the chain cannot re-derive", () => {
   const s = new OrdoStore(":memory:");
 

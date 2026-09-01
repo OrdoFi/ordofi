@@ -4,7 +4,20 @@ import { join, extname } from "node:path";
 import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
 import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
-import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances } from "./trade.mjs";
+import { gzipSync } from "node:zlib";
+import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
+
+/** JSON reply, gzipped when the client accepts it — the token list is large. */
+function sendJson(req, res, status, body, headers = {}) {
+  const raw = Buffer.from(JSON.stringify(body));
+  const gz = raw.length > 2048 && /\bgzip\b/.test(req.headers["accept-encoding"] ?? "");
+  res.writeHead(status, {
+    "content-type": "application/json",
+    ...(gz ? { "content-encoding": "gzip", vary: "accept-encoding" } : {}),
+    ...headers,
+  });
+  res.end(gz ? gzipSync(raw) : raw);
+}
 
 /**
  * The index is the query path. NDJSON is kept as the raw record and used as a
@@ -39,6 +52,9 @@ const MIME = {
   ".js": "text/javascript",
   ".svg": "image/svg+xml",
   ".json": "application/json",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".webmanifest": "application/manifest+json",
 };
 
 function recentArbs(n) {
@@ -445,12 +461,33 @@ createServer(async (req, res) => {
 
   if (path === "/api/trade/tokens") {
     try {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(await tradeTokens(store)));
+      sendJson(req, res, 200, await tradeTokens(store));
     } catch (e) {
-      res.writeHead(502, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: e.message }));
+      sendJson(req, res, 502, { error: e.message });
     }
+    return;
+  }
+
+  if (path === "/api/trade/markets") {
+    try {
+      sendJson(req, res, 200, await tradeMarkets(store), { "cache-control": "public, max-age=15" });
+    } catch (e) {
+      sendJson(req, res, 502, { error: e.message });
+    }
+    return;
+  }
+
+  if (path === "/api/trade/token") {
+    try {
+      sendJson(req, res, 200, await tradeToken(store, url.searchParams.get("address") ?? ""), { "cache-control": "no-store" });
+    } catch (e) {
+      sendJson(req, res, 400, { error: e.message }, { "cache-control": "no-store" });
+    }
+    return;
+  }
+
+  if (path === "/api/trade/resolvers") {
+    sendJson(req, res, 200, resolverStats(), { "cache-control": "no-store" });
     return;
   }
 
@@ -586,6 +623,7 @@ createServer(async (req, res) => {
   }
 
   if (path === "/") path = "/index.html";
+  if (path === "/favicon.ico") path = "/favicon-32.png";
   if (path === "/portal") path = "/portal.html";
   if (path === "/trade") path = "/trade.html";
   if (path === "/docs") path = "/docs.html";
@@ -603,6 +641,9 @@ createServer(async (req, res) => {
   res.end(readFileSync(file));
 }).listen(PORT, () => console.log(`OrdoFi web | http://localhost:${PORT}  (dashboard at /dashboard)`));
 
-// Warm the token list at boot: building it takes dozens of RPC round-trips,
-// and the first page load should never be the one paying for that.
-tradeTokens(store).catch(() => {});
+// Warm the trade caches at boot: pool composition for today's busiest pools
+// and the token list. Building them takes dozens of round-trips, and the first
+// page load should never be the one paying for that.
+warmTradeCaches(store)
+  .then((list) => console.log(`web | trade: ${list.length} tokens listed; resolvers ${JSON.stringify(resolverStats())}`))
+  .catch((e) => console.warn(`web | trade warm-up failed: ${e.message}`));

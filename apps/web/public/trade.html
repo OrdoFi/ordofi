@@ -3,42 +3,87 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" content="#ff6414" />
   <title>OrdoFi Trade — MEV-protected swaps on Robinhood Chain</title>
   <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
   <style>
     html, body { height: 100%; }
     body.term { display: flex; flex-direction: column; overflow: hidden; }
-    body.term nav .wrap { height: 52px; }
+    body.term::before, body.term::after { display: none; } /* full-bleed terminal: no side rails */
+    body.term nav .wrap { height: 52px; max-width: none; padding: 0 16px; }
     body.term nav .logo { font-size: 17px; }
-    body.term nav .logo .mark { width: 22px; height: 22px; }
     body.term .nav-links { gap: 22px; }
     body.term .nav-links a { font-size: 13.5px; }
+    body.term .nav-links a.here { color: var(--accent); }
+    .up { color: #1e9e6a !important; } .dn { color: #c0392b !important; }
+    button.mini { border: 1px solid var(--border); background: var(--card); color: var(--muted); font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; cursor: pointer; line-height: 1.4; }
+    button.mini:hover { border-color: var(--accent); color: var(--accent); }
 
     /* ---------- instrument bar ---------- */
     .ibar { display: flex; align-items: stretch; gap: 0; border-bottom: 1px solid var(--border); background: var(--card); overflow-x: auto; scrollbar-width: none; flex: none; }
     .ibar::-webkit-scrollbar { display: none; }
     .ibar .cell { padding: 9px 18px; border-right: 1px solid var(--border); display: flex; flex-direction: column; justify-content: center; white-space: nowrap; }
-    .ibar .pairname { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+    .ibar .cell.pairsel { cursor: pointer; }
+    .ibar .cell.pairsel:hover { background: var(--bg-elev); }
+    .ibar .pairname { font-size: 17px; font-weight: 800; letter-spacing: -0.01em; display: flex; align-items: center; gap: 9px; }
+    .ibar .pairname .chev { font-size: 9px; color: var(--muted); }
+    .ibar .pairname img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }
     .ibar .pairfee { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 1px; }
     .ibar .bigpx { font-family: var(--mono); font-size: 19px; font-weight: 700; transition: color .25s; }
-    .ibar .bigpx.up { color: #1e9e6a; } .ibar .bigpx.dn { color: #c0392b; }
     .ibar .k { font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
     .ibar .v { font-family: var(--mono); font-size: 13px; color: var(--text); margin-top: 2px; }
-    .ibar .v.up { color: #1e9e6a; } .ibar .v.dn { color: #c0392b; }
+    .ibar .qsel { display: flex; gap: 4px; margin-top: 3px; }
+    .ibar .qsel button { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); background: var(--card); color: var(--muted); cursor: pointer; }
+    .ibar .qsel button.on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
     .ibar .spacer { flex: 1; border-right: none; }
     .ibar .prot { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--text-dim); padding: 0 18px; border-left: 1px solid var(--border); }
     .ibar .prot .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+    .ibar .mk-toggle { display: none; align-items: center; padding: 0 12px; border-right: 1px solid var(--border); }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
 
     /* ---------- main grid ---------- */
-    .main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 252px 332px; gap: 1px; background: var(--border); }
+    .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr) 252px 332px; gap: 1px; background: var(--border); }
+    .main.mk-collapsed { grid-template-columns: minmax(0, 1fr) 252px 332px; }
+    .main.mk-collapsed .mpanel { display: none; }
     .main > * { background: var(--card); min-height: 0; }
+    .phead { padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; letter-spacing: .02em; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex: none; }
+    .phead .sub { font-family: var(--mono); font-size: 10px; color: var(--muted); font-weight: 400; margin-right: auto; }
+
+    /* markets panel */
+    .mpanel { display: flex; flex-direction: column; }
+    .mk-search { padding: 8px 10px; border-bottom: 1px solid var(--border); flex: none; }
+    .mk-search input { width: 100%; padding: 6px 9px; border: 1px solid var(--border); background: var(--bg-elev); font-family: var(--mono); font-size: 12px; color: var(--text); outline: none; }
+    .mk-search input:focus { border-color: var(--accent); }
+    .mk-tabs { display: flex; border-bottom: 1px solid var(--border); flex: none; }
+    .mk-tabs button { flex: 1; padding: 7px 0; border: none; border-bottom: 2px solid transparent; background: none; font-family: var(--mono); font-size: 10.5px; color: var(--muted); cursor: pointer; }
+    .mk-tabs button.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 700; }
+    .mk-cols { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; padding: 5px 10px; font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--border); flex: none; }
+    .mk-cols span:last-child { text-align: right; }
+    .mk-list { flex: 1; overflow-y: auto; min-height: 0; }
+    .mkrow { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; padding: 6px 10px; cursor: pointer; align-items: center; border-bottom: 1px solid transparent; }
+    .mkrow:hover { background: var(--bg-elev); }
+    .mkrow.on { background: var(--accent-soft); }
+    .mkrow .star { color: #c9c3b8; font-size: 13px; cursor: pointer; line-height: 1; }
+    .mkrow .star:hover, .mkrow .star.fav { color: var(--accent); }
+    .mkrow .pair { min-width: 0; }
+    .mkrow .pair b { font-size: 12.5px; font-weight: 700; }
+    .mkrow .pair span { color: var(--muted); font-size: 11px; }
+    .mkrow .pair small { display: block; font-family: var(--mono); font-size: 9.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mkrow .num { text-align: right; font-family: var(--mono); font-size: 11.5px; }
+    .mkrow .num small { display: block; font-size: 10px; }
+    .mk-foot { padding: 7px 10px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--muted); display: flex; justify-content: space-between; flex: none; }
+    .mk-foot a { color: var(--accent); }
+    .mk-empty { padding: 18px 12px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.6; }
 
     /* chart panel */
     .cpanel { display: flex; flex-direction: column; }
     .ctools { display: flex; align-items: center; gap: 4px; padding: 7px 12px; border-bottom: 1px solid var(--border); flex: none; }
-    .tf { font-family: var(--mono); font-size: 11.5px; padding: 4px 10px; border-radius: 0; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; }
+    .tf { font-family: var(--mono); font-size: 11.5px; padding: 4px 10px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; }
     .tf:hover { color: var(--text); }
     .tf.on { border-color: var(--border-light); background: var(--bg-elev); color: var(--text); font-weight: 700; }
     .ctools .note { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
@@ -46,8 +91,6 @@
 
     /* trades panel */
     .tpanel { display: flex; flex-direction: column; }
-    .phead { padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 700; letter-spacing: .02em; display: flex; justify-content: space-between; align-items: center; flex: none; }
-    .phead .sub { font-family: var(--mono); font-size: 10px; color: var(--muted); font-weight: 400; }
     .tcols { display: grid; grid-template-columns: 1.2fr 1fr .9fr; padding: 5px 14px; font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--border); flex: none; }
     .tcols span:nth-child(2), .trow span:nth-child(2) { text-align: right; }
     .tcols span:nth-child(3), .trow span:nth-child(3) { text-align: right; }
@@ -64,37 +107,40 @@
 
     /* ticket panel */
     .spanel { display: flex; flex-direction: column; overflow-y: auto; }
-    .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-bottom: 1px solid var(--border); flex: none; }
+    .sides { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--border); flex: none; }
     .sides button { padding: 11px 0; border: none; background: var(--bg-elev); color: var(--muted); font-family: var(--sans); font-size: 13.5px; font-weight: 700; cursor: pointer; border-bottom: 2px solid transparent; }
     .sides button.on-buy { background: var(--card); color: #1e9e6a; border-bottom-color: #1e9e6a; }
     .sides button.on-sell { background: var(--card); color: #c0392b; border-bottom-color: #c0392b; }
     .ticket { padding: 14px 16px 16px; }
     .tick-mode { display: flex; gap: 6px; margin-bottom: 12px; align-items: center; }
-    .chip { font-family: var(--mono); font-size: 10.5px; padding: 4px 9px; border-radius: 0; border: 1px solid var(--border-light); color: var(--text-dim); background: var(--bg-elev); }
+    .chip { font-family: var(--mono); font-size: 10.5px; padding: 4px 9px; border: 1px solid var(--border-light); color: var(--text-dim); background: var(--bg-elev); }
     .chip.act { border-color: var(--accent); color: var(--accent); font-weight: 700; }
     .tick-mode .slip { margin-left: auto; cursor: pointer; }
     .tick-mode .slip:hover { border-color: var(--accent); color: var(--accent); }
-    .box { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 0; padding: 11px 13px; }
-    .box + .box { margin-top: 6px; }
+    .box { background: var(--bg-elev); border: 1px solid var(--border); padding: 11px 13px; }
     .box .lab { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; }
     .box .row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
     .box input { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: var(--mono); font-size: 21px; color: var(--text); font-weight: 600; }
     .box input::placeholder { color: #b9b3a6; }
-    .tokbtn { display: flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border-light); border-radius: 0; padding: 6px 10px; font-weight: 700; font-size: 13.5px; cursor: pointer; white-space: nowrap; font-family: var(--sans); }
+    .tokbtn { display: flex; align-items: center; gap: 6px; background: var(--card); border: 1px solid var(--border-light); padding: 6px 10px; font-weight: 700; font-size: 13.5px; cursor: pointer; white-space: nowrap; font-family: var(--sans); }
     .tokbtn:hover { border-color: var(--accent); }
+    .tokbtn img { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; }
     .tokbtn .chev { font-size: 9px; color: var(--muted); }
     .usd { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 3px; min-height: 14px; }
     .qamt { display: flex; gap: 5px; margin-top: 7px; }
-    .qamt button { flex: 1; font-family: var(--mono); font-size: 10.5px; padding: 4px 0; border-radius: 0; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); cursor: pointer; }
+    .qamt button { flex: 1; font-family: var(--mono); font-size: 10.5px; padding: 4px 0; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); cursor: pointer; }
     .qamt button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
     .qamt button:disabled { opacity: .45; cursor: default; }
+    .flipwrap { display: flex; justify-content: center; height: 6px; position: relative; z-index: 2; }
+    .flip { position: absolute; top: -12px; width: 30px; height: 30px; border: 1px solid var(--border-light); background: var(--card); color: var(--text-dim); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .flip:hover { border-color: var(--accent); color: var(--accent); }
 
     .qd { margin-top: 11px; border-top: 1px dashed var(--border); padding-top: 10px; font-size: 12px; }
     .qd .l { display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--muted); }
     .qd .l b { font-family: var(--mono); color: var(--text); font-weight: 500; }
     .qd .warn b { color: var(--danger); }
 
-    .action { width: 100%; margin-top: 12px; padding: 13px; border-radius: 0; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; font-family: var(--sans); transition: background .15s; }
+    .action { width: 100%; margin-top: 12px; padding: 13px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; font-family: var(--sans); transition: background .15s; }
     .action:hover:not(:disabled) { background: var(--accent-dim); }
     .action:disabled { opacity: .55; cursor: default; }
     .status { margin-top: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.65; color: var(--text-dim); word-break: break-word; }
@@ -102,7 +148,7 @@
 
     /* ---------- bottom panel ---------- */
     .bpanel { flex: none; height: 192px; border-top: 1px solid var(--border); background: var(--card); display: flex; flex-direction: column; }
-    .btabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex: none; }
+    .btabs { display: flex; border-bottom: 1px solid var(--border); flex: none; }
     .btabs button { padding: 9px 18px; border: none; background: none; font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; letter-spacing: .02em; }
     .btabs button.on { color: var(--text); border-bottom-color: var(--accent); }
     .bbody { flex: 1; overflow-y: auto; min-height: 0; padding: 0 18px; }
@@ -112,6 +158,8 @@
     .bbody td { font-family: var(--mono); font-size: 11.5px; }
     .bbody a { color: var(--accent); }
     .bbody .empty { padding: 16px 0; color: var(--muted); font-family: var(--mono); font-size: 12px; }
+    .bbody tr.link { cursor: pointer; }
+    .bbody tr.link:hover td { background: var(--bg-elev); }
     .prot-copy { padding: 12px 0; font-size: 12.5px; color: var(--muted); line-height: 1.7; max-width: 900px; }
     .prot-copy b { color: var(--text); }
     .prot-copy a { color: var(--accent); }
@@ -122,33 +170,53 @@
     .sbar .live i { width: 6px; height: 6px; border-radius: 50%; background: #1e9e6a; display: inline-block; }
     .sbar .right { margin-left: auto; display: flex; gap: 14px; }
     .sbar a:hover { color: var(--accent); }
+    .sbar kbd { border: 1px solid var(--border-light); padding: 0 4px; font-family: inherit; font-size: 9.5px; }
 
     /* ---------- token modal ---------- */
-    .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 11vh; z-index: 200; }
+    .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 9vh; z-index: 200; }
     .modal.open { display: flex; }
-    .modal .sheet { background: var(--card); border: 1px solid var(--border); border-radius: 0; width: 400px; max-height: 62vh; overflow: hidden; display: flex; flex-direction: column; }
-    .sheet .mh { padding: 15px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; }
-    .sheet .mh span { cursor: pointer; color: var(--muted); }
-    .sheet input { margin: 12px 18px; padding: 10px 13px; border: 1px solid var(--border); border-radius: 0; font-family: var(--mono); font-size: 13px; background: var(--bg-elev); outline: none; color: var(--text); }
-    .sheet .list { overflow-y: auto; }
-    .tokrow { display: flex; align-items: center; gap: 11px; padding: 9px 18px; cursor: pointer; }
-    .tokrow:hover { background: var(--bg-elev); }
+    .modal .sheet { background: var(--card); border: 1px solid var(--border); width: 440px; max-height: 70vh; overflow: hidden; display: flex; flex-direction: column; }
+    .sheet .mh { padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+    .sheet .mh .sub { font-family: var(--mono); font-size: 10px; color: var(--muted); font-weight: 400; margin-left: 10px; }
+    .sheet .mh span.x { cursor: pointer; color: var(--muted); margin-left: auto; }
+    .sheet input { margin: 12px 18px 8px; padding: 10px 13px; border: 1px solid var(--border); font-family: var(--mono); font-size: 13px; background: var(--bg-elev); outline: none; color: var(--text); }
+    .sheet input:focus { border-color: var(--accent); }
+    .recent { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 18px 10px; }
+    .recent button { font-family: var(--mono); font-size: 10.5px; padding: 3px 8px; border: 1px solid var(--border); background: var(--bg-elev); color: var(--text-dim); cursor: pointer; }
+    .recent button:hover { border-color: var(--accent); color: var(--accent); }
+    .sheet .list { overflow-y: auto; border-top: 1px solid var(--border); }
+    .lsec { padding: 7px 18px 4px; font-family: var(--mono); font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; background: var(--bg); position: sticky; top: 0; }
+    .tokrow { display: flex; align-items: center; gap: 11px; padding: 8px 18px; cursor: pointer; }
+    .tokrow:hover, .tokrow.hl { background: var(--bg-elev); }
+    .tokrow.dis { opacity: .5; cursor: default; }
     .tokrow .ticon { width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 11px; font-weight: 600; overflow: hidden; }
     .tokrow .ticon img { width: 100%; height: 100%; object-fit: cover; }
     .tokrow .tmain { flex: 1; min-width: 0; }
     .tokrow .sym { font-weight: 700; font-size: 13.5px; display: flex; align-items: center; gap: 7px; }
     .tokrow .sym .live-dot { width: 5px; height: 5px; border-radius: 50%; background: #1e9e6a; display: inline-block; }
+    .tokrow .sym .tag { font-family: var(--mono); font-size: 9px; font-weight: 500; color: var(--muted); border: 1px solid var(--border); padding: 0 5px; }
+    .tokrow .sym .tag.ok { color: #1e9e6a; border-color: #b9dccb; }
+    .tokrow .sym .tag.no { color: var(--danger); border-color: #e6c2be; }
     .tokrow .addr { font-family: var(--mono); font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tokrow .pr { font-family: var(--mono); font-size: 12px; color: var(--text-dim); text-align: right; flex: none; }
+    .tokrow .pr small { display: block; font-size: 9.5px; color: var(--muted); }
+    .lmore { padding: 10px 18px; font-family: var(--mono); font-size: 11px; color: var(--accent); cursor: pointer; }
+    .lnote { padding: 14px 18px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.6; }
 
-    /* mid-size windows: keep the terminal, drop the tape column first */
+    /* mid-size windows: markets become a drawer, tape column drops next */
+    @media (max-width: 1400px) {
+      .main, .main.mk-collapsed { grid-template-columns: minmax(0, 1fr) 252px 332px; }
+      .mpanel { display: none; }
+      .main.mk-open .mpanel { display: flex; position: fixed; left: 0; top: 52px; bottom: 0; width: 280px; z-index: 150; border-right: 1px solid var(--border); box-shadow: 8px 0 30px rgba(0,0,0,.08); }
+      .ibar .mk-toggle { display: flex; }
+    }
     @media (max-width: 1180px) {
-      .main { grid-template-columns: minmax(0, 1fr) 320px; }
+      .main, .main.mk-collapsed { grid-template-columns: minmax(0, 1fr) 320px; }
       .tpanel { display: none; }
     }
     @media (max-width: 900px) {
       body.term { overflow: auto; }
-      .main { grid-template-columns: 1fr; }
+      .main, .main.mk-collapsed { grid-template-columns: 1fr; }
       .cpanel { height: 380px; }
       .tpanel { display: flex; height: 300px; }
       .bpanel { height: auto; min-height: 160px; }
@@ -160,7 +228,7 @@
     <div class="wrap">
       <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
       <div class="nav-links">
-        <a href="/">Home</a><a href="/trade">Trade</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
+        <a href="/">Home</a><a href="/trade" class="here">Trade</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a>
         <a href="/apps">Apps</a><a href="/docs">Docs</a>
       </div>
       <div class="nav-side"><a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a></div>
@@ -169,23 +237,39 @@
 
   <!-- instrument bar -->
   <div class="ibar">
-    <div class="cell">
-      <div class="pairname"><span id="pair-title">ETH / USDG</span></div>
+    <div class="mk-toggle"><button class="mini" id="mk-drawer">Markets ▸</button></div>
+    <div class="cell pairsel" id="pair-cell" title="change base token">
+      <div class="pairname"><img id="pair-icon" alt="" style="display:none" /><span id="pair-title">ETH / USDG</span><span class="chev">▼</span></div>
       <div class="pairfee" id="pair-sub">Uniswap V3 · deepest pool</div>
     </div>
     <div class="cell"><div class="bigpx" id="last-px">—</div></div>
     <div class="cell"><div class="k">1h change</div><div class="v" id="chg1h">—</div></div>
-    <div class="cell"><div class="k">Window change</div><div class="v" id="chg">—</div></div>
-    <div class="cell"><div class="k">Window volume</div><div class="v" id="vol">—</div></div>
+    <div class="cell"><div class="k">24h change</div><div class="v" id="chg">—</div></div>
+    <div class="cell"><div class="k">24h volume</div><div class="v" id="vol">—</div></div>
     <div class="cell"><div class="k">Liquidity</div><div class="v" id="tvl">—</div></div>
     <div class="cell"><div class="k">Fee tier</div><div class="v" id="feetier">—</div></div>
     <div class="cell"><div class="k">Pool</div><div class="v"><a id="poolinfo" target="_blank" style="color:inherit">—</a></div></div>
+    <div class="cell"><div class="k">Quote in</div><div class="qsel"><button data-q="usdg" class="on">USDG</button><button data-q="eth">ETH</button></div></div>
     <div class="cell spacer"></div>
     <div class="prot"><span class="dot"></span> MEV-protected · rpc.ordofi.network</div>
   </div>
 
-  <!-- chart | trades | ticket -->
-  <div class="main">
+  <!-- markets | chart | trades | ticket -->
+  <div class="main" id="main">
+    <div class="mpanel" id="mpanel">
+      <div class="phead">Markets <span class="sub" id="mk-count"></span><button class="mini" id="mk-collapse" title="hide markets">◂</button></div>
+      <div class="mk-search"><input id="mk-q" placeholder="filter markets   /" autocomplete="off" /></div>
+      <div class="mk-tabs">
+        <button class="on" data-mk="volume">Volume</button>
+        <button data-mk="gainers">Gainers</button>
+        <button data-mk="losers">Losers</button>
+        <button data-mk="favs" title="favorites">★</button>
+      </div>
+      <div class="mk-cols"><span></span><span>Pair · 24h vol</span><span>Price · 24h</span></div>
+      <div class="mk-list" id="mk-list"><div class="mk-empty">loading markets…</div></div>
+      <div class="mk-foot"><a href="#" id="mk-all">All tokens ›</a><span id="mk-cov"></span></div>
+    </div>
+
     <div class="cpanel">
       <div class="ctools">
         <button class="tf on" data-tf="1">1m</button>
@@ -219,18 +303,19 @@
           <div class="lab"><span>You pay</span><span id="bal-in"></span></div>
           <div class="row">
             <input id="amt-in" placeholder="0.0" inputmode="decimal" autocomplete="off" />
-            <button class="tokbtn" id="tok-in-btn"><span id="tok-in-sym">USDG</span><span class="chev">▼</span></button>
+            <button class="tokbtn" id="tok-in-btn"><img id="tok-in-icon" alt="" style="display:none" /><span id="tok-in-sym">USDG</span><span class="chev">▼</span></button>
           </div>
           <div class="usd" id="usd-in"></div>
           <div class="qamt">
             <button data-pct="25">25%</button><button data-pct="50">50%</button><button data-pct="100">Max</button>
           </div>
         </div>
+        <div class="flipwrap"><button class="flip" id="flip" title="switch direction">⇅</button></div>
         <div class="box">
           <div class="lab"><span>You receive</span><span id="bal-out"></span></div>
           <div class="row">
             <input id="amt-out" placeholder="0.0" readonly />
-            <button class="tokbtn" id="tok-out-btn"><span id="tok-out-sym">ETH</span><span class="chev">▼</span></button>
+            <button class="tokbtn" id="tok-out-btn"><img id="tok-out-icon" alt="" style="display:none" /><span id="tok-out-sym">ETH</span><span class="chev">▼</span></button>
           </div>
           <div class="usd" id="usd-out"></div>
         </div>
@@ -263,7 +348,9 @@
     <span class="live"><i></i> live</span>
     <span id="sb-tape">tape: —</span>
     <span id="sb-pool"></span>
+    <span id="sb-tokens"></span>
     <span class="right">
+      <span><kbd>/</kbd> markets &nbsp;<kbd>⌘K</kbd> tokens</span>
       <a href="/docs">Docs</a><a href="/explorer">Explorer</a>
       <span>© 2026 OrdoFi Labs · not affiliated with Robinhood Markets</span>
     </span>
@@ -271,8 +358,9 @@
 
   <div class="modal" id="modal">
     <div class="sheet">
-      <div class="mh">Select token <span id="modal-x">✕</span></div>
-      <input id="tok-search" placeholder="search symbol or paste address" />
+      <div class="mh">Select token <span class="sub" id="modal-sub"></span><span class="x" id="modal-x">✕</span></div>
+      <input id="tok-search" placeholder="search symbol, name — or paste any token address" autocomplete="off" />
+      <div class="recent" id="recent"></div>
       <div class="list" id="tok-list"></div>
     </div>
   </div>
@@ -283,6 +371,11 @@
     const $ = (id) => document.getElementById(id);
     const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
     const EXPLORER_FALLBACK = "https://robinhoodchain.blockscout.com";
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const store = {
+      get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+      set: (k, v) => localStorage.setItem(k, JSON.stringify(v)),
+    };
 
     // ---------- fetch with a deadline ----------
     async function jfetch(url, ms = 25_000) {
@@ -309,20 +402,24 @@
       const whole = v / base; let frac = (v % base).toString().padStart(d, "0").slice(0, prec).replace(/0+$/, "");
       return whole.toString() + (frac ? "." + frac : "");
     };
-    const fmtPx = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n >= 1 ? n.toFixed(2) : n.toPrecision(4);
+    const fmtPx = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n >= 1 ? n.toFixed(2) : n >= 0.0001 ? n.toPrecision(4) : n.toExponential(2);
     // Prices keep cents even in the thousands, so the tape visibly ticks.
-    const fmtTick = (n) => n >= 1000 ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n >= 1 ? n.toFixed(2) : n.toPrecision(4);
+    const fmtTick = (n) => n >= 1000 ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : n >= 1 ? n.toFixed(2) : n >= 0.0001 ? n.toPrecision(4) : n.toExponential(2);
     const fmtAmt = (n) => n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : n >= 1 ? n.toFixed(3) : n.toPrecision(3);
     const fmtUsd = (n) => "$" + (n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : n.toFixed(2));
+    const fmtPct = (v) => (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%";
     const hhmmss = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
 
     // ---------- state ----------
     const NATIVE = "eth";
+    const USDG_ADDR = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
     // The chart pair is fixed base/quote; Buy/Sell picks the ticket direction.
     let baseTok = { address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: null };
-    let quoteTok = { address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", symbol: "USDG", decimals: 6, usdPerToken: 1 };
+    let quoteTok = { address: USDG_ADDR, symbol: "USDG", decimals: 6, usdPerToken: 1 };
     let side = "buy"; // buy = pay quote, receive base
     let tokens = [];
+    let tokenByAddr = new Map();
+    let markets = [];
     let CHAIN = null;
     let account = null;
     let provider = window.ethereum ?? null;
@@ -335,10 +432,16 @@
     let lastPx = null;
     let myBalances = null;
     let chart, series, volSeries;
+    let favs = new Set(store.get("ordofi.favs", []));
+    let recent = store.get("ordofi.recent", []);
+    let mkTab = "volume";
+    let mkQuery = "";
 
     const tokIn = () => (side === "buy" ? quoteTok : baseTok);
     const tokOut = () => (side === "buy" ? baseTok : quoteTok);
     const moneyRank = (t) => (t.symbol === "USDG" ? 3 : t.address === NATIVE || t.symbol === "WETH" ? 2 : 1);
+    const pairKey = () => `${baseTok.address}:${quoteTok.address}`;
+    const explorer = () => CHAIN?.explorer ?? EXPLORER_FALLBACK;
 
     // ---------- chart ----------
     function initChart() {
@@ -373,34 +476,48 @@
 
     function renderChart() {
       const cs = aggregate(candles1m, tfMin);
+      // Sub-cent assets need more precision than the default four decimals.
+      const last = cs.length ? cs[cs.length - 1].close : 1;
+      const precision = last >= 100 ? 2 : last >= 1 ? 4 : last >= 0.01 ? 6 : 9;
+      series.applyOptions({ priceFormat: { type: "price", precision, minMove: 10 ** -precision } });
       series.setData(cs.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
       volSeries.setData(cs.map((c) => ({ time: c.time, value: c.vol ?? 0, color: c.close >= c.open ? "rgba(30,158,106,.45)" : "rgba(192,57,43,.45)" })));
       chart.timeScale().fitContent();
     }
 
+    let chartSeq = 0;
     async function loadChart() {
-      $("pair-title").textContent = `${baseTok.symbol} / ${quoteTok.symbol}`;
+      const seq = ++chartSeq;
+      renderPairHeader();
       try {
         const d = await jfetch(`/api/trade/candles?base=${baseTok.address}&quote=${quoteTok.address}`, 45_000);
+        if (seq !== chartSeq) return;
         candles1m = d.candles;
         renderChart();
         setPx(d.last);
-        const first = d.candles[0]?.open;
-        setDelta("chg", first && d.last ? (d.last / first - 1) * 100 : null);
         const hourAgo = Math.floor(Date.now() / 1000) - 3600;
         const c1h = d.candles.filter((c) => c.time <= hourAgo).pop();
-        setDelta("chg1h", c1h && d.last ? (d.last / c1h.close - 1) * 100 : null);
-        $("vol").textContent = d.volumeQuote ? fmtPx(d.volumeQuote) + " " + d.quote.symbol : "—";
+        setDelta("chg1h", c1h && d.last ? d.last / c1h.close - 1 : null);
+        // 24h figures come from the market list when it has this pair; the
+        // chart window is the fallback.
+        const m = marketFor(baseTok.address, quoteTok.address);
+        if (!m) {
+          const first = d.candles[0]?.open;
+          setDelta("chg", first && d.last ? d.last / first - 1 : null);
+          $("vol").textContent = d.volumeQuote ? fmtPx(d.volumeQuote) + " " + d.quote.symbol : "—";
+        }
         $("sb-tape").textContent = `tape: ${d.source} · ${d.swaps.toLocaleString()} swaps · ${d.candles.length} candles`;
         $("cf-src").textContent = `pool tape — no oracles · source: ${d.source}`;
       } catch (e) {
+        if (seq !== chartSeq) return;
+        candles1m = []; renderChart();
         $("sb-tape").textContent = "tape: " + (e.message ?? "unavailable");
       }
     }
     function setDelta(id, v) {
       const el = $(id);
-      if (v == null) { el.textContent = "—"; el.className = "v"; return; }
-      el.textContent = (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+      if (v == null || !Number.isFinite(v)) { el.textContent = "—"; el.className = "v"; return; }
+      el.textContent = fmtPct(v);
       el.className = "v " + (v >= 0 ? "up" : "dn");
     }
     function setPx(v) {
@@ -410,25 +527,44 @@
       if (lastPx != null && v !== lastPx) el.className = "bigpx " + (v > lastPx ? "up" : "dn");
       lastPx = v;
     }
+    function renderPairHeader() {
+      $("pair-title").textContent = `${baseTok.symbol} / ${quoteTok.symbol}`;
+      const ic = $("pair-icon");
+      if (baseTok.icon) { ic.src = baseTok.icon; ic.style.display = ""; ic.onerror = () => { ic.style.display = "none"; }; }
+      else ic.style.display = "none";
+      document.querySelectorAll(".qsel button").forEach((b) => b.classList.toggle("on", (b.dataset.q === "eth" ? NATIVE : USDG_ADDR) === quoteTok.address));
+      document.title = `${baseTok.symbol}/${quoteTok.symbol} · OrdoFi Trade`;
+    }
 
     // ---------- pair stats ----------
+    let pairSeq = 0;
     async function loadPair() {
+      const seq = ++pairSeq;
       try {
         const d = await jfetch(`/api/trade/pair?base=${baseTok.address}&quote=${quoteTok.address}`);
+        if (seq !== pairSeq) return;
         $("tvl").textContent = d.tvlUsd ? fmtUsd(d.tvlUsd) : "—";
         $("feetier").textContent = (d.fee / 10000).toFixed(2) + "%";
         const pl = $("poolinfo");
         pl.textContent = short(d.pool);
-        pl.href = `${(CHAIN?.explorer ?? EXPLORER_FALLBACK)}/address/${d.pool}`;
+        pl.href = `${explorer()}/address/${d.pool}`;
         $("sb-pool").textContent = "pool " + short(d.pool);
-      } catch { $("tvl").textContent = "—"; $("feetier").textContent = "—"; }
+        $("pair-sub").textContent = `Uniswap V3 · ${(d.fee / 10000).toFixed(2)}% · deepest pool`;
+      } catch (e) {
+        if (seq !== pairSeq) return;
+        $("tvl").textContent = "—"; $("feetier").textContent = "—"; $("poolinfo").textContent = "—";
+        $("pair-sub").textContent = /no direct/.test(e.message ?? "") ? "no direct pool — quotes route via ETH/USDG" : "Uniswap V3";
+      }
     }
 
     // ---------- trades tape ----------
     let seenTrades = new Set();
+    let tradesSeq = 0;
     async function loadTrades() {
+      const seq = ++tradesSeq;
       try {
         const d = await jfetch(`/api/trade/trades?base=${baseTok.address}&quote=${quoteTok.address}&limit=40`, 20_000);
+        if (seq !== tradesSeq) return;
         $("tc-size").textContent = "Size " + baseTok.symbol;
         $("tp-sub").textContent = baseTok.symbol + "/" + quoteTok.symbol;
         if (!d.trades.length) { $("tlist").innerHTML = `<div class="tempty">no swaps in the last few minutes</div>`; return; }
@@ -438,8 +574,7 @@
             <span>${fmtTick(t.price)}</span><span>${fmtAmt(t.sizeBase)}</span><span>${hhmmss(t.time)}</span>
           </div>`).join("");
         seenTrades = new Set(d.trades.map((t) => t.tx + t.logIndex));
-        [...$("tlist").children].forEach((el) => el.addEventListener("click", () =>
-          window.open(`${(CHAIN?.explorer ?? EXPLORER_FALLBACK)}/tx/${el.dataset.tx}`, "_blank")));
+        [...$("tlist").children].forEach((el) => el.addEventListener("click", () => window.open(`${explorer()}/tx/${el.dataset.tx}`, "_blank")));
         setPx(d.trades[0].price);
       } catch { /* tape hiccup — keep old rows */ }
     }
@@ -448,63 +583,226 @@
     async function loadTokens(attempt = 0) {
       try {
         const list = await jfetch("/api/trade/tokens", 20_000);
-        tokens = [{ address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: list.find((t) => t.symbol === "WETH")?.usdPerToken ?? null }, ...list];
-        const b = tokens.find((t) => t.address === baseTok.address);
-        const q = tokens.find((t) => t.address === quoteTok.address);
+        const weth = list.find((t) => t.symbol === "WETH");
+        tokens = [{ address: NATIVE, symbol: "ETH", name: "Ether (native)", decimals: 18, usdPerToken: weth?.usdPerToken ?? null, active: true, tradable: true, icon: weth?.icon ?? null }, ...list];
+        tokenByAddr = new Map(tokens.map((t) => [t.address, t]));
+        const b = tokenByAddr.get(baseTok.address), q = tokenByAddr.get(quoteTok.address);
         if (b) baseTok = b;
         if (q) quoteTok = q;
-        renderTokenButtons();
+        renderTokenButtons(); renderPairHeader();
+        const active = tokens.filter((t) => t.active).length;
+        $("sb-tokens").textContent = `${tokens.length} tokens · ${active} trading now`;
+        if ($("modal").classList.contains("open")) renderList($("tok-search").value);
       } catch {
         if (attempt < 4) setTimeout(() => loadTokens(attempt + 1), 6000);
       }
     }
-    function renderTokenButtons() {
-      $("tok-in-sym").textContent = tokIn().symbol;
-      $("tok-out-sym").textContent = tokOut().symbol;
+    function setIcon(imgId, t) {
+      const img = $(imgId);
+      if (t.icon) { img.src = t.icon; img.style.display = ""; img.onerror = () => { img.style.display = "none"; }; }
+      else img.style.display = "none";
     }
+    function renderTokenButtons() {
+      $("tok-in-sym").textContent = tokIn().symbol; setIcon("tok-in-icon", tokIn());
+      $("tok-out-sym").textContent = tokOut().symbol; setIcon("tok-out-icon", tokOut());
+    }
+
+    // Any token object can become the base/quote; keep money on the quote side.
+    function setPair(base, quoteT, keepSide = false) {
+      if (base.address === quoteT.address) return;
+      baseTok = base; quoteTok = quoteT;
+      if (moneyRank(baseTok) > moneyRank(quoteTok)) { const x = baseTok; baseTok = quoteTok; quoteTok = x; if (!keepSide) side = side === "buy" ? "sell" : "buy"; }
+      pushRecent(baseTok);
+      setSide(side);
+      pairChanged();
+    }
+    function pushRecent(t) {
+      if (t.address === NATIVE || t.address === USDG_ADDR) return;
+      recent = [t.address, ...recent.filter((a) => a !== t.address)].slice(0, 8);
+      store.set("ordofi.recent", recent);
+    }
+
+    // ---------- token modal ----------
+    let listLimit = 150;
+    let hl = -1;
+    let importPending = null;
     function openModal(which) {
       modalSide = which;
+      listLimit = 150; hl = -1;
       $("modal").classList.add("open");
+      $("modal-sub").textContent = which === "base" ? "chart base" : which === "quote" ? "chart quote" : which === "in" ? "you pay" : "you receive";
       $("tok-search").value = "";
+      renderRecent();
       renderList("");
       $("tok-search").focus();
     }
-    function renderList(q) {
-      q = q.toLowerCase();
-      const rows = tokens.filter((t) => !q || t.symbol.toLowerCase().includes(q) || (t.name ?? "").toLowerCase().includes(q) || t.address.includes(q));
-      const icon = (t) => t.icon
-        ? `<img src="${t.icon}" alt="" loading="lazy" onerror="this.parentElement.textContent='${t.symbol.slice(0, 3)}'">`
-        : t.symbol.slice(0, 3);
-      $("tok-list").innerHTML = rows.slice(0, 120).map((t) =>
-        `<div class="tokrow" data-i="${tokens.indexOf(t)}">
+    function closeModal() { $("modal").classList.remove("open"); }
+    function renderRecent() {
+      const rows = recent.map((a) => tokenByAddr.get(a)).filter(Boolean);
+      $("recent").innerHTML = rows.length ? `<span style="font-family:var(--mono);font-size:9.5px;color:var(--muted);align-self:center;margin-right:2px">RECENT</span>` + rows.map((t) => `<button data-a="${t.address}">${esc(t.symbol)}</button>`).join("") : "";
+      [...$("recent").querySelectorAll("button")].forEach((b) => b.addEventListener("click", () => pick(tokenByAddr.get(b.dataset.a))));
+    }
+    const icon = (t) => t.icon
+      ? `<img src="${esc(t.icon)}" alt="" loading="lazy" onerror="this.parentElement.textContent='${esc(t.symbol.slice(0, 3))}'">`
+      : esc(t.symbol.slice(0, 3));
+    const tag = (t) => t.active ? '<span class="live-dot" title="traded in the last 24h"></span>'
+      : t.tradable === true ? '<span class="tag ok" title="has an ETH or USDG pool">route</span>'
+      : t.tradable === false ? '<span class="tag no" title="no ETH/USDG pool found">no route</span>'
+      : '<span class="tag" title="route check pending">checking</span>';
+    function tokRow(t, i, extraClass = "") {
+      return `<div class="tokrow ${extraClass}${i === hl ? " hl" : ""}" data-a="${t.address}" data-i="${i}">
            <div class="ticon">${icon(t)}</div>
            <div class="tmain">
-             <div class="sym">${t.symbol}${t.active ? '<span class="live-dot" title="actively traded"></span>' : ""}</div>
-             <div class="addr">${t.name ? t.name + " · " : ""}${t.address === NATIVE ? "native" : short(t.address)}</div>
+             <div class="sym">${esc(t.symbol)}${tag(t)}</div>
+             <div class="addr">${t.name ? esc(t.name) + " · " : ""}${t.address === NATIVE ? "native" : short(t.address)}</div>
            </div>
-           <div class="pr">${t.usdPerToken ? "$" + fmtPx(t.usdPerToken) : ""}</div>
-         </div>`).join("") || `<div style="padding:18px;color:var(--muted);font-size:13px">${tokens.length ? "no match" : "token list still loading…"}</div>`;
-      [...$("tok-list").children].forEach((el) => el.addEventListener("click", () => {
-        const t = tokens[Number(el.dataset.i)];
-        if (!t) return;
-        // Assign to the side that was clicked, then re-orient so the chart
-        // keeps money (USDG > ETH > rest) on the quote side.
-        const inSide = modalSide === "in";
-        const paysQuote = side === "buy";
-        if (inSide === paysQuote) { if (t.address === baseTok.address) baseTok = quoteTok; quoteTok = t; }
-        else { if (t.address === quoteTok.address) quoteTok = baseTok; baseTok = t; }
-        if (moneyRank(baseTok) > moneyRank(quoteTok)) { const x = baseTok; baseTok = quoteTok; quoteTok = x; side = side === "buy" ? "sell" : "buy"; setSide(side); }
-        $("modal").classList.remove("open");
-        pairChanged();
+           <div class="pr">${t.usdPerToken ? "$" + fmtPx(t.usdPerToken) : ""}${t.swaps24h ? `<small>${t.swaps24h.toLocaleString()} swaps/24h</small>` : t.holders ? `<small>${t.holders.toLocaleString()} holders</small>` : ""}</div>
+         </div>`;
+    }
+    function filtered(q) {
+      q = q.toLowerCase().trim();
+      if (!q) return tokens;
+      const isAddr = /^0x[0-9a-f]{40}$/.test(q);
+      return tokens.filter((t) => isAddr ? t.address === q : t.symbol.toLowerCase().includes(q) || (t.name ?? "").toLowerCase().includes(q) || t.address.includes(q))
+        .sort((a, b) => (b.symbol.toLowerCase() === q) - (a.symbol.toLowerCase() === q) || (b.symbol.toLowerCase().startsWith(q)) - (a.symbol.toLowerCase().startsWith(q)));
+    }
+    async function renderList(q) {
+      const rows = filtered(q);
+      const list = $("tok-list");
+      if (!rows.length) {
+        const addr = q.toLowerCase().trim();
+        if (/^0x[0-9a-f]{40}$/.test(addr)) {
+          list.innerHTML = `<div class="lnote">looking up ${short(addr)} on chain…</div>`;
+          importPending = addr;
+          try {
+            const t = await jfetch(`/api/trade/token?address=${addr}`, 30_000);
+            if (importPending !== addr) return;
+            if (!tokenByAddr.has(t.address)) { tokens.push(t); tokenByAddr.set(t.address, t); }
+            list.innerHTML = `<div class="lsec">imported</div>` + tokRow(t, 0, t.tradable ? "" : "dis") +
+              (t.tradable ? "" : `<div class="lnote">No Uniswap V3 pool against ETH or USDG was found for this token, so the router cannot reach it.</div>`);
+            bindRows(rows.length ? rows : [t]);
+          } catch (e) {
+            if (importPending === addr) list.innerHTML = `<div class="lnote">${esc(e.message ?? "lookup failed")}</div>`;
+          }
+          return;
+        }
+        list.innerHTML = `<div class="lnote">${tokens.length ? "no match — paste a token address to import it" : "token list still loading…"}</div>`;
+        return;
+      }
+      importPending = null;
+      const shown = rows.slice(0, listLimit);
+      let html = "", sec = null;
+      const secOf = (t) => t.active ? "trading in the last 24h" : t.tradable === false ? "no route" : "listed";
+      shown.forEach((t, i) => {
+        const s = q ? null : secOf(t);
+        if (s && s !== sec) { sec = s; html += `<div class="lsec">${sec}</div>`; }
+        html += tokRow(t, i, t.tradable === false && !t.active ? "dis" : "");
+      });
+      if (rows.length > shown.length) html += `<div class="lmore" id="lmore">show ${Math.min(150, rows.length - shown.length)} more of ${rows.length.toLocaleString()}</div>`;
+      list.innerHTML = html;
+      bindRows(shown);
+      $("lmore")?.addEventListener("click", () => { listLimit += 150; renderList($("tok-search").value); });
+    }
+    function bindRows(shown) {
+      [...$("tok-list").querySelectorAll(".tokrow")].forEach((el) => el.addEventListener("click", () => {
+        if (el.classList.contains("dis")) return;
+        pick(tokenByAddr.get(el.dataset.a) ?? shown[Number(el.dataset.i)]);
       }));
+    }
+    function pick(t) {
+      if (!t) return;
+      closeModal();
+      if (modalSide === "base") return setPair(t, t.address === quoteTok.address ? baseTok : quoteTok, true);
+      if (modalSide === "quote") return setPair(t.address === baseTok.address ? quoteTok : baseTok, t, true);
+      // Ticket side: assign to the side that was clicked, then re-orient so
+      // the chart keeps money on the quote side.
+      const inSide = modalSide === "in";
+      const paysQuote = side === "buy";
+      let b = baseTok, qt = quoteTok;
+      if (inSide === paysQuote) { if (t.address === b.address) b = qt; qt = t; }
+      else { if (t.address === qt.address) qt = b; b = t; }
+      setPair(b, qt);
+    }
+    function moveHl(delta) {
+      const rows = [...$("tok-list").querySelectorAll(".tokrow:not(.dis)")];
+      if (!rows.length) return;
+      const cur = rows.findIndex((r) => r.classList.contains("hl"));
+      const next = Math.max(0, Math.min(rows.length - 1, (cur < 0 ? (delta > 0 ? -1 : rows.length) : cur) + delta));
+      rows.forEach((r) => r.classList.remove("hl"));
+      rows[next].classList.add("hl");
+      rows[next].scrollIntoView({ block: "nearest" });
     }
 
     function pairChanged() {
-      renderTokenButtons();
+      renderTokenButtons(); renderPairHeader();
       $("amt-in").value = ""; $("amt-out").value = ""; $("qd").style.display = "none"; quote = null;
       lastPx = null; seenTrades = new Set();
       $("tlist").innerHTML = `<div class="tempty">waiting for tape…</div>`;
-      loadChart(); loadPair(); loadTrades(); refreshBalances(); setAction();
+      $("last-px").textContent = "—"; $("last-px").className = "bigpx";
+      applyMarketRow();
+      loadChart(); loadPair(); loadTrades(); refreshBalances(); setAction(); renderMarkets();
+      history.replaceState(null, "", `/trade?base=${baseTok.address}&quote=${quoteTok.address}`);
+    }
+
+    // ---------- markets ----------
+    const marketFor = (b, q) => markets.find((m) => m.base.address === b && m.quote.address === q);
+    function applyMarketRow() {
+      const m = marketFor(baseTok.address, quoteTok.address);
+      if (!m) return;
+      setDelta("chg", m.change24);
+      $("vol").textContent = m.volumeUsd ? fmtUsd(m.volumeUsd) : m.volumeQuote ? fmtPx(m.volumeQuote) + " " + m.quote.symbol : "—";
+      if (lastPx == null) setPx(m.price);
+    }
+    async function loadMarkets() {
+      try {
+        const d = await jfetch("/api/trade/markets", 25_000);
+        markets = d.markets;
+        $("mk-count").textContent = `${markets.length} pairs`;
+        const cov = d.coverage ?? {};
+        $("mk-cov").textContent = cov.tapeSince ? `tape since ${new Date(cov.tapeSince * 1000).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" })}` : "";
+        applyMarketRow();
+        renderMarkets();
+      } catch { /* keep the previous list */ }
+    }
+    function marketToken(x) {
+      return tokenByAddr.get(x.address) ?? { address: x.address, symbol: x.symbol, decimals: x.decimals ?? 18, usdPerToken: x.usdPerToken ?? null, icon: x.icon ?? null, active: true, tradable: true };
+    }
+    function renderMarkets() {
+      let rows = markets;
+      const q = mkQuery.toLowerCase().trim();
+      if (q) rows = rows.filter((m) => m.base.symbol.toLowerCase().includes(q) || m.quote.symbol.toLowerCase().includes(q) || m.base.address.includes(q));
+      if (mkTab === "favs") rows = rows.filter((m) => favs.has(`${m.base.address}:${m.quote.address}`));
+      else if (mkTab === "gainers") rows = [...rows].filter((m) => m.change24 != null).sort((a, b) => b.change24 - a.change24);
+      else if (mkTab === "losers") rows = [...rows].filter((m) => m.change24 != null).sort((a, b) => a.change24 - b.change24);
+      const list = $("mk-list");
+      if (!rows.length) {
+        list.innerHTML = `<div class="mk-empty">${markets.length ? (mkTab === "favs" ? "no favorites yet — star a pair" : "no match") : "waiting for the tape to fill…"}</div>`;
+        return;
+      }
+      const cur = pairKey();
+      list.innerHTML = rows.slice(0, 400).map((m) => {
+        const k = `${m.base.address}:${m.quote.address}`;
+        const chg = m.change24;
+        return `<div class="mkrow${k === cur ? " on" : ""}" data-k="${k}" title="${esc(m.base.symbol)}/${esc(m.quote.symbol)} · ${m.swaps.toLocaleString()} swaps · fee ${(m.fee / 10000).toFixed(2)}%">
+          <span class="star${favs.has(k) ? " fav" : ""}" data-k="${k}">${favs.has(k) ? "★" : "☆"}</span>
+          <span class="pair"><b>${esc(m.base.symbol)}</b><span>/${esc(m.quote.symbol)}</span><small>${m.volumeUsd != null ? fmtUsd(m.volumeUsd) : fmtPx(m.volumeQuote) + " " + esc(m.quote.symbol)} · ${m.swaps.toLocaleString()} swaps</small></span>
+          <span class="num">${fmtTick(m.price)}<small class="${chg == null ? "" : chg >= 0 ? "up" : "dn"}">${chg == null ? "—" : fmtPct(chg)}</small></span>
+        </div>`;
+      }).join("");
+      list.querySelectorAll(".star").forEach((s) => s.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const k = s.dataset.k;
+        if (favs.has(k)) favs.delete(k); else favs.add(k);
+        store.set("ordofi.favs", [...favs]);
+        renderMarkets();
+      }));
+      list.querySelectorAll(".mkrow").forEach((r) => r.addEventListener("click", () => {
+        const m = markets.find((x) => `${x.base.address}:${x.quote.address}` === r.dataset.k);
+        if (!m) return;
+        side = "buy";
+        setPair(marketToken(m.base), marketToken(m.quote), true);
+        if (window.innerWidth <= 1400) $("main").classList.remove("mk-open");
+      }));
     }
 
     // ---------- buy/sell ----------
@@ -589,10 +887,10 @@
         $("q-imp").textContent = d.priceImpactBps == null ? "—" : (d.priceImpactBps / 100).toFixed(2) + "%";
         $("q-imp").parentElement.classList.toggle("warn", d.priceImpactBps > 100);
         $("q-min").textContent = formatUnits(d.minOut, d.tokenOut.decimals, 6) + " " + tout.symbol;
-        $("q-route").textContent = d.route.hops === 1 ? `direct · ${(d.route.fees[0] / 10000).toFixed(2)}%` : `${d.route.hops} hops`;
-        const usdIn = tokens.find((t) => t.address === tin.address)?.usdPerToken ?? (tin.symbol === "USDG" ? 1 : null);
+        $("q-route").textContent = d.route.hops === 1 ? `direct · ${(d.route.fees[0] / 10000).toFixed(2)}%` : `${d.route.hops} hops via ${d.route.tokens.slice(1, -1).map((a) => tokenByAddr.get(a)?.symbol ?? (a === "0x0bd7d308f8e1639fab988df18a8011f41eacad73" ? "WETH" : short(a))).join(", ")}`;
+        const usdIn = tin.usdPerToken ?? (tin.symbol === "USDG" ? 1 : null);
         $("usd-in").textContent = usdIn ? "≈ " + fmtUsd(usdIn * Number($("amt-in").value)) : "";
-        const usdOut = tokens.find((t) => t.address === tout.address)?.usdPerToken ?? (tout.symbol === "USDG" ? 1 : null);
+        const usdOut = tout.usdPerToken ?? (tout.symbol === "USDG" ? 1 : null);
         $("usd-out").textContent = usdOut ? "≈ " + fmtUsd(usdOut * Number($("amt-out").value)) : "";
         $("qd").style.display = "block";
         setStatus("");
@@ -669,25 +967,31 @@
 
     // ---------- bottom tabs ----------
     let activeTab = "fills";
-    const fills = JSON.parse(localStorage.getItem("ordofi.fills") ?? "[]");
-    function saveFill(f) { fills.unshift(f); localStorage.setItem("ordofi.fills", JSON.stringify(fills.slice(0, 30))); renderTab(); }
+    const fills = store.get("ordofi.fills", []);
+    function saveFill(f) { fills.unshift(f); store.set("ordofi.fills", fills.slice(0, 30)); renderTab(); }
     function renderTab() {
       const el = $("bbody");
       if (activeTab === "fills") {
         el.innerHTML = fills.length
           ? `<table><thead><tr><th>When</th><th>Paid</th><th>Received</th><th>Tx</th></tr></thead><tbody>` +
-            fills.map((f) => `<tr><td>${new Date(f.t).toLocaleTimeString()}</td><td>${f.inS}</td><td>${f.outS}</td>
-              <td><a target="_blank" href="${(CHAIN?.explorer ?? EXPLORER_FALLBACK)}/tx/${f.hash}">${f.hash.slice(0, 10)}…</a></td></tr>`).join("") +
+            fills.map((f) => `<tr><td>${new Date(f.t).toLocaleTimeString()}</td><td>${esc(f.inS)}</td><td>${esc(f.outS)}</td>
+              <td><a target="_blank" href="${explorer()}/tx/${f.hash}">${f.hash.slice(0, 10)}…</a></td></tr>`).join("") +
             `</tbody></table>`
           : `<div class="empty">No fills yet — they're stored locally, only you see them.</div>`;
       } else if (activeTab === "balances") {
         if (!account) { el.innerHTML = `<div class="empty">Connect a wallet to see balances.</div>`; return; }
         if (!myBalances) { el.innerHTML = `<div class="empty">loading balances…</div>`; refreshBalances(); return; }
         el.innerHTML = myBalances.tokens.length
-          ? `<table><thead><tr><th>Asset</th><th>Amount</th><th>Value</th></tr></thead><tbody>` +
-            myBalances.tokens.map((r) => `<tr><td>${r.symbol}</td><td>${fmtAmt(r.amount)}</td><td>${r.usd != null ? fmtUsd(r.usd) : "—"}</td></tr>`).join("") +
+          ? `<table><thead><tr><th>Asset</th><th>Amount</th><th>Value</th><th></th></tr></thead><tbody>` +
+            myBalances.tokens.map((r) => `<tr class="link" data-a="${r.address}"><td>${esc(r.symbol)}</td><td>${fmtAmt(r.amount)}</td><td>${r.usd != null ? fmtUsd(r.usd) : "—"}</td><td style="color:var(--accent)">trade ›</td></tr>`).join("") +
             `</tbody></table>`
           : `<div class="empty">No balances on Robinhood Chain yet.</div>`;
+        el.querySelectorAll("tr.link").forEach((tr) => tr.addEventListener("click", () => {
+          const t = tokenByAddr.get(tr.dataset.a);
+          if (!t) return;
+          if (t.address === USDG_ADDR || t.address === NATIVE) { side = "buy"; setPair(t.address === NATIVE ? tokenByAddr.get(USDG_ADDR) ?? quoteTok : baseTok, t, true); return; }
+          side = "sell"; setPair(t, quoteTok, true);
+        }));
       } else {
         el.innerHTML = `<div class="prot-copy">
           <b>Private submission.</b> Your transaction reaches the sequencer through OrdoFi's gateway — never a public endpoint that leaks your intent to latency bots. &nbsp;
@@ -701,11 +1005,25 @@
     $("amt-in").addEventListener("input", requestQuote);
     $("side-buy").addEventListener("click", () => setSide("buy"));
     $("side-sell").addEventListener("click", () => setSide("sell"));
+    $("flip").addEventListener("click", () => setSide(side === "buy" ? "sell" : "buy"));
     $("tok-in-btn").addEventListener("click", () => openModal("in"));
     $("tok-out-btn").addEventListener("click", () => openModal("out"));
-    $("modal-x").addEventListener("click", () => $("modal").classList.remove("open"));
-    $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) $("modal").classList.remove("open"); });
-    $("tok-search").addEventListener("input", (e) => renderList(e.target.value));
+    $("pair-cell").addEventListener("click", () => openModal("base"));
+    $("mk-all").addEventListener("click", (e) => { e.preventDefault(); openModal("base"); });
+    $("modal-x").addEventListener("click", closeModal);
+    $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
+    $("tok-search").addEventListener("input", (e) => { listLimit = 150; hl = -1; renderList(e.target.value); });
+    $("tok-search").addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); moveHl(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); moveHl(-1); }
+      else if (e.key === "Enter") { const r = $("tok-list").querySelector(".tokrow.hl") ?? $("tok-list").querySelector(".tokrow:not(.dis)"); if (r) r.click(); }
+    });
+    document.querySelectorAll(".qsel button").forEach((b) => b.addEventListener("click", () => {
+      const q = b.dataset.q === "eth" ? tokenByAddr.get(NATIVE) ?? { address: NATIVE, symbol: "ETH", decimals: 18, usdPerToken: null } : tokenByAddr.get(USDG_ADDR) ?? quoteTok;
+      if (q.address === quoteTok.address) return;
+      if (q.address === baseTok.address) { setPair(quoteTok, q, true); return; }
+      setPair(baseTok, q, true);
+    }));
     $("action").addEventListener("click", act);
     $("nav-connect").addEventListener("click", (e) => { e.preventDefault(); connect(); });
     $("slip-btn").addEventListener("click", () => {
@@ -734,6 +1052,32 @@
       tfMin = Number(b.dataset.tf);
       renderChart();
     }));
+    document.querySelectorAll(".mk-tabs button").forEach((b) => b.addEventListener("click", () => {
+      document.querySelectorAll(".mk-tabs button").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on");
+      mkTab = b.dataset.mk;
+      renderMarkets();
+    }));
+    $("mk-q").addEventListener("input", (e) => { mkQuery = e.target.value; renderMarkets(); });
+    $("mk-collapse").addEventListener("click", () => { $("main").classList.add("mk-collapsed"); store.set("ordofi.mk", "collapsed"); $("mk-drawer").textContent = "Markets ▸"; });
+    $("mk-drawer").addEventListener("click", () => {
+      const main = $("main");
+      if (window.innerWidth <= 1400) main.classList.toggle("mk-open");
+      else { main.classList.remove("mk-collapsed"); store.set("ordofi.mk", "open"); }
+    });
+    if (store.get("ordofi.mk", "open") === "collapsed") $("main").classList.add("mk-collapsed");
+    // Wide screens: a collapsed sidebar needs a way back; reuse the drawer button.
+    const syncDrawerBtn = () => { $("mk-drawer").parentElement.style.display = (window.innerWidth <= 1400 || $("main").classList.contains("mk-collapsed")) ? "flex" : ""; };
+    new MutationObserver(syncDrawerBtn).observe($("main"), { attributes: true, attributeFilter: ["class"] });
+    window.addEventListener("resize", syncDrawerBtn);
+    syncDrawerBtn();
+
+    document.addEventListener("keydown", (e) => {
+      const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName ?? "");
+      if (e.key === "Escape") { closeModal(); $("main").classList.remove("mk-open"); document.activeElement?.blur?.(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openModal("base"); return; }
+      if (e.key === "/" && !typing) { e.preventDefault(); if ($("main").classList.contains("mk-collapsed")) { $("main").classList.remove("mk-collapsed"); store.set("ordofi.mk", "open"); } if (window.innerWidth <= 1400) $("main").classList.add("mk-open"); $("mk-q").focus(); }
+    });
     if (provider) {
       provider.on?.("accountsChanged", (a) => { account = a[0] ?? null; myBalances = null; $("nav-connect").textContent = account ? short(account) : "Connect"; if (account) refreshBalances(); updateBalHints(); setAction(); renderTab(); });
       provider.on?.("chainChanged", () => setAction());
@@ -744,26 +1088,35 @@
     renderTokenButtons();
     renderTab();
     setAction();
-    loadChart(); loadPair(); loadTrades();
+    loadChart(); loadPair(); loadTrades(); loadMarkets();
     jfetch("/api/trade/chain").then((c) => { CHAIN = c; renderTab(); }).catch(() => {});
     loadTokens().then(() => {
-      // Deep links: /trade?pay=eth&receive=AAPL&amt=0.5 (symbol or address).
+      renderRecent();
+      // Deep links: /trade?base=AAPL&quote=usdg or ?pay=eth&receive=AAPL&amt=0.5 (symbol or address).
       const qp = new URLSearchParams(location.search);
-      const bySym = (v) => v && tokens.find((t) => t.symbol.toLowerCase() === v.toLowerCase() || t.address === v.toLowerCase());
-      const pIn = bySym(qp.get("pay")), pOut = bySym(qp.get("receive"));
-      if (pIn || pOut) {
-        let tin = pIn ?? tokIn(), tout = pOut ?? tokOut();
-        if (tin.address !== tout.address) {
-          if (moneyRank(tin) >= moneyRank(tout)) { quoteTok = tin; baseTok = tout; side = "buy"; }
-          else { baseTok = tin; quoteTok = tout; side = "sell"; }
-          setSide(side);
-          pairChanged();
+      const find = (v) => {
+        if (!v) return null;
+        v = v.toLowerCase();
+        const hits = tokens.filter((t) => t.address === v || t.symbol.toLowerCase() === v);
+        return hits.find((t) => t.active) ?? hits[0] ?? null;
+      };
+      const b = find(qp.get("base")), q = find(qp.get("quote"));
+      if (b || q) { side = "buy"; setPair(b ?? baseTok, q ?? quoteTok, true); }
+      else {
+        const pIn = find(qp.get("pay")), pOut = find(qp.get("receive"));
+        if (pIn || pOut) {
+          let tin = pIn ?? tokIn(), tout = pOut ?? tokOut();
+          if (tin.address !== tout.address) {
+            if (moneyRank(tin) >= moneyRank(tout)) { side = "buy"; setPair(tout, tin, true); }
+            else { side = "sell"; setPair(tin, tout, true); }
+          }
         }
       }
       if (qp.get("amt")) { $("amt-in").value = qp.get("amt"); requestQuote(); }
     });
     setInterval(loadChart, 30_000);
     setInterval(loadPair, 60_000);
+    setInterval(loadMarkets, 20_000);
     setInterval(() => { if (document.visibilityState === "visible") loadTrades(); }, 5_000);
   })();
   </script>
