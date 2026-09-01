@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
-import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult } from "viem";
+import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
 import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 
@@ -155,6 +155,48 @@ async function onchainStats(address) {
   }
 }
 
+/**
+ * Settlements read straight from the contract's own logs.
+ *
+ * The index is the fast path, but it is a local cache: rebuilding it, as a
+ * corrected attribution rule required, silently took the record of a real
+ * mainnet settlement with it and the site went back to reporting zero. What
+ * the chain emitted cannot be lost that way, so it is the authority whenever
+ * the index has nothing to say.
+ *
+ * Scanned in chunks from the deployment block, because one range that wide is
+ * exactly what the public endpoints refuse.
+ */
+const DEPLOY_BLOCK = BigInt(process.env.ORDO_SETTLEMENT_BLOCK ?? 51544378);
+const LOG_CHUNK = 50_000n;
+let settledLogsCache = null;
+
+async function settledLogs(address) {
+  if (settledLogsCache && Date.now() - settledLogsCache.at < 120_000) return settledLogsCache.logs;
+
+  const head = BigInt(await rpcFetch("eth_blockNumber", []));
+  const topic = toEventSelector(SETTLED_EVENT);
+  const out = [];
+  for (let from = DEPLOY_BLOCK; from <= head; from += LOG_CHUNK) {
+    const upper = from + LOG_CHUNK - 1n;
+    const to = upper > head ? head : upper;
+    const logs = await rpcFetch("eth_getLogs", [
+      {
+        address,
+        topics: [topic],
+        fromBlock: "0x" + from.toString(16),
+        toBlock: "0x" + to.toString(16),
+      },
+    ]);
+    for (const l of logs ?? []) {
+      const decoded = decodeEventLog({ abi: [SETTLED_EVENT], data: l.data, topics: l.topics });
+      out.push({ ...decoded, txHash: l.transactionHash, block: Number(BigInt(l.blockNumber)) });
+    }
+  }
+  settledLogsCache = { at: Date.now(), logs: out };
+  return out;
+}
+
 async function onchainStatsFresh(address) {
   // One cheap call decides "deployed"; the old way was three half-million
   // block log scans, which the public endpoints either 403 or ration.
@@ -166,27 +208,55 @@ async function onchainStatsFresh(address) {
   // Exact figures come from the index the auction writes at settlement time.
   // The split is computed from configuration, which is honest as long as it
   // is labelled: the contract enforces the split, we display it.
-  const totals = store?.settlementTotals?.() ?? { settlements: 0, totalChargeWei: 0n };
+  let totals = store?.settlementTotals?.() ?? { settlements: 0, totalChargeWei: 0n };
+  let source = "index";
+  let chainRecent = null;
+
+  if (totals.settlements === 0) {
+    try {
+      const logs = await settledLogs(address);
+      if (logs.length > 0) {
+        totals = {
+          settlements: logs.length,
+          totalChargeWei: logs.reduce((n, l) => n + l.args.amount, 0n),
+        };
+        source = "chain";
+        chainRecent = logs.slice(-15).reverse();
+      }
+    } catch {
+      // A failed scan is not evidence of zero; leave the index's answer alone.
+    }
+  }
   const user = Number(process.env.ORDO_REBATE_USER ?? 0.9);
   const app = Number(process.env.ORDO_REBATE_APP ?? 0.05);
   const charge = totals.totalChargeWei;
   const share = (f) => formatEther((charge * BigInt(Math.round(f * 1e6))) / 1_000_000n);
 
-  const recent = (store?.recentSettlements(15) ?? []).map((r) => ({
-    opportunityId: r.opportunityId,
-    searcher: r.searcher,
-    amountEth: formatEther(BigInt(r.chargeWei)),
-    userEth: formatEther((BigInt(r.chargeWei) * BigInt(Math.round(user * 1e6))) / 1_000_000n),
-    app: r.appAddress,
-    txHash: r.txHash ?? null,
-    block: null,
-  }));
+  const recent =
+    chainRecent?.map((l) => ({
+      opportunityId: l.args.opportunityId,
+      searcher: l.args.searcher,
+      amountEth: formatEther(l.args.amount),
+      userEth: formatEther(l.args.userAmt),
+      app: l.args.app,
+      txHash: l.txHash,
+      block: l.block,
+    })) ??
+    (store?.recentSettlements(15) ?? []).map((r) => ({
+      opportunityId: r.opportunityId,
+      searcher: r.searcher,
+      amountEth: formatEther(BigInt(r.chargeWei)),
+      userEth: formatEther((BigInt(r.chargeWei) * BigInt(Math.round(user * 1e6))) / 1_000_000n),
+      app: r.appAddress,
+      txHash: r.txHash ?? null,
+      block: null,
+    }));
 
   return {
     deployed: true,
     address,
     rpc: RPC,
-    totalsSource: "index",
+    totalsSource: source,
     totals: {
       settlements: totals.settlements,
       totalSettledEth: formatEther(charge),
