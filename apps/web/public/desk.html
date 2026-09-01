@@ -52,10 +52,12 @@
     .feed { list-style: none; max-height: 420px; overflow-y: auto; }
     .feed li { display: grid; grid-template-columns: 62px 78px minmax(0, 1fr); gap: 12px; padding: 9px 18px; border-bottom: 1px solid var(--border); font-size: 13px; align-items: baseline; }
     .feed li:last-child { border-bottom: none; }
+    .feed li.empty { display: block; }
+    .feed li.scan { opacity: .75; }
     .feed time { font-family: var(--mono); font-size: 11px; color: var(--muted); }
     .feed .k { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
     .k-won { color: var(--accent); } .k-fire { color: var(--accent-dim); } .k-reverted { color: var(--danger); }
-    .k-pass, .k-gone, .k-idle, .k-info { color: var(--muted); } .k-breaker { color: var(--danger); }
+    .k-pass, .k-gone, .k-idle, .k-info, .k-scan { color: var(--muted); } .k-breaker { color: var(--danger); }
     .feed .t { color: var(--text-dim); min-width: 0; overflow-wrap: anywhere; }
     .feed .t code { font-family: var(--mono); font-size: 12px; color: var(--text); }
     .feed .t a { color: var(--accent); font-family: var(--mono); font-size: 12px; }
@@ -264,16 +266,21 @@
 
     function renderFeed(ev) {
       var ul = $('feed');
-      if (!ev.length) { ul.innerHTML = '<li class="empty">' + (state.live ? 'Scanning. Notes appear here when an edge is found, passed on, or fired at.' : 'Nothing recorded yet.') + '</li>'; return; }
-      ul.innerHTML = ev.slice(0, 60).map(function (e) {
+      // Scans are not stored as events, but a feed that only moves when money
+      // moves looks dead for hours; splice the recent scan samples in.
+      var hist = ((state.scans || {}).history || []).slice(-30).map(function (s) { return { kind: 'scan', t: s.t, scan: s }; });
+      var all = ev.concat(hist).sort(function (a, b) { return b.t - a.t; });
+      if (!all.length) { ul.innerHTML = '<li class="empty">' + (state.live ? 'Scanning. Notes appear here when an edge is found, passed on, or fired at.' : 'Nothing recorded yet.') + '</li>'; return; }
+      ul.innerHTML = all.slice(0, 60).map(function (e) {
         var txt;
-        if (e.kind === 'fire') txt = 'fired <code>' + esc(e.cycle) + '</code> at ' + fmtEthAbs(Number(e.sizeWei) / 1e18, 4) + ' · sim net ' + fmtEth(Number(e.simNetWei) / 1e18, 6) + ' · ' + txlink(e.hash);
+        if (e.kind === 'scan') { var s = e.scan; txt = s.quotes + ' quotes · ' + (s.bestBps == null ? 'no liquidity' : 'closest ' + (s.bestBps > 0 ? '+' : '') + s.bestBps.toFixed(2) + ' bps on <code>' + esc(s.bestLabel) + '</code>') + (s.positive ? ' · ' + s.positive + ' positive' : ''); }
+        else if (e.kind === 'fire') txt = 'fired <code>' + esc(e.cycle) + '</code> at ' + fmtEthAbs(Number(e.sizeWei) / 1e18, 4) + ' · sim net ' + fmtEth(Number(e.simNetWei) / 1e18, 6) + ' · ' + txlink(e.hash);
         else if (e.kind === 'won') txt = 'won <code>' + esc(e.cycle) + '</code> · ' + fmtEth((Number(e.returnedWei) - Number(e.sizeWei)) / 1e18, 6) + ' gross, gas ' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + (e.estimated ? ' (proceeds at guard floor)' : '') + ' · ' + txlink(e.hash);
         else if (e.kind === 'reverted') txt = 'lost the race on <code>' + esc(e.cycle) + '</code> · cost gas ' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + ', principal safe · ' + txlink(e.hash);
         else txt = (e.cycle ? '<code>' + esc(e.cycle) + '</code> · ' : '') + esc(e.text);
-        return '<li><time>' + hhmm(e.t) + '</time><span class="k k-' + e.kind + '">' + e.kind + '</span><span class="t">' + txt + '</span></li>';
+        return '<li class="' + e.kind + '"><time>' + hhmm(e.t) + '</time><span class="k k-' + e.kind + '">' + e.kind + '</span><span class="t">' + txt + '</span></li>';
       }).join('');
-      $('feed-span').textContent = ev.length + ' entries · newest first';
+      $('feed-span').textContent = (ev.length ? ev.length + ' notes · ' : '') + 'newest first';
     }
 
     function renderFills(ev) {
