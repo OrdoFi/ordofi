@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ENDPOINTS } from "@ordofi/core";
+import { OrdoStore } from "@ordofi/store";
 import { analyzeBlock } from "./detect.js";
 
 const RPC = ENDPOINTS.rpc;
@@ -13,6 +14,10 @@ mkdirSync(DATA_DIR, { recursive: true });
 const swapsFile = join(DATA_DIR, "swaps.ndjson");
 const arbsFile = join(DATA_DIR, "arbs.ndjson");
 const checkpointFile = join(DATA_DIR, "checkpoint.json");
+
+// NDJSON stays as the append-only raw record; the index is what gets queried.
+// Inserts are idempotent, so replaying a block after a restart is harmless.
+const store = new OrdoStore(process.env.ORDO_DB ?? join(DATA_DIR, "ordo.db"));
 
 function loadCheckpoint(): number | null {
   try {
@@ -103,6 +108,7 @@ async function processBlock(n: number): Promise<void> {
   for (const s of swaps) stats.poolsSeen.add(s.pool);
   if (swaps.length > 0)
     appendFileSync(swapsFile, swaps.map((s) => JSON.stringify(s)).join("\n") + "\n");
+  store.addSwaps(swaps.length);
   for (const a of arbs) {
     stats.arbSenders.set(a.sender, (stats.arbSenders.get(a.sender) ?? 0) + 1);
     if (a.profitToken && a.profitWei) {
@@ -115,6 +121,22 @@ async function processBlock(n: number): Promise<void> {
     console.log(
       `[arb] block=${a.block} tx=${a.txHash} sender=${a.sender} pools=${a.poolsTouched.length} ` +
         `profit=${a.profitWei} of ${a.profitToken}`,
+    );
+  }
+
+  if (arbs.length > 0) {
+    store.insertArbs(
+      arbs.map((a) => ({
+        txHash: a.txHash,
+        block: a.block,
+        timestamp: a.timestamp,
+        sender: a.sender,
+        pools: a.poolsTouched,
+        profitToken: a.profitToken,
+        profitWei: a.profitWei,
+        profitIsQuote: a.profitIsQuote,
+        gasPaidWei: a.gasPaidWei,
+      })),
     );
   }
 }

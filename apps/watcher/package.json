@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@ordofi/core": "*",
+    "@ordofi/store": "*",
     "viem": "^2.21.0",
     "ws": "^8.18.0"
   },

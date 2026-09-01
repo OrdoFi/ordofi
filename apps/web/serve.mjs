@@ -2,12 +2,34 @@ import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { createPublicClient, http, parseAbiItem, formatEther } from "viem";
+import { OrdoStore } from "@ordofi/store";
+
+/**
+ * The index is the query path. NDJSON is kept as the raw record and used as a
+ * fallback so the Explorer still renders on a machine that has files but no
+ * database yet (or a database that hasn't been written to).
+ */
+const DB_FILE = process.env.ORDO_DB ?? join(import.meta.dirname, "../../data/ordo.db");
+let store = null;
+try {
+  store = new OrdoStore(DB_FILE);
+} catch (e) {
+  console.warn(`web | index unavailable (${e.message}); falling back to NDJSON`);
+}
 
 const ROOT = join(import.meta.dirname, "public");
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../data");
 const PORT = Number(process.env.ORDO_WEB_PORT ?? 3000);
 const RPC = process.env.ORDO_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com";
 const SETTLEMENT = process.env.ORDO_SETTLEMENT_ADDRESS ?? "";
+
+/** Report from the index when it has data, else the generated report.json. */
+function loadReport() {
+  const indexed = indexedReport();
+  if (indexed) return indexed;
+  const f = join(DATA_DIR, "report.json");
+  return existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : null;
+}
 
 const MIME = {
   ".html": "text/html",
@@ -18,6 +40,26 @@ const MIME = {
 };
 
 function recentArbs(n) {
+  // Prefer the index; fall back to the raw NDJSON tail.
+  if (store) {
+    try {
+      const rows = store.recentArbs(n);
+      if (rows.length > 0) {
+        return rows.map((r) => ({
+          block: r.block,
+          timestamp: r.timestamp,
+          txHash: r.txHash,
+          sender: r.sender,
+          poolsTouched: r.pools,
+          profitToken: r.profitToken,
+          profitWei: r.profitWei,
+          profitIsQuote: r.profitIsQuote,
+        }));
+      }
+    } catch {
+      /* fall through to files */
+    }
+  }
   const f = join(DATA_DIR, "arbs.ndjson");
   if (!existsSync(f)) return [];
   const lines = readFileSync(f, "utf8").trim().split("\n").filter(Boolean);
@@ -32,6 +74,31 @@ function recentArbs(n) {
       }
     })
     .filter(Boolean);
+}
+
+/** Headline figures straight from the index, when it has data. */
+function indexedReport() {
+  if (!store) return null;
+  try {
+    const totals = store.totals();
+    if (totals.arbs === 0) return null;
+    const w = store.window();
+    return {
+      window: w,
+      totals: {
+        arbs: totals.arbs,
+        uniqueSearchers: totals.searchers,
+        uniquePools: totals.pools,
+        swaps: store.swapCount(),
+      },
+      perDay: { arbs: w.spanHours > 0 ? (totals.arbs / w.spanHours) * 24 : 0 },
+      topSearchers: store.topSearchers(10).map((s) => [s.address, s.count]),
+      topPools: store.topPools(10).map((p) => [p.pool, p.count]),
+      source: "index",
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function auctionStats() {
@@ -124,8 +191,7 @@ createServer(async (req, res) => {
 
   // Compact, embed-friendly stats for the marketing site.
   if (path === "/api/stats") {
-    const f = join(DATA_DIR, "report.json");
-    const rep = existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : null;
+    const rep = loadReport();
     let onchain = { deployed: false };
     try {
       onchain = await onchainStats(SETTLEMENT);
@@ -158,9 +224,9 @@ createServer(async (req, res) => {
   }
 
   if (path === "/api/report") {
-    const f = join(DATA_DIR, "report.json");
+    const rep = loadReport();
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(existsSync(f) ? readFileSync(f) : JSON.stringify({ error: "run the report first" }));
+    res.end(JSON.stringify(rep ?? { error: "no data yet — run the watcher" }));
     return;
   }
 
@@ -190,8 +256,7 @@ createServer(async (req, res) => {
 
   if (path === "/api/explorer") {
     res.writeHead(200, { "content-type": "application/json" });
-    const reportFile = join(DATA_DIR, "report.json");
-    const report = existsSync(reportFile) ? JSON.parse(readFileSync(reportFile, "utf8")) : null;
+    const report = loadReport();
     let onchain = { deployed: false };
     try {
       onchain = await onchainStats(SETTLEMENT);
