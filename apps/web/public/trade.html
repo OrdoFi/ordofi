@@ -482,7 +482,7 @@
       return [...out.values()].sort((a, b) => a.time - b.time);
     }
 
-    let chartMeta = { coverage: null, backfill: null, prevLen: 0, prevFirst: null };
+    let chartMeta = { coverage: null, backfill: null, prevTimes: [] };
     let settingRange = false; // our own range sets must not read as the user scrolling left
     function setRange(from, to) {
       settingRange = true;
@@ -497,7 +497,7 @@
       const cs = candles1m;
       const ts = chart.timeScale();
       const before = ts.getVisibleLogicalRange();
-      const prevLen = chartMeta.prevLen;
+      const prevTimes = chartMeta.prevTimes;
       // Sub-cent assets need more precision than the default four decimals.
       const last = cs.length ? cs[cs.length - 1].close : 1;
       const precision = last >= 100 ? 2 : last >= 1 ? 4 : last >= 0.01 ? 6 : 9;
@@ -505,16 +505,24 @@
       series.setData(cs.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
       volSeries.setData(cs.map((c) => ({ time: c.time, value: c.vol ?? 0, color: c.close >= c.open ? "rgba(30,158,106,.45)" : "rgba(192,57,43,.45)" })));
 
-      if (mode === "fresh" || !before || !prevLen) {
+      if (mode === "fresh" || !before || !prevTimes.length || !cs.length) {
         const show = Math.min(Math.max(cs.length, 40), 150);
         setRange(cs.length - show, cs.length + 4);
-      } else if (mode === "older") {
-        const added = cs.length - prevLen;
-        setRange(before.from + added, before.to + added);
       } else {
-        const atEdge = before.to >= prevLen - 1;
-        const shift = atEdge ? cs.length - prevLen : 0;
-        setRange(before.from + shift, before.to + shift);
+        const width = before.to - before.from;
+        const atEdge = mode !== "older" && before.to >= prevTimes.length - 1;
+        if (atEdge) {
+          // Following the market: keep the zoom, stay pinned to the newest bar.
+          setRange(cs.length + 4 - width, cs.length + 4);
+        } else {
+          // Anchor on the bar that was at the left edge, by time. Indices move
+          // when history is prepended *and* when the rolling window drops old
+          // bars off the left, so a bare index shift would drift the view.
+          const prevIdx = Math.min(prevTimes.length - 1, Math.max(0, Math.round(before.from)));
+          const newIdx = cs.findIndex((c) => c.time >= prevTimes[prevIdx]);
+          const shift = newIdx < 0 ? 0 : newIdx - prevIdx;
+          setRange(before.from + shift, before.to + shift);
+        }
       }
 
       // Where recorded history genuinely starts, say so on the chart itself.
@@ -522,8 +530,7 @@
       const first = cs[0];
       const atStart = first && cov && first.time <= cov.from + tfMin * 60;
       series.setMarkers(atStart && !(chartMeta.backfill && !chartMeta.backfill.done) ? [{ time: first.time, position: "belowBar", color: "#ff6414", shape: "arrowUp", text: "tape begins" }] : []);
-      chartMeta.prevLen = cs.length;
-      chartMeta.prevFirst = first?.time ?? null;
+      chartMeta.prevTimes = cs.map((c) => c.time);
     }
 
     let chartSeq = 0;
