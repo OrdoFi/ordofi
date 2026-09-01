@@ -356,8 +356,10 @@ async function bestPool(base, quote) {
  * sqrtPriceX96, so the series is the pool's actual tape, not an oracle.
  *
  * The tape the watcher records into the store is the preferred source — it
- * has no result caps and no upstream to appease. The eth_getLogs walk below
- * survives as the fallback for pools the recorder has not seen yet.
+ * has no result caps and no upstream to appease. But it only reaches back to
+ * the watcher's last restart, so while it is shallow the eth_getLogs walk
+ * backfills the older minutes; the walk is also the sole source for pools the
+ * recorder has not seen yet.
  */
 export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 72_000, store = null }) {
   const b = (base === NATIVE ? WETH : base).toLowerCase();
@@ -368,35 +370,55 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
   const [infoBase, infoQuote] = await Promise.all([getTokenInfo(b), getTokenInfo(q)]);
   const fromBucket = Math.floor((Date.now() / 1000 - spanBlocks * 0.1) / bucketSec) * bucketSec;
   const recorded = store?.candlesFor?.(found.pool, fromBucket) ?? [];
-  if (recorded.length > 0) {
-    const scale = 10 ** (infoBase.decimals - infoQuote.decimals);
-    const orient = (p) => (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
-    // Inverting swaps the extremes: yesterday's high is today's low.
-    const candles = recorded.map((c) => ({
-      time: c.bucket,
-      open: orient(c.open),
-      high: found.base0 ? orient(c.high) : orient(c.low),
-      low: found.base0 ? orient(c.low) : orient(c.high),
-      close: orient(c.close),
-      swaps: c.swaps,
-    }));
-    const volRaw = recorded.reduce((n, c) => n + (found.base0 ? c.vol1 : c.vol0), 0);
-    return {
-      pool: found.pool,
-      fee: found.fee,
-      base: { address: b, symbol: infoBase.symbol },
-      quote: { address: q, symbol: infoQuote.symbol },
-      bucketSec,
-      spanBlocks,
-      source: "recorder",
-      truncated: false,
-      swaps: recorded.reduce((n, c) => n + c.swaps, 0),
-      volumeQuote: volRaw / 10 ** infoQuote.decimals,
-      last: candles.length ? candles[candles.length - 1].close : null,
-      candles,
-    };
+  const scale = 10 ** (infoBase.decimals - infoQuote.decimals);
+  const orient = (p) => (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
+  // Inverting swaps the extremes: yesterday's high is today's low.
+  const recCandles = recorded.map((c) => ({
+    time: c.bucket,
+    open: orient(c.open),
+    high: found.base0 ? orient(c.high) : orient(c.low),
+    low: found.base0 ? orient(c.low) : orient(c.high),
+    close: orient(c.close),
+    swaps: c.swaps,
+    vol: (found.base0 ? c.vol1 : c.vol0) / 10 ** infoQuote.decimals,
+  }));
+
+  // A freshly restarted watcher has minutes of tape; the chart wants hours.
+  const DEEP_ENOUGH = 60;
+  let candles = recCandles;
+  let truncated = false;
+  let source = "recorder";
+  if (recCandles.length < DEEP_ENOUGH) {
+    try {
+      const walked = await candlesFromLogs(found, infoBase, infoQuote, bucketSec, spanBlocks);
+      const cutoff = recCandles.length ? recCandles[0].time : Infinity;
+      const older = walked.candles.filter((c) => c.time < cutoff);
+      candles = [...older, ...recCandles];
+      truncated = walked.truncated;
+      source = recCandles.length ? "recorder+logs" : "logs";
+    } catch (e) {
+      if (recCandles.length === 0) throw e; // nothing at all to show
+    }
   }
 
+  return {
+    pool: found.pool,
+    fee: found.fee,
+    base: { address: b, symbol: infoBase.symbol },
+    quote: { address: q, symbol: infoQuote.symbol },
+    bucketSec,
+    spanBlocks,
+    source,
+    truncated,
+    swaps: candles.reduce((n, c) => n + (c.swaps ?? 0), 0),
+    volumeQuote: candles.reduce((n, c) => n + (c.vol ?? 0), 0),
+    last: candles.length ? candles[candles.length - 1].close : null,
+    candles,
+  };
+}
+
+/** The eth_getLogs walk, cached briefly per pool so chart polls don't hammer upstreams. */
+async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks) {
   const cacheKey = `${found.pool}:${bucketSec}:${spanBlocks}`;
   const hit = candleCache.get(cacheKey);
   if (hit && Date.now() - hit.at < 45_000) return hit.data;
@@ -437,7 +459,6 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
   }
   if (hi >= floor) truncated = true;
 
-  const [infoB, infoQ] = await Promise.all([getTokenInfo(b), getTokenInfo(q)]);
   // sqrtPriceX96 is token1-per-token0; orient it to quote-per-base and fix
   // the decimal scale so the chart shows human prices.
   const scale = 10 ** (infoB.decimals - infoQ.decimals);
@@ -452,7 +473,6 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
   const buckets = new Map();
   // 0.1s blocks make block-number time good enough for bucketing.
   const blockToTime = (bn) => Math.floor(Date.now() / 1000) - Math.round((head - bn) * 0.1);
-  let volumeQuote = 0;
   for (const l of logs) {
     const data = l.data.slice(2);
     if (data.length < 5 * 64) continue;
@@ -461,33 +481,22 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
     if (!Number.isFinite(price) || price <= 0) continue;
     const t = blockToTime(Number(BigInt(l.blockNumber)));
     const bucket = Math.floor(t / bucketSec) * bucketSec;
-    const c = buckets.get(bucket) ?? { time: bucket, open: price, high: price, low: price, close: price, swaps: 0 };
+    const c =
+      buckets.get(bucket) ??
+      { time: bucket, open: price, high: price, low: price, close: price, swaps: 0, vol: 0 };
     c.high = Math.max(c.high, price);
     c.low = Math.min(c.low, price);
     c.close = price;
     c.swaps++;
-    buckets.set(bucket, c);
     // Quote-side volume: |amountQuote| of each swap.
     const raw = BigInt("0x" + (found.base0 ? data.slice(64, 128) : data.slice(0, 64)));
     const signed = raw > 2n ** 255n ? raw - 2n ** 256n : raw;
-    volumeQuote += Math.abs(toWhole(signed < 0n ? -signed : signed, infoQ.decimals));
+    c.vol += Math.abs(toWhole(signed < 0n ? -signed : signed, infoQ.decimals));
+    buckets.set(bucket, c);
   }
 
   const candles = [...buckets.values()].sort((a, c) => a.time - c.time);
-  const data = {
-    pool: found.pool,
-    fee: found.fee,
-    base: { address: b, symbol: infoB.symbol },
-    quote: { address: q, symbol: infoQ.symbol },
-    bucketSec,
-    spanBlocks,
-    source: "logs",
-    truncated,
-    swaps: logs.length,
-    volumeQuote,
-    last: candles.length ? candles[candles.length - 1].close : null,
-    candles,
-  };
+  const data = { candles, truncated };
   candleCache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
