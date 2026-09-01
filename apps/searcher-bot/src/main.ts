@@ -1,62 +1,151 @@
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
-import { parseEther, type Hex } from "viem";
+import { encodeFunctionData, decodeFunctionResult, formatEther, parseEther, type Hex } from "viem";
+import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
 import { OrdoSearcher } from "@ordofi/sdk";
 
 /**
- * Reference OrdoFi searcher bot.
+ * Reference OrdoFi searcher bot — also the house bot that keeps the auction
+ * from ever being empty, so the first app to route flow meets a live market
+ * instead of a room with the lights off.
  *
- * A minimal, adaptable strategy: for every opportunity, bid a fixed fraction of
- * a configured cap and submit a (placeholder) backrun. Real searchers replace
- * `decide()` with pool-state simulation to compute the true backrun profit and
- * bid up to that. This exists so a searcher can be live against OrdoFi in
- * minutes, and as the canonical example of the EIP-712 bid flow.
+ * The strategy is deliberately naive and deliberately honest: bid a small
+ * fixed amount on anything that touches a pool, with a self-transfer as the
+ * backrun placeholder. A real searcher replaces the decision logic with
+ * simulation and bids up to expected profit; this file is the canonical
+ * example of everything else — the EIP-712 bid flow, bond upkeep, and the
+ * mainnet lessons (Arbitrum intrinsic gas includes an L1 component, so 21000
+ * is a rejection; nonces come from the chain, not from zero; and nothing
+ * network-bound belongs inside the 200ms bid window).
  *
  * Env:
- *   ORDO_AUCTION_WS       wss://auction.ordofi.network/searcher (default ws://localhost:8548/searcher)
- *   ORDO_SETTLEMENT_ADDRESS  deployed OrdoSettlement (for EIP-712 domain)
- *   SEARCHER_KEY          searcher private key (default: ephemeral, for testing)
- *   ORDO_MAX_BID_ETH      max bid per opportunity (default 0.001)
+ *   ORDO_AUCTION_WS          wss://auction.ordofi.network/searcher (default ws://localhost:8548/searcher)
+ *   ORDO_SETTLEMENT_ADDRESS  deployed OrdoSettlement (EIP-712 domain + bonding)
+ *   SEARCHER_KEY             searcher private key (default: ephemeral, for testing)
+ *   ORDO_MAX_BID_ETH         max bid per opportunity (default 0.001)
+ *   ORDO_BOND_TARGET_ETH     bond to maintain on-chain (default 2x max bid)
  */
 
 const AUCTION_WS = process.env.ORDO_AUCTION_WS ?? "ws://localhost:8548/searcher";
-const SETTLEMENT = (process.env.ORDO_SETTLEMENT_ADDRESS ?? "0x0000000000000000000000000000000000000000") as Hex;
-const KEY = (process.env.SEARCHER_KEY as Hex) ?? generatePrivateKey();
+const SETTLEMENT = (process.env.ORDO_SETTLEMENT_ADDRESS ?? "") as Hex;
+const KEY = normalizePrivateKey(process.env.SEARCHER_KEY, "SEARCHER_KEY") ?? generatePrivateKey();
 const MAX_BID = parseEther(process.env.ORDO_MAX_BID_ETH ?? "0.001");
+const BOND_TARGET = process.env.ORDO_BOND_TARGET_ETH
+  ? parseEther(process.env.ORDO_BOND_TARGET_ETH)
+  : MAX_BID * 2n;
 
 const account = privateKeyToAccount(KEY);
 
-async function backrunTxFor(nonce: number): Promise<Hex> {
-  // Placeholder backrun: a self-transfer. Replace with your arb route calldata.
+const BOND_ABI = [
+  {
+    type: "function",
+    name: "bond",
+    stateMutability: "view",
+    inputs: [{ type: "address" }],
+    outputs: [{ type: "uint256" }],
+  },
+] as const;
+
+// --- chain state, refreshed outside the bid window ---------------------------
+
+let nonce = 0;
+let maxFeePerGas = 2_000_000_000n;
+let gasLimit = 60_000n;
+
+async function refreshChainState(): Promise<void> {
+  const [nonceHex, gasPriceHex, gasHex] = await Promise.all([
+    rpcFetch("eth_getTransactionCount", [account.address, "pending"]),
+    rpcFetch("eth_gasPrice", []),
+    rpcFetch("eth_estimateGas", [{ from: account.address, to: account.address, value: "0x0" }]),
+  ]);
+  nonce = parseInt(nonceHex as string, 16);
+  maxFeePerGas = BigInt(gasPriceHex as string) * 2n;
+  // Headroom over the estimate: the L1 data component drifts with calldata prices.
+  gasLimit = (BigInt(gasHex as string) * 3n) / 2n;
+}
+
+async function signedSelfTransfer(): Promise<Hex> {
   return account.signTransaction({
     chainId: 4663,
     to: account.address,
     value: 0n,
-    gas: 21000n,
-    maxFeePerGas: 1_000_000_000n,
+    gas: gasLimit,
+    maxFeePerGas,
     maxPriorityFeePerGas: 0n,
-    nonce,
+    nonce: nonce++,
     type: "eip1559",
   });
 }
 
-let nonce = 0;
+// --- bond upkeep --------------------------------------------------------------
+
+async function bondBalance(): Promise<bigint> {
+  const data = encodeFunctionData({ abi: BOND_ABI, functionName: "bond", args: [account.address] });
+  const out = (await rpcFetch("eth_call", [{ to: SETTLEMENT, data }, "latest"])) as Hex;
+  return decodeFunctionResult({ abi: BOND_ABI, functionName: "bond", data: out }) as bigint;
+}
+
+/**
+ * Keeps enough collateral on-chain that bond gating accepts our bids. A plain
+ * transfer to the contract bonds via receive(); losing auctions costs nothing,
+ * winning debits the clearing price from this balance.
+ */
+async function ensureBond(): Promise<void> {
+  if (!SETTLEMENT) return;
+  const bond = await bondBalance();
+  if (bond >= BOND_TARGET) return;
+
+  const topUp = BOND_TARGET - bond;
+  const balanceHex = (await rpcFetch("eth_getBalance", [account.address, "latest"])) as string;
+  const balance = BigInt(balanceHex);
+  const gasBudget = gasLimit * maxFeePerGas;
+  if (balance < topUp + gasBudget) {
+    console.warn(
+      `[bot] bond is ${formatEther(bond)} ETH (target ${formatEther(BOND_TARGET)}) but the wallet ` +
+        `holds only ${formatEther(balance)} ETH — fund ${account.address} to keep bidding`,
+    );
+    return;
+  }
+
+  const raw = await account.signTransaction({
+    chainId: 4663,
+    to: SETTLEMENT,
+    value: topUp,
+    gas: gasLimit,
+    maxFeePerGas,
+    maxPriorityFeePerGas: 0n,
+    nonce: nonce++,
+    type: "eip1559",
+  });
+  const hash = await rpcFetch("eth_sendRawTransaction", [raw]);
+  console.log(`[bot] bonded ${formatEther(topUp)} ETH — ${hash}`);
+}
+
+// --- the bot -------------------------------------------------------------------
+
+await refreshChainState();
+await ensureBond();
+setInterval(() => {
+  refreshChainState()
+    .then(ensureBond)
+    .catch((e) => console.warn(`[bot] refresh failed: ${(e as Error).message}`));
+}, 30_000);
 
 const searcher = new OrdoSearcher({
   auctionWsUrl: AUCTION_WS,
   privateKey: KEY,
   settlementAddress: SETTLEMENT,
   onOpportunity: async (opp) => {
-    // Naive strategy: always bid a small fraction on opportunities that touch a
-    // pool. A real bot simulates the backrun and bids up to expected profit.
+    // Naive strategy: a small constant bid on anything that moves a pool.
+    // Everything here must be local — the auction closes in ~200ms.
     if (opp.hint.poolsTouched.length === 0) return null;
     const maxBidWei = MAX_BID / 2n;
-    const backrunRawTx = await backrunTxFor(nonce++);
-    console.log(`[bot] bidding ${maxBidWei} wei on ${opp.id.slice(0, 8)} (${opp.hint.poolsTouched.length} pools)`);
+    const backrunRawTx = await signedSelfTransfer();
+    console.log(`[bot] bidding ${formatEther(maxBidWei)} ETH on ${opp.id.slice(0, 8)} (${opp.hint.poolsTouched.length} pools)`);
     return { maxBidWei, backrunRawTx };
   },
 });
 
 console.log(`OrdoFi searcher bot | ${account.address}`);
-console.log(`OrdoFi searcher bot | auction=${AUCTION_WS} settlement=${SETTLEMENT}`);
-console.log(`OrdoFi searcher bot | max bid ${MAX_BID} wei/opp`);
+console.log(`OrdoFi searcher bot | auction=${AUCTION_WS} settlement=${SETTLEMENT || "(none — bids will be unsettleable)"}`);
+console.log(`OrdoFi searcher bot | max bid ${formatEther(MAX_BID)} ETH · bond target ${formatEther(BOND_TARGET)} ETH`);
 searcher.connect();
