@@ -22,6 +22,15 @@ Live at block 51544378 with a 90/5/5 user/app/protocol split. Foundry's receipt
 output labelled these two the wrong way round; the pairing above is the one the
 chain reports, read back from `owner()` and `executorOf()`.
 
+**First settlement, 2026-09-01.** A bonded searcher won a sealed-bid auction at
+a 0.0002 ETH clearing price and settlement landed on-chain three blocks after
+the user's transaction: 90% became claimable by the user, 5% by the
+originating app, 5% by the treasury — conserved to the wei, verifiable at
+[`0xd34ed319…`](https://rpc.mainnet.chain.robinhood.com) (settlement,
+block 51654346) against user transaction `0x82235bda…` (block 51654343). The
+auction issued a signed receipt for the round, with the winning bid carrying
+the searcher's own EIP-712 signature.
+
 ## Why this chain is different
 
 Robinhood Chain has a single, Robinhood-operated sequencer and orders
