@@ -119,21 +119,22 @@ test("api keys: no rebate address means direct mode; bad address refused", () =>
 test("leakage: scoped to pools, and priced profit is summed as bigint", () => {
   const s = new OrdoStore(":memory:");
   s.insertArbs([
-    { ...arb("0xa", 10, "0xbot1", ["0xpoolA"]), profitIsQuote: true, profitWei: "1000000000000000000" },
-    { ...arb("0xb", 11, "0xbot2", ["0xpoolA"]), profitIsQuote: true, profitWei: "2000000000000000000" },
+    { ...arb("0xa", 10, "0xbot1", ["0xpoolA"]), profitIsQuote: true, profitToken: "0xWETH", profitWei: "1000000000000000000" },
+    { ...arb("0xb", 11, "0xbot2", ["0xpoolA"]), profitIsQuote: true, profitToken: "0xweth", profitWei: "2000000000000000000" },
     // Long-tail profit: counted, not valued.
-    { ...arb("0xc", 12, "0xbot1", ["0xpoolB"]), profitIsQuote: false, profitWei: "9999999999999999999999" },
+    { ...arb("0xc", 12, "0xbot1", ["0xpoolB"]), profitIsQuote: false, profitToken: "0xLONGTAIL", profitWei: "9999999999999999999999" },
   ]);
 
   const all = s.poolLeakage();
   assert.equal(all.arbs, 3);
   assert.equal(all.searchers, 2);
   assert.equal(all.pricedArbs, 2);
-  assert.equal(all.pricedProfitWei, 3_000_000_000_000_000_000n, "only quote-denominated profit counts");
+  assert.equal(all.profitByToken.length, 1, "one quote token");
+  assert.equal(all.profitByToken[0].wei, 3_000_000_000_000_000_000n, "only quote-denominated profit counts");
 
   const scoped = s.poolLeakage(["0xpoolA"]);
   assert.equal(scoped.arbs, 2, "only arbs touching poolA");
-  assert.equal(scoped.pricedProfitWei, 3_000_000_000_000_000_000n);
+  assert.equal(scoped.profitByToken[0].wei, 3_000_000_000_000_000_000n);
   assert.equal(scoped.firstBlock, 10);
   assert.equal(scoped.lastBlock, 11);
   s.close();
@@ -143,9 +144,9 @@ test("leakage: wei totals beyond double precision stay exact", () => {
   const s = new OrdoStore(":memory:");
   // Two profits whose sum is not representable exactly as a float64.
   s.insertArbs([
-    { ...arb("0xa", 1, "0xbot", ["0xp"]), profitIsQuote: true, profitWei: "9007199254740993000000000" },
-    { ...arb("0xb", 2, "0xbot", ["0xp"]), profitIsQuote: true, profitWei: "1" },
+    { ...arb("0xa", 1, "0xbot", ["0xp"]), profitIsQuote: true, profitToken: "0xweth", profitWei: "9007199254740993000000000" },
+    { ...arb("0xb", 2, "0xbot", ["0xp"]), profitIsQuote: true, profitToken: "0xweth", profitWei: "1" },
   ]);
-  assert.equal(s.poolLeakage().pricedProfitWei, 9007199254740993000000001n);
+  assert.equal(s.poolLeakage().profitByToken[0].wei, 9007199254740993000000001n);
   s.close();
 });

@@ -15,7 +15,7 @@
  * With no --pools it reports the whole chain, which is the right framing for
  * a first email to an ecosystem rather than a single app.
  */
-import { formatEther } from "viem";
+import { getTokenInfo, toWhole } from "@ordofi/core/pricing";
 import { OrdoStore } from "@ordofi/store";
 
 const args = process.argv.slice(2);
@@ -41,8 +41,21 @@ if (d.arbs === 0) {
 }
 
 const window = store.window();
-const pricedEth = Number(formatEther(d.pricedProfitWei));
-const pricedUsd = pricedEth * ETH_USD;
+
+// Each quote token is valued with its own decimals and USD anchor. Summing
+// raw wei across tokens and calling it ether reads a six-decimal stablecoin
+// as 1e12 times its real size — the first draft of this script did exactly
+// that and reported twenty million dollars a day.
+const byToken = [];
+let pricedUsd = 0;
+for (const row of d.profitByToken) {
+  const info = await getTokenInfo(row.token);
+  const amount = toWhole(row.wei, info.decimals);
+  const value = info.usdPerToken === null ? null : amount * info.usdPerToken;
+  if (value !== null) pricedUsd += value;
+  byToken.push({ token: row.token, symbol: info.symbol, amount, usd: value, arbs: row.arbs });
+}
+
 const days = Math.max(window.spanHours / 24, 1 / 24);
 const usd = (n) => "$" + n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
@@ -56,8 +69,8 @@ if (AS_JSON) {
         arbs: d.arbs,
         distinctSearchers: d.searchers,
         pricedArbs: d.pricedArbs,
-        pricedProfitEth: pricedEth,
         pricedProfitUsd: pricedUsd,
+        byToken: byToken.map((b) => ({ ...b, amount: Number(b.amount.toFixed(6)) })),
         note: "priced figures are a floor; long-tail token profit is counted but not valued",
         ifRouted: {
           toUsersUsd: pricedUsd * REBATE_USER,
@@ -84,8 +97,12 @@ console.log(`Atomic arbitrages   : ${d.arbs.toLocaleString()}`);
 console.log(`Distinct searchers  : ${d.searchers.toLocaleString()}   (all competing for the same flow)`);
 console.log(`Priced arbitrages   : ${d.pricedArbs.toLocaleString()} of ${d.arbs.toLocaleString()}`);
 console.log("");
-console.log(`Extracted (floor)   : ${pricedEth.toFixed(6)} ETH  ≈ ${usd(pricedUsd)}`);
+console.log(`Extracted (floor)   : ≈ ${usd(pricedUsd)}`);
 console.log(`  per day           : ≈ ${usd(pricedUsd / days)}`);
+for (const b of byToken) {
+  const valued = b.usd === null ? "unpriced" : usd(b.usd);
+  console.log(`    ${b.symbol.padEnd(8)} ${b.amount.toFixed(6).padStart(18)}  ${valued}  (${b.arbs.toLocaleString()} arbs)`);
+}
 console.log("");
 console.log("  This is a FLOOR. Only profit booked in WETH or stablecoins is valued;");
 console.log("  arbitrage ending in long-tail tokens is counted but not priced, and");

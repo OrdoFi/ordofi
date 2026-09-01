@@ -289,16 +289,21 @@ export class OrdoStore {
    * they are, by whom, and how much of the extracted value was denominated in
    * something we can actually price. An empty pool list means the whole chain.
    *
-   * `pricedProfitWei` deliberately sums only quote-denominated profit. Most
-   * arbitrage books out in long-tail tokens this cannot value, so the figure
-   * is a floor, and calling it anything else in a sales email would be the
-   * fastest way to lose the argument with someone who checks.
+   * Profit is returned per token, never pre-summed. Different quote tokens
+   * have different decimals and different dollar values — adding raw wei
+   * across them and calling the result ETH turns six-decimal stablecoin units
+   * into ether and inflates the total by orders of magnitude. Valuation
+   * belongs with the caller that knows each token's decimals.
+   *
+   * Only quote-denominated profit appears here at all. Most arbitrage books
+   * out in long-tail tokens this cannot value, so any total built from it is
+   * a floor.
    */
   poolLeakage(pools: string[] = []): {
     arbs: number;
     searchers: number;
     pricedArbs: number;
-    pricedProfitWei: bigint;
+    profitByToken: { token: string; wei: bigint; arbs: number }[];
     firstBlock: number | null;
     lastBlock: number | null;
     topSearchers: { address: string; count: number }[];
@@ -323,12 +328,27 @@ export class OrdoStore {
       .get(...lower) as { arbs: number; searchers: number; pricedArbs: number; lo: number | null; hi: number | null };
 
     // SUM() over a TEXT wei column would overflow a double, so the priced
-    // rows are accumulated as BigInt in JS instead.
+    // rows are accumulated as BigInt in JS instead — and grouped by token,
+    // since summing across tokens is meaningless.
     const priced = this.db
-      .prepare(`SELECT a.profit_wei w FROM arbs a ${filter}${filter ? " AND" : " WHERE"} a.profit_is_quote = 1`)
-      .all(...lower) as { w: string | null }[];
-    let pricedProfitWei = 0n;
-    for (const row of priced) if (row.w) pricedProfitWei += BigInt(row.w);
+      .prepare(
+        `SELECT a.profit_token t, a.profit_wei w FROM arbs a
+         ${filter}${filter ? " AND" : " WHERE"} a.profit_is_quote = 1`,
+      )
+      .all(...lower) as { t: string | null; w: string | null }[];
+
+    const byToken = new Map<string, { wei: bigint; arbs: number }>();
+    for (const row of priced) {
+      if (!row.t || !row.w) continue;
+      const key = row.t.toLowerCase();
+      const cur = byToken.get(key) ?? { wei: 0n, arbs: 0 };
+      cur.wei += BigInt(row.w);
+      cur.arbs++;
+      byToken.set(key, cur);
+    }
+    const profitByToken = [...byToken.entries()]
+      .map(([token, v]) => ({ token, wei: v.wei, arbs: v.arbs }))
+      .sort((a, b) => b.arbs - a.arbs);
 
     const topSearchers = (
       this.db
@@ -353,7 +373,7 @@ export class OrdoStore {
       arbs: head.arbs,
       searchers: head.searchers,
       pricedArbs: Number(head.pricedArbs),
-      pricedProfitWei,
+      profitByToken,
       firstBlock: head.lo,
       lastBlock: head.hi,
       topSearchers,
