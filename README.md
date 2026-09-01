@@ -272,10 +272,11 @@ const s = await fetch("https://app.ordofi.network/api/stats").then(r => r.json()
   choice with a real cost.
 - **The auction delays the user's transaction** by the bid window (200ms by
   default). `/submit` reports the actual figure as `auctionDelayMs`.
-- **On-chain settlement is implemented and fork-tested, not yet deployed.**
-  Until `contracts/deploy.sh` has been run against mainnet and
-  `ORDO_SETTLEMENT_ADDRESS` is set, rebates are off-chain accounting. The
-  services log which mode they are in at boot.
+- **On-chain settlement is deployed, but a service only uses it if configured.**
+  `OrdoSettlement` is live at `0xbC680922DaF2F65a8B957e5238857f8c68BeDabb`;
+  an auction started without `ORDO_SETTLEMENT_ADDRESS` and `ORDO_AUCTIONEER_KEY`
+  still runs, but its rebates are off-chain accounting that collects nothing.
+  The services log which mode they are in at boot.
 - **USD value is quote-denominated.** Only profits ending in WETH/stablecoins
   are priced; long-tail token inventory is counted but not valued, to keep the
   headline number honest.
