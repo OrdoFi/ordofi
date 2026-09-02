@@ -1,8 +1,9 @@
-import { decodeFunctionResult, encodeFunctionData, getAddress } from "viem";
+import { decodeEventLog, decodeFunctionResult, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
 import { rpcFetch, rpcUrls, RPC_HEADERS } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
 import {
   alignTick,
+  allocateRungs,
   amountsForLiquidity,
   planLadder,
   priceToTick,
@@ -10,7 +11,7 @@ import {
   tickToPrice,
   tickToSqrtPriceX96,
 } from "@ordofi/core/liquidity";
-import { CHAIN, USDG, WETH, poolCache, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
+import { CHAIN, USDG, WETH, bestPool, poolCache, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
 
 /**
  * Liquidity provision on Uniswap V3 pools, the way a person would want to do
@@ -22,9 +23,13 @@ import { CHAIN, USDG, WETH, poolCache, tradeCandles, tradeMarkets, tradeTokens }
  * the contract will mint, and it reads back what a wallet already holds.
  */
 
-export const LADDER_MANAGER = process.env.ORDO_LADDER_ADDRESS ?? "0xa89Ffd22477B3937C934E5A6A943d9b2aAd33A98";
+export const LADDER_MANAGER = process.env.ORDO_LADDER_ADDRESS ?? "0x01A4227345B017aDfffF4799226179A4ADe3a2ad";
+/** Block the manager was deployed in; event scans never look further back. */
+const LADDER_DEPLOY_BLOCK = Number(process.env.ORDO_LADDER_BLOCK ?? 52_536_362);
 const NPM = "0x73991a25c818bf1f1128deaab1492d45638de0d3";
 const NATIVE = "eth";
+export const SHAPES = ["spot", "curve", "bidask"];
+const shapeCode = (s) => Math.max(0, SHAPES.indexOf(s));
 
 const POOL_ABI = [
   { type: "function", name: "slot0", stateMutability: "view", inputs: [], outputs: [{ type: "uint160" }, { type: "int24" }, { type: "uint16" }, { type: "uint16" }, { type: "uint16" }, { type: "uint8" }, { type: "bool" }] },
@@ -37,33 +42,53 @@ const ERC20_ABI = [
   { type: "function", name: "totalSupply", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
 ];
+const RUNG_TUPLE = { name: "rungs", type: "tuple[]", components: [
+  { name: "tickLower", type: "int24" }, { name: "tickUpper", type: "int24" },
+  { name: "amount0", type: "uint256" }, { name: "amount1", type: "uint256" },
+  { name: "amount0Min", type: "uint256" }, { name: "amount1Min", type: "uint256" },
+] };
 export const LADDER_ABI = [
   {
-    type: "function", name: "mintLadder", stateMutability: "payable",
-    inputs: [
-      { name: "pool", type: "address" },
-      { name: "rungs", type: "tuple[]", components: [
-        { name: "tickLower", type: "int24" }, { name: "tickUpper", type: "int24" },
-        { name: "amount0", type: "uint256" }, { name: "amount1", type: "uint256" },
-        { name: "amount0Min", type: "uint256" }, { name: "amount1Min", type: "uint256" },
-      ] },
-      { name: "minTick", type: "int24" }, { name: "maxTick", type: "int24" }, { name: "deadline", type: "uint256" },
-    ],
+    type: "function", name: "openLadder", stateMutability: "payable",
+    inputs: [{ name: "pool", type: "address" }, RUNG_TUPLE, { name: "shape", type: "uint8" }, { name: "minTick", type: "int24" }, { name: "maxTick", type: "int24" }, { name: "deadline", type: "uint256" }],
     outputs: [{ type: "uint256" }],
   },
+  {
+    type: "function", name: "addLiquidity", stateMutability: "payable",
+    inputs: [{ name: "ladderId", type: "uint256" }, RUNG_TUPLE, { name: "deadline", type: "uint256" }],
+    outputs: [{ type: "uint256" }, { type: "uint256" }],
+  },
   { type: "function", name: "collect", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
+  { type: "function", name: "closeBins", stateMutability: "nonpayable", inputs: [{ type: "uint256" }, { type: "uint256[]" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
   { type: "function", name: "close", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
+  { type: "function", name: "closeMany", stateMutability: "nonpayable", inputs: [{ type: "uint256[]" }], outputs: [] },
   { type: "function", name: "laddersOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256[]" }] },
   {
     type: "function", name: "ladder", stateMutability: "view", inputs: [{ type: "uint256" }],
     outputs: [{ type: "tuple", components: [
-      { name: "owner", type: "address" }, { name: "pool", type: "address" }, { name: "mintedAt", type: "uint64" },
+      { name: "owner", type: "address" }, { name: "pool", type: "address" }, { name: "shape", type: "uint8" },
+      { name: "openedAt", type: "uint64" }, { name: "closedAt", type: "uint64" }, { name: "openBins", type: "uint32" },
       { name: "deposited0", type: "uint256" }, { name: "deposited1", type: "uint256" },
+      { name: "withdrawn0", type: "uint256" }, { name: "withdrawn1", type: "uint256" },
       { name: "collected0", type: "uint256" }, { name: "collected1", type: "uint256" },
-      { name: "tokenIds", type: "uint256[]" }, { name: "closed", type: "bool" },
+      { name: "bins", type: "tuple[]", components: [
+        { name: "tokenId", type: "uint256" }, { name: "tickLower", type: "int24" }, { name: "tickUpper", type: "int24" }, { name: "open", type: "bool" },
+      ] },
     ] }],
   },
+  parseAbiItem("event LadderOpened(uint256 indexed ladderId, address indexed owner, address indexed pool, uint8 shape, uint256 bins, uint256 deposited0, uint256 deposited1)"),
+  parseAbiItem("event LiquidityAdded(uint256 indexed ladderId, address indexed owner, uint256 added0, uint256 added1, uint256 newBins)"),
+  parseAbiItem("event FeesCollected(uint256 indexed ladderId, address indexed owner, uint256 toOwner0, uint256 toOwner1, uint256 toTreasury0, uint256 toTreasury1)"),
+  parseAbiItem("event BinsClosed(uint256 indexed ladderId, address indexed owner, uint256 count, uint256 principal0, uint256 principal1, uint256 remaining)"),
+  parseAbiItem("event LadderClosed(uint256 indexed ladderId, address indexed owner)"),
 ];
+const NPM_EVENTS = [
+  parseAbiItem("event IncreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)"),
+  parseAbiItem("event DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)"),
+  parseAbiItem("event Collect(uint256 indexed tokenId, address recipient, uint256 amount0, uint256 amount1)"),
+];
+const MANAGER_TOPICS = LADDER_ABI.filter((x) => x.type === "event").map((e) => toEventSelector(e));
+const NPM_TOPICS = new Map(NPM_EVENTS.map((e) => [toEventSelector(e), e.name]));
 const NPM_ABI = [
   {
     type: "function", name: "positions", stateMutability: "view", inputs: [{ type: "uint256" }],
@@ -225,6 +250,13 @@ async function tokenInfo(address) {
   return { address, symbol: address === WETH ? "ETH" : t?.symbol ?? address.slice(0, 8), name: t?.name ?? null, decimals: t?.decimals ?? 18, icon: t?.icon ?? null, usdPerToken: t?.usdPerToken ?? null };
 }
 
+/** The token a pool is "about": whichever side is not ETH or USDG. */
+async function baseOf(pool) {
+  const info = poolCache.get(lower(pool));
+  if (!info) return undefined;
+  return isMoney(info.token0) && !isMoney(info.token1) ? info.token1 : info.token0;
+}
+
 /** Every V3 pool for a token against ETH or USDG, deepest first. */
 export async function poolsForToken(token) {
   token = lower(token);
@@ -346,12 +378,8 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
   const deadline = Math.floor(Date.now() / 1000) + 900;
   const rungs = plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: r.amount0Min ?? 0n, amount1Min: r.amount1Min ?? 0n }));
   const data = rungs.length
-    ? encodeFunctionData({ abi: LADDER_ABI, functionName: "mintLadder", args: [getAddress(st.pool), rungs, st.tick - band, st.tick + band, BigInt(deadline)] })
+    ? encodeFunctionData({ abi: LADDER_ABI, functionName: "openLadder", args: [getAddress(st.pool), rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline)] })
     : null;
-  const wethIsToken0 = st.token0 === WETH;
-  const wethNeeded = st.token0 === WETH ? plan.total0 : st.token1 === WETH ? plan.total1 : 0n;
-  const other = st.token0 === WETH ? st.token1 : st.token0;
-  const otherNeeded = st.token0 === WETH ? plan.total1 : plan.total0;
   const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
   return {
     pool: st.pool, tick: st.tick, price: st.price, priceUsd: st.priceUsd,
@@ -363,82 +391,337 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
     baseTotal: (st.base.isToken0 ? plan.total0 : plan.total1).toString(),
     quoteTotal: (st.base.isToken0 ? plan.total1 : plan.total0).toString(),
     rungs: plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight, side: r.side ?? (r.amount0 > 0n && r.amount1 > 0n ? "both" : r.amount0 > 0n ? "token0" : "token1") })),
-    tx: data ? {
-      to: getAddress(LADDER_MANAGER), data,
-      // Pay the WETH side as native ETH; the other token needs an allowance.
-      value: wethNeeded.toString(),
-      approve: otherNeeded > 0n ? { token: getAddress(other), amount: otherNeeded.toString(), spender: getAddress(LADDER_MANAGER) } : null,
-      wethIsToken0, deadline,
-    } : null,
+    tx: data ? fundingFor(st, plan.total0, plan.total1, data, deadline) : null,
+  };
+}
+
+/** How a deposit is paid: the WETH side as native ETH, anything else by allowance. */
+function fundingFor(st, total0, total1, data, deadline) {
+  const wethIsToken0 = st.token0 === WETH;
+  const wethNeeded = st.token0 === WETH ? total0 : st.token1 === WETH ? total1 : 0n;
+  const other = st.token0 === WETH ? st.token1 : st.token0;
+  const otherNeeded = st.token0 === WETH ? total1 : total0;
+  return {
+    to: getAddress(LADDER_MANAGER), data,
+    value: wethNeeded.toString(),
+    approve: otherNeeded > 0n ? { token: getAddress(other), amount: otherNeeded.toString(), spender: getAddress(LADDER_MANAGER) } : null,
+    wethIsToken0, deadline,
+  };
+}
+
+/**
+ * Top up an open ladder. The bins are the ones already open — same ticks, so
+ * the contract deepens each position rather than minting new ones — and the
+ * shape is whatever the user picks for the amount being added.
+ */
+export async function planAdd({ id, shape = "spot", baseAmount = 0n, quoteAmount = 0n }) {
+  const l = await call(LADDER_MANAGER, LADDER_ABI, "ladder", [BigInt(id)]);
+  if (l.closedAt !== 0n) throw new Error("ladder is closed");
+  const st = await poolState(l.pool, await baseOf(l.pool));
+  const open = l.bins.filter((b) => b.open).map((b) => ({ tickLower: Number(b.tickLower), tickUpper: Number(b.tickUpper) })).sort((a, b) => a.tickLower - b.tickLower);
+  const budget0 = st.base.isToken0 ? baseAmount : quoteAmount;
+  const budget1 = st.base.isToken0 ? quoteAmount : baseAmount;
+  const rs = allocateRungs(open, st.tick, shape, budget0, budget1);
+  const total0 = rs.reduce((n, r) => n + r.amount0, 0n), total1 = rs.reduce((n, r) => n + r.amount1, 0n);
+  const deadline = Math.floor(Date.now() / 1000) + 900;
+  const rungs = rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: 0n, amount1Min: 0n }));
+  const data = rungs.length ? encodeFunctionData({ abi: LADDER_ABI, functionName: "addLiquidity", args: [BigInt(id), rungs, BigInt(deadline)] }) : null;
+  const sc = 10 ** (st.base.decimals - st.quote.decimals);
+  const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
+  return {
+    id: String(id), pool: st.pool, tick: st.tick, price: st.price, priceUsd: st.priceUsd, base: st.base, quote: st.quote, shape,
+    bins: open.length, filled: rs.length,
+    total0: total0.toString(), total1: total1.toString(),
+    baseTotal: (st.base.isToken0 ? total0 : total1).toString(), quoteTotal: (st.base.isToken0 ? total1 : total0).toString(),
+    rungs: rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight, side: r.side })),
+    tx: data ? fundingFor(st, total0, total1, data, deadline) : null,
   };
 }
 
 // ------------------------------------------------------------ positions
 
-/** Every ladder a wallet holds, valued live, with fees claimable right now. */
+/**
+ * A token's dollar price at a moment in the past, from our own candles. Used
+ * to value deposits when they went in and withdrawals when they came out, so
+ * PnL is what actually happened rather than everything marked at today's
+ * price. Minute candles for recent events, hourly for older ones.
+ */
+const usdAtCache = new Map();
+async function usdAt(token, ts) {
+  token = lower(token);
+  if (token === USDG) return 1;
+  const now = Math.floor(Date.now() / 1000);
+  const age = Math.max(0, now - ts);
+  if (age < 120) return token === WETH ? (await ethUsd().catch(() => null)) : (await tokenInfo(token)).usdPerToken;
+  const bucketSec = age > 2 * 86_400 ? 3600 : 60;
+  const key = `${token}:${Math.floor(ts / bucketSec)}`;
+  if (usdAtCache.has(key)) return usdAtCache.get(key);
+  const hours = Math.ceil(age / 3600) + 2;
+  // Only our own tape is consulted; when it does not reach back to `ts` the
+  // live price stands in rather than an eth_getLogs walk stalling the page.
+  const closeAt = async (base, quote) => {
+    const found = await bestPool(base === "eth" ? WETH : base, quote === "eth" ? WETH : quote);
+    const cov = found && STORE?.candleCoverage?.(found.pool);
+    if (!cov || cov.from > ts) return null;
+    const c = await tradeCandles({ base, quote, bucketSec, hours, store: STORE });
+    let last = null;
+    for (const x of c.candles) { if (x.time <= ts) last = x; else break; }
+    return last?.close ?? null;
+  };
+  let usd = null;
+  try {
+    if (token === WETH) usd = await closeAt("eth", USDG);
+    else if (await bestPool(token, WETH)) { const inEth = await closeAt(token, "eth"); const eth = await usdAt(WETH, ts); usd = inEth != null && eth != null ? inEth * eth : null; }
+    else if (await bestPool(token, USDG)) usd = await closeAt(token, USDG);
+  } catch { /* fall through to the live price */ }
+  if (usd == null) usd = token === WETH ? await ethUsd().catch(() => null) : (await tokenInfo(token)).usdPerToken;
+  usdAtCache.set(key, usd);
+  return usd;
+}
+
+// ---- the manager's event log for one owner, read incrementally
+
+const logCache = new Map(); // owner → { toBlock, logs }
+const receiptCache = new Map(); // hash → receipt
+const blockTsCache = new Map(); // blockNumber → unix seconds
+const pad32 = (a) => "0x" + a.slice(2).toLowerCase().padStart(64, "0");
+
+async function ownerLogs(owner) {
+  const cur = logCache.get(owner) ?? { toBlock: LADDER_DEPLOY_BLOCK - 1, logs: [] };
+  const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
+  let from = cur.toBlock + 1;
+  let span = 400_000;
+  while (from <= head) {
+    const to = Math.min(head, from + span - 1);
+    try {
+      const part = await rpcFetch("eth_getLogs", [{ address: LADDER_MANAGER, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [MANAGER_TOPICS, null, pad32(owner)] }]);
+      cur.logs.push(...part);
+      from = to + 1;
+    } catch (e) {
+      if (span <= 5_000) throw e;
+      span = Math.floor(span / 4);
+    }
+  }
+  cur.toBlock = head;
+  logCache.set(owner, cur);
+  return cur.logs;
+}
+
+async function receiptOf(hash) {
+  if (receiptCache.has(hash)) return receiptCache.get(hash);
+  const r = await rpcFetch("eth_getTransactionReceipt", [hash]);
+  if (r) receiptCache.set(hash, r);
+  return r;
+}
+async function blockTs(bn) {
+  const n = Number(bn);
+  if (blockTsCache.has(n)) return blockTsCache.get(n);
+  const b = await rpcFetch("eth_getBlockByNumber", ["0x" + n.toString(16), false]);
+  const ts = parseInt(b.timestamp, 16);
+  blockTsCache.set(n, ts);
+  return ts;
+}
+
+/**
+ * Everything that ever happened to an owner's ladders, priced at the time it
+ * happened: what went in (per bin, from the position manager's own events),
+ * what came out, fees claimed, gas paid. This is the ground truth the PnL
+ * calendar and every position card are built from.
+ */
+async function historyOf(owner) {
+  const logs = await ownerLogs(owner);
+  const byLadder = new Map();
+  const txs = new Map(); // hash → { ts, gasEth, events: [], npm: Map(tokenId → flows) }
+  for (const lg of logs) {
+    let ev;
+    try { ev = decodeEventLog({ abi: LADDER_ABI, data: lg.data, topics: lg.topics }); } catch { continue; }
+    const id = ev.args.ladderId.toString();
+    const tx = txs.get(lg.transactionHash) ?? { hash: lg.transactionHash, block: Number(BigInt(lg.blockNumber)), ts: 0, gasEth: 0, events: [] };
+    tx.events.push({ name: ev.eventName, args: ev.args, ladderId: id });
+    txs.set(lg.transactionHash, tx);
+    if (!byLadder.has(id)) byLadder.set(id, new Set());
+    byLadder.get(id).add(lg.transactionHash);
+  }
+  await Promise.all([...txs.values()].map(async (tx) => {
+    const [r, ts] = await Promise.all([receiptOf(tx.hash), blockTs(tx.block)]);
+    tx.ts = ts;
+    tx.gasEth = r ? Number(BigInt(r.gasUsed) * BigInt(r.effectiveGasPrice ?? "0x0")) / 1e18 : 0;
+    tx.npm = new Map();
+    for (const lg of r?.logs ?? []) {
+      if (lower(lg.address) !== NPM) continue;
+      const name = NPM_TOPICS.get(lg.topics[0]);
+      if (!name) continue;
+      try {
+        const ev = decodeEventLog({ abi: NPM_EVENTS, data: lg.data, topics: lg.topics });
+        const tid = ev.args.tokenId.toString();
+        const f = tx.npm.get(tid) ?? { inc0: 0n, inc1: 0n, dec0: 0n, dec1: 0n, col0: 0n, col1: 0n };
+        if (name === "IncreaseLiquidity") { f.inc0 += ev.args.amount0; f.inc1 += ev.args.amount1; }
+        else if (name === "DecreaseLiquidity") { f.dec0 += ev.args.amount0; f.dec1 += ev.args.amount1; }
+        else { f.col0 += ev.args.amount0; f.col1 += ev.args.amount1; }
+        tx.npm.set(tid, f);
+      } catch { /* not ours */ }
+    }
+  }));
+  return { byLadder, txs };
+}
+
+/**
+ * Every ladder a wallet holds or held: live value, claimable fees, what went
+ * in and came out at the prices of the day, gas, and the realised PnL that
+ * each close landed on its day — the same accounting a broker statement uses.
+ */
 export async function positionsOf(store, owner) {
   owner = getAddress(owner);
+  return cached(`portfolio:${owner}`, 8_000, () => buildPortfolio(owner));
+}
+
+async function buildPortfolio(owner) {
   const ids = await call(LADDER_MANAGER, LADDER_ABI, "laddersOf", [owner]);
-  if (!ids.length) return { owner, ladders: [], totals: { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0 } };
-  const ladders = await batchCall(ids.map((id) => ({ to: LADDER_MANAGER, abi: LADDER_ABI, fn: "ladder", args: [id] })));
   const usd = await ethUsd().catch(() => null);
+  const empty = { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: [], days: {}, totals: { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, open: 0, closed: 0 } };
+  if (!ids.length) return empty;
+  const [ladders, hist] = await Promise.all([
+    batchCall(ids.map((id) => ({ to: LADDER_MANAGER, abi: LADDER_ABI, fn: "ladder", args: [id] }))),
+    historyOf(owner).catch(() => ({ byLadder: new Map(), txs: new Map() })),
+  ]);
   const out = [];
+  const days = {};
+  const land = async (ts, pnlUsd, gasUsd, kind) => {
+    const d = new Date(ts * 1000).toISOString().slice(0, 10);
+    const eth = await usdAt(WETH, ts);
+    const row = days[d] ?? (days[d] = { pnlUsd: 0, pnlEth: 0, gasUsd: 0, closes: 0, collects: 0 });
+    row.pnlUsd += pnlUsd;
+    row.pnlEth += eth ? pnlUsd / eth : 0;
+    row.gasUsd += gasUsd;
+    if (kind === "close") row.closes++; else row.collects++;
+  };
+
   for (let i = 0; i < ids.length; i++) {
     const l = ladders[i];
     if (!l) continue;
-    const st = await poolState(l.pool).catch(() => null);
+    const id = ids[i].toString();
+    const st = await poolState(l.pool, await baseOf(l.pool)).catch(() => null);
     if (!st) continue;
-    const posRaw = await batchCall(l.tokenIds.map((tid) => ({ to: NPM, abi: NPM_ABI, fn: "positions", args: [tid] })));
-    const sqrtP = tickToSqrtPriceX96(st.tick);
-    let held0 = 0n, held1 = 0n;
-    const rungs = [];
-    posRaw.forEach((p, k) => {
-      if (!p) return;
-      const [, , , , , tl, tu, liq] = p;
-      const a = amountsForLiquidity(sqrtP, tickToSqrtPriceX96(Number(tl)), tickToSqrtPriceX96(Number(tu)), BigInt(liq));
-      held0 += a.amount0; held1 += a.amount1;
-      rungs.push({ tokenId: l.tokenIds[k].toString(), tickLower: Number(tl), tickUpper: Number(tu), liquidity: liq.toString(), amount0: a.amount0.toString(), amount1: a.amount1.toString(), inRange: st.tick >= Number(tl) && st.tick < Number(tu) });
-    });
-    // What collect() would pay the owner right now, net of the 1%.
-    let fee0 = 0n, fee1 = 0n;
-    if (!l.closed) {
-      try { const [f0, f1] = await call(LADDER_MANAGER, LADDER_ABI, "collect", [ids[i]], owner); fee0 = BigInt(f0); fee1 = BigInt(f1); } catch { /* nothing accrued or simulation refused */ }
-    }
     const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals);
     const d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
     const p0 = st.base.isToken0 ? st.priceUsd : st.quote.usdPerToken;
     const p1 = st.base.isToken0 ? st.quote.usdPerToken : st.priceUsd;
-    const val = (a0, a1) => (Number(a0) / d0) * (p0 ?? 0) + (Number(a1) / d1) * (p1 ?? 0);
-    // Cost basis: what went in, at the price when it went in (from our candles).
-    const mintedAt = Number(l.mintedAt);
-    let entryPriceUsd = st.priceUsd;
-    try {
-      const c = await tradeCandles({ base: st.base.address === WETH ? "eth" : st.base.address, quote: st.quote.address === WETH ? "eth" : st.quote.address, bucketSec: 60, hours: Math.max(1, Math.ceil((Date.now() / 1000 - mintedAt) / 3600) + 1), store });
-      const at = c.candles.find((x) => x.time >= mintedAt) ?? c.candles.at(-1);
-      if (at && st.quote.usdPerToken) entryPriceUsd = at.close * st.quote.usdPerToken;
-    } catch { /* fall back to the current price */ }
-    const pBase0 = st.base.isToken0 ? entryPriceUsd : st.quote.usdPerToken;
-    const pBase1 = st.base.isToken0 ? st.quote.usdPerToken : entryPriceUsd;
-    const depositedUsd = (Number(l.deposited0) / d0) * (pBase0 ?? 0) + (Number(l.deposited1) / d1) * (pBase1 ?? 0);
-    const valueUsd = l.closed ? 0 : val(held0, held1);
-    const unclaimedUsd = val(fee0, fee1);
-    const claimedUsd = val(l.collected0, l.collected1);
+    const valNow = (a0, a1) => (Number(a0) / d0) * (p0 ?? 0) + (Number(a1) / d1) * (p1 ?? 0);
+    const valAt = async (a0, a1, ts) => {
+      const [u0, u1] = await Promise.all([usdAt(st.token0, ts), usdAt(st.token1, ts)]);
+      return (Number(a0) / d0) * (u0 ?? p0 ?? 0) + (Number(a1) / d1) * (u1 ?? p1 ?? 0);
+    };
+    const sc = 10 ** (st.base.decimals - st.quote.decimals);
+    const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
+
+    // Live holdings per bin.
+    const openBins = l.bins.map((b, k) => ({ ...b, index: k })).filter((b) => b.open);
+    const posRaw = await batchCall(openBins.map((b) => ({ to: NPM, abi: NPM_ABI, fn: "positions", args: [b.tokenId] })));
+    const sqrtP = tickToSqrtPriceX96(st.tick);
+    let held0 = 0n, held1 = 0n;
+    const liveByIndex = new Map();
+    posRaw.forEach((p, k) => {
+      if (!p) return;
+      const a = amountsForLiquidity(sqrtP, tickToSqrtPriceX96(Number(p[5])), tickToSqrtPriceX96(Number(p[6])), BigInt(p[7]));
+      held0 += a.amount0; held1 += a.amount1;
+      liveByIndex.set(openBins[k].index, { liquidity: p[7].toString(), amount0: a.amount0, amount1: a.amount1 });
+    });
+    const bins = l.bins.map((b, k) => {
+      const live = liveByIndex.get(k);
+      const tl = Number(b.tickLower), tu = Number(b.tickUpper);
+      return {
+        index: k, tokenId: b.tokenId.toString(), tickLower: tl, tickUpper: tu, open: b.open,
+        priceLower: Math.min(toPrice(tl), toPrice(tu)), priceUpper: Math.max(toPrice(tl), toPrice(tu)),
+        liquidity: live?.liquidity ?? "0", amount0: (live?.amount0 ?? 0n).toString(), amount1: (live?.amount1 ?? 0n).toString(),
+        usd: live ? valNow(live.amount0, live.amount1) : 0,
+        inRange: b.open && st.tick >= tl && st.tick < tu,
+        side: st.tick >= tu ? "token1" : st.tick < tl ? "token0" : "both",
+      };
+    });
+
+    // What collect() would pay right now, net of the 1%.
+    let fee0 = 0n, fee1 = 0n;
+    if (l.closedAt === 0n) {
+      try { const [f0, f1] = await call(LADDER_MANAGER, LADDER_ABI, "collect", [ids[i]], owner); fee0 = BigInt(f0); fee1 = BigInt(f1); } catch { /* nothing accrued */ }
+    }
+
+    // History: cost basis per bin at deposit-time prices, realised PnL per close, gas.
+    const cost = new Map(); // tokenId → usd put in
+    let depositedUsd = 0, gasOpenUsd = 0, gasOpenEth = 0, gasAllEth = 0, gasAllUsd = 0, realizedUsd = 0, returnedUsd = 0, claimedUsd = 0;
+    const events = [];
+    const hashes = [...(hist.byLadder.get(id) ?? [])].map((h) => hist.txs.get(h)).filter(Boolean).sort((a, b) => a.ts - b.ts);
+    for (const tx of hashes) {
+      const mine = tx.events.filter((e) => e.ladderId === id);
+      const ethAt = await usdAt(WETH, tx.ts);
+      const gasUsd = tx.gasEth * (ethAt ?? usd ?? 0);
+      gasAllEth += tx.gasEth; gasAllUsd += gasUsd;
+      const opened = mine.find((e) => e.name === "LadderOpened"), added = mine.find((e) => e.name === "LiquidityAdded");
+      const closed = mine.find((e) => e.name === "BinsClosed"), fees = mine.find((e) => e.name === "FeesCollected");
+      const myTokenIds = new Set(l.bins.map((b) => b.tokenId.toString()));
+      if (opened || added) {
+        let in0 = 0n, in1 = 0n;
+        for (const [tid, f] of tx.npm) { if (myTokenIds.has(tid) && (f.inc0 || f.inc1)) { const u = await valAt(f.inc0, f.inc1, tx.ts); cost.set(tid, (cost.get(tid) ?? 0) + u); in0 += f.inc0; in1 += f.inc1; } }
+        const inUsd = await valAt(in0, in1, tx.ts);
+        depositedUsd += inUsd; gasOpenUsd += gasUsd; gasOpenEth += tx.gasEth;
+        events.push({ type: opened ? "open" : "add", ts: tx.ts, tx: tx.hash, amount0: in0.toString(), amount1: in1.toString(), usd: inUsd, gasEth: tx.gasEth, gasUsd });
+      }
+      if (closed) {
+        const f0 = fees ? fees.args.toOwner0 : 0n, f1 = fees ? fees.args.toOwner1 : 0n;
+        const outUsd = await valAt(closed.args.principal0 + f0, closed.args.principal1 + f1, tx.ts);
+        let closedCost = 0;
+        for (const [tid, f] of tx.npm) { if (myTokenIds.has(tid) && (f.dec0 || f.dec1 || (!f.inc0 && !f.inc1 && (f.col0 || f.col1)))) { closedCost += cost.get(tid) ?? 0; cost.delete(tid); } }
+        const pnl = outUsd - closedCost;
+        realizedUsd += pnl; returnedUsd += outUsd;
+        if (fees) claimedUsd += await valAt(f0, f1, tx.ts);
+        await land(tx.ts, pnl, gasUsd, "close");
+        events.push({ type: "close", ts: tx.ts, tx: tx.hash, bins: Number(closed.args.count), remaining: Number(closed.args.remaining), amount0: (closed.args.principal0 + f0).toString(), amount1: (closed.args.principal1 + f1).toString(), usd: outUsd, costUsd: closedCost, pnlUsd: pnl, gasEth: tx.gasEth, gasUsd });
+      } else if (fees) {
+        const feeUsd = await valAt(fees.args.toOwner0, fees.args.toOwner1, tx.ts);
+        const pnl = feeUsd;
+        realizedUsd += pnl; claimedUsd += feeUsd;
+        await land(tx.ts, pnl, gasUsd, "collect");
+        events.push({ type: "collect", ts: tx.ts, tx: tx.hash, amount0: fees.args.toOwner0.toString(), amount1: fees.args.toOwner1.toString(), usd: feeUsd, pnlUsd: pnl, gasEth: tx.gasEth, gasUsd });
+      }
+    }
+    // Ladders whose history has not been indexed yet still get a price-now estimate.
+    const openCostUsd = [...cost.values()].reduce((n, v) => n + v, 0) || (l.closedAt === 0n ? valNow(l.deposited0 - l.withdrawn0, l.deposited1 - l.withdrawn1) : 0);
+    if (!hashes.length) depositedUsd = valNow(l.deposited0, l.deposited1);
+
+    const isOpen = l.closedAt === 0n;
+    const valueUsd = isOpen ? valNow(held0, held1) : 0;
+    const unclaimedUsd = valNow(fee0, fee1);
+    const unrealizedUsd = isOpen ? valueUsd + unclaimedUsd - openCostUsd : 0;
+    const pnlUsd = unrealizedUsd + realizedUsd; // before gas; `netUsd` is after
+    const openedAt = Number(l.openedAt), closedAt = Number(l.closedAt);
     out.push({
-      id: ids[i].toString(), pool: l.pool, closed: l.closed, mintedAt,
-      base: st.base, quote: st.quote, price: st.price, priceUsd: st.priceUsd, tick: st.tick,
+      id, pool: l.pool, fee: st.fee, closed: !isOpen, openedAt, closedAt: closedAt || null,
+      shape: SHAPES[Number(l.shape)] ?? "bidask", binCount: l.bins.length, openBins: Number(l.openBins),
+      base: st.base, quote: st.quote, token0: st.token0, token1: st.token1, price: st.price, priceUsd: st.priceUsd, tick: st.tick,
       deposited0: l.deposited0.toString(), deposited1: l.deposited1.toString(), depositedUsd,
+      withdrawn0: l.withdrawn0.toString(), withdrawn1: l.withdrawn1.toString(),
       held0: held0.toString(), held1: held1.toString(), valueUsd,
       unclaimed0: fee0.toString(), unclaimed1: fee1.toString(), unclaimedUsd,
       collected0: l.collected0.toString(), collected1: l.collected1.toString(), claimedUsd,
-      pnlUsd: valueUsd + unclaimedUsd + claimedUsd - depositedUsd,
-      rungs,
-      minTick: rungs.length ? Math.min(...rungs.map((r) => r.tickLower)) : null,
-      maxTick: rungs.length ? Math.max(...rungs.map((r) => r.tickUpper)) : null,
+      costUsd: openCostUsd, gasEth: gasAllEth, gasUsd: gasAllUsd,
+      returnedUsd: isOpen ? valueUsd + unclaimedUsd : returnedUsd,
+      unrealizedUsd, realizedUsd, pnlUsd, netUsd: pnlUsd - gasAllUsd,
+      pnlPct: depositedUsd > 0 ? pnlUsd / depositedUsd : null,
+      inRange: bins.some((b) => b.inRange),
+      minTick: Math.min(...l.bins.map((b) => Number(b.tickLower))), maxTick: Math.max(...l.bins.map((b) => Number(b.tickUpper))),
+      minPrice: Math.min(...bins.map((b) => b.priceLower)), maxPrice: Math.max(...bins.map((b) => b.priceUpper)),
+      bins, events,
     });
   }
-  const totals = out.reduce((t, l) => ({ valueUsd: t.valueUsd + l.valueUsd, unclaimedUsd: t.unclaimedUsd + l.unclaimedUsd, claimedUsd: t.claimedUsd + l.claimedUsd, depositedUsd: t.depositedUsd + (l.closed ? 0 : l.depositedUsd) }), { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0 });
-  return { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: out.sort((a, b) => b.mintedAt - a.mintedAt), totals };
+  const totals = out.reduce((t, l) => ({
+    valueUsd: t.valueUsd + l.valueUsd, unclaimedUsd: t.unclaimedUsd + l.unclaimedUsd, claimedUsd: t.claimedUsd + l.claimedUsd,
+    depositedUsd: t.depositedUsd + (l.closed ? 0 : l.depositedUsd), pnlUsd: t.pnlUsd + l.pnlUsd, gasUsd: t.gasUsd + l.gasUsd,
+    open: t.open + (l.closed ? 0 : 1), closed: t.closed + (l.closed ? 1 : 0),
+  }), { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, gasUsd: 0, open: 0, closed: 0 });
+  return { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: out.sort((a, b) => b.openedAt - a.openedAt), days, totals };
 }
 
-export const collectCalldata = (id) => ({ to: getAddress(LADDER_MANAGER), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "collect", args: [BigInt(id)] }) });
-export const closeCalldata = (id) => ({ to: getAddress(LADDER_MANAGER), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "close", args: [BigInt(id)] }) });
+const mgr = () => getAddress(LADDER_MANAGER);
+export const collectCalldata = (id) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "collect", args: [BigInt(id)] }) });
+export const closeCalldata = (id) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "close", args: [BigInt(id)] }) });
+export const closeBinsCalldata = (id, indices) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "closeBins", args: [BigInt(id), indices.map((i) => BigInt(i))] }) });
+export const closeManyCalldata = (ids) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "closeMany", args: [ids.map((i) => BigInt(i))] }) });

@@ -314,6 +314,31 @@ export function splitLadder(input: {
     const side: SplitRung["side"] = tick >= b ? "token1" : tick < a ? "token0" : "both";
     rungs.push({ index: rungs.length, tickLower: a, tickUpper: b, side, weight: 0, amount0: 0n, amount1: 0n });
   }
+  return allocateRungs(rungs, tick, shape, input.budget0, input.budget1);
+}
+
+/**
+ * Spread two budgets over already-cut bins by shape. This is the half of
+ * `splitLadder` that topping up an existing ladder reuses: the bins are
+ * whatever is already open, the shape is whatever the user picks for what
+ * they are adding.
+ */
+export function allocateRungs(
+  bounds: { tickLower: number; tickUpper: number }[],
+  tick: number,
+  shape: Shape,
+  budget0: bigint,
+  budget1: bigint,
+): SplitRung[] {
+  const rungs: SplitRung[] = bounds.map((b, i) => ({
+    index: i,
+    tickLower: b.tickLower,
+    tickUpper: b.tickUpper,
+    side: tick >= b.tickUpper ? "token1" : tick < b.tickLower ? "token0" : "both",
+    weight: 0,
+    amount0: 0n,
+    amount1: 0n,
+  }));
   if (!rungs.length) return [];
 
   const mid = (rungs.length - 1) / 2;
@@ -336,8 +361,8 @@ export function splitLadder(input: {
       given += amt;
     });
   };
-  share(rungs.filter((r) => r.side !== "token1"), input.budget0, "amount0");
-  share(rungs.filter((r) => r.side !== "token0"), input.budget1, "amount1");
+  share(rungs.filter((r) => r.side !== "token1"), budget0, "amount0");
+  share(rungs.filter((r) => r.side !== "token0"), budget1, "amount1");
 
   // A bin that straddles the price needs both tokens; with only one on offer
   // it would mint lopsided, so it is left out rather than minted wrong.

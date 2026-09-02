@@ -743,7 +743,7 @@ const poolAddrCache = new Map(); // "base:quote" -> { at, pool, base0 }
 const candleCache = new Map(); // pool -> { at, data }
 
 /** The deepest direct V3 pool for a pair, by current in-range liquidity. */
-async function bestPool(base, quote) {
+export async function bestPool(base, quote) {
   const key = `${base}:${quote}`;
   const hit = poolAddrCache.get(key);
   if (hit && Date.now() - hit.at < 600_000) return hit;
@@ -809,6 +809,36 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
   const now = Math.floor(Date.now() / 1000);
   const rangeSec = hours ? hours * 3600 : spanBlocks * 0.1;
   const fromBucket = Math.floor((now - rangeSec) / bucketSec) * bucketSec;
+  const scale = 10 ** (infoBase.decimals - infoQuote.decimals);
+  const orient = (p) => (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
+
+  // Below a minute there are no stored candles; the rolling trades tape is
+  // folded on the fly. It only reaches back a couple of hours, which is all
+  // a 5s or 30s chart can sensibly show anyway.
+  if (bucketSec < 60) {
+    const rows = store?.tradesSince?.(found.pool, fromBucket) ?? [];
+    const buckets = new Map();
+    for (const r of rows) {
+      const sqrt = Number(BigInt(r.sqrtPrice));
+      const price = orient((sqrt / 2 ** 96) ** 2);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      const t = Math.floor(r.ts / bucketSec) * bucketSec;
+      const c = buckets.get(t) ?? { time: t, open: price, high: price, low: price, close: price, swaps: 0, vol: 0 };
+      c.high = Math.max(c.high, price); c.low = Math.min(c.low, price); c.close = price; c.swaps++;
+      const qAmt = BigInt(found.base0 ? r.amount1 : r.amount0);
+      c.vol += Math.abs(toWhole(qAmt < 0n ? -qAmt : qAmt, infoQuote.decimals));
+      buckets.set(t, c);
+    }
+    const candles = [...buckets.values()].sort((a, c) => a.time - c.time);
+    return {
+      pool: found.pool, fee: found.fee,
+      base: { address: b, symbol: infoBase.symbol }, quote: { address: q, symbol: infoQuote.symbol },
+      bucketSec, spanBlocks, source: "tape", truncated: false, coverage: null, backfill: null,
+      swaps: rows.length, volumeQuote: candles.reduce((n, c) => n + c.vol, 0),
+      last: candles.length ? candles[candles.length - 1].close : null, candles,
+    };
+  }
+
   // Minute candles are what the tape stores; anything coarser is rolled up
   // in SQL so a month of hourly candles is a few hundred rows, not 40k.
   const recorded =
@@ -821,8 +851,6 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
   // yesterday. The checkpoint is the lowest block already walked.
   const bfBlock = Number(store?.getMeta?.(`backfill:${found.pool}`) ?? NaN);
   const backfill = Number.isFinite(bfBlock) ? { reachedBlock: bfBlock, done: bfBlock <= 0 } : null;
-  const scale = 10 ** (infoBase.decimals - infoQuote.decimals);
-  const orient = (p) => (found.base0 ? p : p === 0 ? 0 : 1 / p) * scale;
   // Inverting swaps the extremes: yesterday's high is today's low.
   const recCandles = recorded.map((c) => ({
     time: c.bucket,

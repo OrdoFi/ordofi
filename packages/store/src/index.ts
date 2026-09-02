@@ -715,6 +715,18 @@ export class OrdoStore {
     }));
   }
 
+  /** The tape from `sinceTs` on, oldest first — what sub-minute candles are built from. */
+  tradesSince(pool: string, sinceTs: number): { block: number; amount0: string; amount1: string; sqrtPrice: string; ts: number }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT block, log_index, amount0, amount1, sqrt_price, ts FROM trades
+           WHERE pool = ? AND ts >= ? ORDER BY block ASC, log_index ASC`,
+        )
+        .all(pool.toLowerCase(), sinceTs) as any[]
+    ).map((r) => ({ block: Number(r.block), amount0: r.amount0, amount1: r.amount1, sqrtPrice: r.sqrt_price, ts: Number(r.ts) }));
+  }
+
   pruneTrades(olderThanTs: number): number {
     const r = this.db.prepare(`DELETE FROM trades WHERE ts < ?`).run(olderThanTs);
     return Number(r.changes ?? 0);

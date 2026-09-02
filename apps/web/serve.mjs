@@ -9,7 +9,7 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
-import { poolsList, poolState, poolsForToken, poolDepth, planPosition, positionsOf, collectCalldata, closeCalldata, setPoolsStore, LADDER_MANAGER } from "./pools.mjs";
+import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, LADDER_MANAGER } from "./pools.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
 function sendJson(req, res, status, body, headers = {}) {
@@ -574,12 +574,12 @@ async function handle(req, res) {
       const data = await tradeCandles({
         base: (url.searchParams.get("base") ?? "").toLowerCase(),
         quote: (url.searchParams.get("quote") ?? "").toLowerCase(),
-        bucketSec: Math.max(60, Math.min(86_400, Number(url.searchParams.get("bucketSec") ?? 60))),
+        bucketSec: [5, 30].includes(Number(url.searchParams.get("bucketSec"))) ? Number(url.searchParams.get("bucketSec")) : Math.max(60, Math.min(86_400, Number(url.searchParams.get("bucketSec") ?? 60))),
         spanBlocks: Math.max(6000, Math.min(200_000, Number(url.searchParams.get("spanBlocks") ?? 72_000))),
         hours: url.searchParams.has("hours") ? Math.max(1, Math.min(24 * 400, Number(url.searchParams.get("hours")))) : null,
         store,
       });
-      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=30" });
+      res.writeHead(200, { "content-type": "application/json", "cache-control": data.bucketSec < 60 ? "public, max-age=3" : "public, max-age=30" });
       res.end(JSON.stringify(data));
     } catch (e) {
       res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
@@ -682,9 +682,15 @@ async function handle(req, res) {
         baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
         slippageBps: Math.max(0, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
       });
+      else if (path === "/api/pools/plan-add") body = await planAdd({
+        id: big("id"), shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "spot",
+        baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
+      });
       else if (path === "/api/pools/positions") body = await positionsOf(store, addr("owner"));
-      else if (path === "/api/pools/collect") body = collectCalldata(q.get("id"));
-      else if (path === "/api/pools/close") body = closeCalldata(q.get("id"));
+      else if (path === "/api/pools/collect") body = collectCalldata(big("id"));
+      else if (path === "/api/pools/close") body = closeCalldata(big("id"));
+      else if (path === "/api/pools/close-bins") body = closeBinsCalldata(big("id"), (q.get("indices") ?? "").split(",").filter((x) => /^\d+$/.test(x)));
+      else if (path === "/api/pools/close-many") body = closeManyCalldata((q.get("ids") ?? "").split(",").filter((x) => /^\d+$/.test(x)));
       else throw new Error("unknown pools endpoint");
       sendJson(req, res, 200, body, { "cache-control": path === "/api/pools" ? "public, max-age=15" : "no-store" });
     } catch (e) {
@@ -770,6 +776,8 @@ async function handle(req, res) {
   if (path === "/desk") path = "/desk.html";
   if (path === "/stealth") path = "/stealth.html";
   if ((path === "/pools" || path.startsWith("/pools/")) && process.env.ORDO_POOLS_ENABLED === "1") path = "/pools.html";
+  if (path === "/positions" && process.env.ORDO_POOLS_ENABLED === "1") path = "/positions.html";
+  if (path === "/positions.html" && process.env.ORDO_POOLS_ENABLED !== "1") { res.writeHead(404).end("not found"); return; }
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";

@@ -60,23 +60,43 @@ contract OrdoLadderManagerForkTest is Test {
         r[2] = OrdoLadderManager.Rung({tickLower: tick + 30, tickUpper: tick + 60, amount0: 1 ether, amount1: 0, amount0Min: 0, amount1Min: 0});
     }
 
-    function _mint() internal returns (uint256 id, int24 tick) {
+    function _open() internal returns (uint256 id, int24 tick) {
         tick = _tick();
         vm.startPrank(alice);
         IERC20(USDG).approve(address(mgr), type(uint256).max);
-        id = mgr.mintLadder{value: 2 ether}(POOL, _rungs(tick), tick - 1000, tick + 1000, block.timestamp + 60);
+        id = mgr.openLadder{value: 2 ether}(POOL, _rungs(tick), 2, tick - 1000, tick + 1000, block.timestamp + 60);
         vm.stopPrank();
     }
 
-    function test_mintLadder_mintsEveryRungAndRefundsTheRest() public onFork {
+    function _churn() internal {
+        // A whale trades back and forth through the range so the bins earn fees.
+        vm.startPrank(whale);
+        IWETH(WETH).deposit{value: 400 ether}();
+        IERC20(WETH).approve(ROUTER, type(uint256).max);
+        IERC20(USDG).approve(ROUTER, type(uint256).max);
+        ISwapRouter02(ROUTER).exactInputSingle(ISwapRouter02.ExactInputSingleParams(WETH, USDG, 100, whale, 400 ether, 0, 0));
+        ISwapRouter02(ROUTER).exactInputSingle(ISwapRouter02.ExactInputSingleParams(USDG, WETH, 100, whale, 900_000e6, 0, 0));
+        vm.stopPrank();
+    }
+
+    function _liq(uint256 tokenId) internal view returns (uint128 liq) {
+        (,,,,,,, liq,,,,) = INonfungiblePositionManager(NPM).positions(tokenId);
+    }
+
+    // ------------------------------------------------------------------ open
+
+    function test_open_mintsEveryBinAndRefundsTheRest() public onFork {
         uint256 ethBefore = alice.balance;
         uint256 usdgBefore = IERC20(USDG).balanceOf(alice);
-        (uint256 id,) = _mint();
+        (uint256 id,) = _open();
 
         OrdoLadderManager.Ladder memory l = mgr.ladder(id);
         assertEq(l.owner, alice);
         assertEq(l.pool, POOL);
-        assertEq(l.tokenIds.length, 3, "three positions");
+        assertEq(l.shape, 2, "shape stored");
+        assertEq(l.bins.length, 3, "three bins");
+        assertEq(l.openBins, 3);
+        assertEq(l.closedAt, 0);
         assertEq(mgr.laddersOf(alice).length, 1);
         assertGt(l.deposited0, 0, "some WETH went in");
         assertGt(l.deposited1, 0, "some USDG went in");
@@ -88,46 +108,36 @@ contract OrdoLadderManagerForkTest is Test {
         assertEq(IERC20(WETH).balanceOf(address(mgr)), 0);
         assertEq(IERC20(USDG).balanceOf(address(mgr)), 0);
 
-        // The NFTs are held here, for Alice, not by Alice.
         for (uint256 i = 0; i < 3; i++) {
-            (,,,,,,, uint128 liq,,,,) = INonfungiblePositionManager(NPM).positions(l.tokenIds[i]);
-            assertGt(liq, 0, "rung has liquidity");
+            assertTrue(l.bins[i].open);
+            assertGt(_liq(l.bins[i].tokenId), 0, "bin has liquidity");
         }
     }
 
-    function test_mintLadder_refusesIfPriceLeftTheBand() public onFork {
+    function test_open_refusesIfPriceLeftTheBand() public onFork {
         int24 tick = _tick();
         vm.startPrank(alice);
         IERC20(USDG).approve(address(mgr), type(uint256).max);
         vm.expectRevert(abi.encodeWithSelector(OrdoLadderManager.PriceOutOfBounds.selector, tick, tick + 100, tick + 200));
-        mgr.mintLadder{value: 2 ether}(POOL, _rungs(tick), tick + 100, tick + 200, block.timestamp + 60);
+        mgr.openLadder{value: 2 ether}(POOL, _rungs(tick), 2, tick + 100, tick + 200, block.timestamp + 60);
         vm.stopPrank();
     }
 
-    function test_mintLadder_refusesMisalignedOrOverlappingRungs() public onFork {
+    function test_open_refusesMisalignedOrOverlappingRungs() public onFork {
         int24 tick = _tick();
         OrdoLadderManager.Rung[] memory r = _rungs(tick);
         r[1].tickLower = tick - 40; // overlaps rung 0's upper (tick - 30)
         vm.startPrank(alice);
         IERC20(USDG).approve(address(mgr), type(uint256).max);
         vm.expectRevert(abi.encodeWithSelector(OrdoLadderManager.RungsOutOfOrder.selector, 1));
-        mgr.mintLadder{value: 2 ether}(POOL, r, tick - 1000, tick + 1000, block.timestamp + 60);
+        mgr.openLadder{value: 2 ether}(POOL, r, 2, tick - 1000, tick + 1000, block.timestamp + 60);
         vm.stopPrank();
     }
 
-    function _churn() internal {
-        // A whale trades back and forth through the range so the rungs earn fees.
-        vm.startPrank(whale);
-        IWETH(WETH).deposit{value: 400 ether}();
-        IERC20(WETH).approve(ROUTER, type(uint256).max);
-        IERC20(USDG).approve(ROUTER, type(uint256).max);
-        ISwapRouter02(ROUTER).exactInputSingle(ISwapRouter02.ExactInputSingleParams(WETH, USDG, 100, whale, 400 ether, 0, 0));
-        ISwapRouter02(ROUTER).exactInputSingle(ISwapRouter02.ExactInputSingleParams(USDG, WETH, 100, whale, 900_000e6, 0, 0));
-        vm.stopPrank();
-    }
+    // --------------------------------------------------------------- collect
 
     function test_collect_paysOwner99AndTreasury1() public onFork {
-        (uint256 id,) = _mint();
+        (uint256 id,) = _open();
         _churn();
 
         uint256 ethBefore = alice.balance;
@@ -153,14 +163,16 @@ contract OrdoLadderManagerForkTest is Test {
     }
 
     function test_collect_onlyOwner() public onFork {
-        (uint256 id,) = _mint();
+        (uint256 id,) = _open();
         vm.prank(whale);
         vm.expectRevert(OrdoLadderManager.NotOwner.selector);
         mgr.collect(id);
     }
 
+    // ----------------------------------------------------------------- close
+
     function test_close_returnsPrincipalWithoutFeeAndBurns() public onFork {
-        (uint256 id,) = _mint();
+        (uint256 id,) = _open();
         OrdoLadderManager.Ladder memory before = mgr.ladder(id);
         _churn();
 
@@ -172,29 +184,144 @@ contract OrdoLadderManagerForkTest is Test {
         vm.prank(alice);
         (uint256 p0, uint256 p1) = mgr.close(id);
 
-        // Principal came back in full (the price moved, so its composition
-        // differs, but its combined value is what was deposited plus fees).
         assertTrue(p0 > 0 || p1 > 0, "principal returned");
-        uint256 gotEth = alice.balance - ethBefore;
-        uint256 gotUsdg = IERC20(USDG).balanceOf(alice) - usdgBefore;
-        assertGe(gotEth, p0, "principal ETH plus net fees");
-        assertGe(gotUsdg, p1);
+        assertGe(alice.balance - ethBefore, p0, "principal ETH plus net fees");
+        assertGe(IERC20(USDG).balanceOf(alice) - usdgBefore, p1);
 
         // Treasury only ever got a cut of fees, never of principal.
-        uint256 treasuryEth = treasury.balance - tEth;
-        uint256 treasuryUsdg = IERC20(USDG).balanceOf(treasury) - tUsdg;
-        assertLt(treasuryEth, before.deposited0 / 100, "treasury cut is far below 1% of principal");
-        assertLt(treasuryUsdg, before.deposited1 / 100);
+        assertLt(treasury.balance - tEth, before.deposited0 / 100, "treasury cut is far below 1% of principal");
+        assertLt(IERC20(USDG).balanceOf(treasury) - tUsdg, before.deposited1 / 100);
 
         OrdoLadderManager.Ladder memory after_ = mgr.ladder(id);
-        assertTrue(after_.closed);
-        for (uint256 i = 0; i < after_.tokenIds.length; i++) {
+        assertGt(after_.closedAt, 0, "closed");
+        assertEq(after_.openBins, 0);
+        assertEq(after_.withdrawn0, p0);
+        assertEq(after_.withdrawn1, p1);
+        for (uint256 i = 0; i < after_.bins.length; i++) {
+            assertFalse(after_.bins[i].open);
             vm.expectRevert();
-            INonfungiblePositionManager(NPM).positions(after_.tokenIds[i]);
+            INonfungiblePositionManager(NPM).positions(after_.bins[i].tokenId);
         }
         vm.prank(alice);
         vm.expectRevert(OrdoLadderManager.AlreadyClosed.selector);
         mgr.collect(id);
         assertEq(address(mgr).balance, 0);
+    }
+
+    function test_closeBins_takesOnlyTheChosenBinsAndTheirFees() public onFork {
+        (uint256 id,) = _open();
+        _churn();
+        uint256 ethBefore = alice.balance;
+        uint256 usdgBefore = IERC20(USDG).balanceOf(alice);
+
+        // Take out the all-USDG bin below the price only.
+        uint256[] memory idx = new uint256[](1);
+        idx[0] = 0;
+        vm.prank(alice);
+        (uint256 p0, uint256 p1) = mgr.closeBins(id, idx);
+        assertTrue(p0 > 0 || p1 > 0, "that bin's principal came back");
+
+        OrdoLadderManager.Ladder memory l = mgr.ladder(id);
+        assertEq(l.openBins, 2, "two bins still open");
+        assertEq(l.closedAt, 0, "ladder still open");
+        assertFalse(l.bins[0].open);
+        assertTrue(l.bins[1].open);
+        assertTrue(l.bins[2].open);
+        assertGt(_liq(l.bins[1].tokenId), 0, "untouched bins keep their liquidity");
+        assertGt(_liq(l.bins[2].tokenId), 0);
+        vm.expectRevert();
+        INonfungiblePositionManager(NPM).positions(l.bins[0].tokenId);
+
+        // Fees came only from that bin: the other bins still have theirs to collect.
+        assertGe(alice.balance - ethBefore, p0);
+        assertGe(IERC20(USDG).balanceOf(alice) - usdgBefore, p1);
+        vm.prank(alice);
+        (uint256 o0, uint256 o1) = mgr.collect(id);
+        assertTrue(o0 > 0 || o1 > 0, "the bins left behind kept their fees");
+
+        // Closing the same bin twice, or a bin that is not there, is refused.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OrdoLadderManager.BinNotOpen.selector, 0));
+        mgr.closeBins(id, idx);
+        idx = new uint256[](2);
+        idx[0] = 1;
+        idx[1] = 1;
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OrdoLadderManager.DuplicateBin.selector, 1));
+        mgr.closeBins(id, idx);
+
+        // Taking the rest closes the ladder.
+        idx[1] = 2;
+        vm.prank(alice);
+        mgr.closeBins(id, idx);
+        l = mgr.ladder(id);
+        assertGt(l.closedAt, 0);
+        assertEq(l.openBins, 0);
+        assertEq(address(mgr).balance, 0);
+    }
+
+    function test_closeMany_closesEveryLadderOfTheCaller() public onFork {
+        (uint256 a,) = _open();
+        (uint256 b,) = _open();
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = a;
+        ids[1] = b;
+
+        vm.prank(whale);
+        vm.expectRevert(OrdoLadderManager.NotOwner.selector);
+        mgr.closeMany(ids);
+
+        vm.prank(alice);
+        mgr.closeMany(ids);
+        assertGt(mgr.ladder(a).closedAt, 0);
+        assertGt(mgr.ladder(b).closedAt, 0);
+        assertEq(address(mgr).balance, 0);
+    }
+
+    // ------------------------------------------------------------------- add
+
+    function test_addLiquidity_topsUpMatchingBinsAndAppendsNewOnes() public onFork {
+        (uint256 id, int24 tick) = _open();
+        OrdoLadderManager.Ladder memory before = mgr.ladder(id);
+        uint128 liq2Before = _liq(before.bins[2].tokenId);
+
+        // Same ticks as bin 2 (top-up) plus a brand-new bin further up.
+        OrdoLadderManager.Rung[] memory r = new OrdoLadderManager.Rung[](2);
+        r[0] = OrdoLadderManager.Rung({tickLower: tick + 30, tickUpper: tick + 60, amount0: 0.5 ether, amount1: 0, amount0Min: 0, amount1Min: 0});
+        r[1] = OrdoLadderManager.Rung({tickLower: tick + 70, tickUpper: tick + 100, amount0: 0.5 ether, amount1: 0, amount0Min: 0, amount1Min: 0});
+
+        uint256 ethBefore = alice.balance;
+        vm.prank(alice);
+        (uint256 added0, uint256 added1) = mgr.addLiquidity{value: 1 ether}(id, r, block.timestamp + 60);
+        assertGt(added0, 0);
+        assertEq(added1, 0);
+        assertEq(ethBefore - alice.balance, added0, "only what the pool took left Alice");
+
+        OrdoLadderManager.Ladder memory l = mgr.ladder(id);
+        assertEq(l.bins.length, 4, "one new bin");
+        assertEq(l.openBins, 4);
+        assertEq(l.bins[2].tokenId, before.bins[2].tokenId, "bin 2 is the same position");
+        assertGt(_liq(l.bins[2].tokenId), liq2Before, "bin 2 got deeper");
+        assertEq(l.bins[3].tickLower, tick + 70);
+        assertGt(_liq(l.bins[3].tokenId), 0);
+        assertEq(l.deposited0, before.deposited0 + added0, "deposit tally grows");
+        assertEq(address(mgr).balance, 0);
+    }
+
+    function test_addLiquidity_refusedOnClosedOrForeignLadder() public onFork {
+        (uint256 id, int24 tick) = _open();
+        OrdoLadderManager.Rung[] memory r = new OrdoLadderManager.Rung[](1);
+        r[0] = OrdoLadderManager.Rung({tickLower: tick + 30, tickUpper: tick + 60, amount0: 0.1 ether, amount1: 0, amount0Min: 0, amount1Min: 0});
+
+        vm.deal(whale, 10 ether);
+        vm.prank(whale);
+        vm.expectRevert(OrdoLadderManager.NotOwner.selector);
+        mgr.addLiquidity{value: 0.1 ether}(id, r, block.timestamp + 60);
+
+        vm.prank(alice);
+        mgr.close(id);
+        vm.prank(alice);
+        vm.expectRevert(OrdoLadderManager.AlreadyClosed.selector);
+        mgr.addLiquidity{value: 0.1 ether}(id, r, block.timestamp + 60);
     }
 }
