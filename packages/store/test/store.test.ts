@@ -313,3 +313,31 @@ test("a routing excursion cannot rescale the chart", () => {
   assert.equal(hourly[0].close, 2410);
   store.close();
 });
+
+test("routed flow: recorded at submit, counted only once confirmed and priced", () => {
+  const s = new OrdoStore(":memory:");
+  s.recordRouted({ txHash: "0xAA", sender: "0xS1", target: "0xR", valueWei: 10n, keyLabel: "anon", via: "protect" });
+  s.recordRouted({ txHash: "0xaa", sender: "0xS1", keyLabel: "anon", via: "protect" }); // duplicate, ignored
+  s.recordRouted({ txHash: "0xbb", keyLabel: "v4fun", via: "auction" });
+  s.recordRouted({ txHash: "0xcc", keyLabel: "anon", via: "protect" });
+
+  let t = s.routedTotals();
+  assert.equal(t.submitted, 3);
+  assert.equal(t.pending, 3);
+  assert.equal(t.volumeUsd, 0, "nothing counts until it is confirmed");
+
+  assert.deepEqual(s.unresolvedRouted().map((r) => r.txHash), ["0xaa", "0xbb", "0xcc"]);
+  s.resolveRouted("0xAA", { status: 1, block: 100, volumeUsd: 1234.5 });
+  s.resolveRouted("0xbb", { status: 0, block: 101, volumeUsd: 0 });
+  s.resolveRouted("0xcc", { status: -1 });
+
+  t = s.routedTotals();
+  assert.equal(t.confirmed, 1);
+  assert.equal(t.reverted, 1);
+  assert.equal(t.pending, 0);
+  assert.equal(t.volumeUsd, 1234.5);
+  assert.equal(t.volume24hUsd, 1234.5);
+  assert.equal(s.unresolvedRouted().length, 0);
+  assert.equal(s.recentRouted(2)[0].txHash, "0xcc");
+  s.close();
+});

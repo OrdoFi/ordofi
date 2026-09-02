@@ -8,6 +8,7 @@ import { OrdoStore } from "@ordofi/store";
 import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
+import { resolveRouted, routedSummary } from "./routed.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
 function sendJson(req, res, status, body, headers = {}) {
@@ -408,6 +409,7 @@ async function handle(req, res) {
 
   // Compact, embed-friendly stats for the marketing site.
   if (path === "/api/stats") {
+    const routed = routedSummary(store);
     const rep = loadReport();
     let onchain = { deployed: false };
     try {
@@ -425,6 +427,9 @@ async function handle(req, res) {
         swaps: rep?.totals?.swaps ?? 0,
         // null until the sample is long enough to extrapolate honestly.
         arbsPerDay: rep?.perDay?.arbs == null ? null : Math.round(rep.perDay.arbs),
+        routed: routed.available
+          ? { transactions: routed.transactions.confirmed, volumeUsd: routed.volumeUsd, volume24hUsd: routed.volume24hUsd, since: routed.since }
+          : null,
         settlement: onchain.deployed
           ? {
               deployed: true,
@@ -656,6 +661,11 @@ async function handle(req, res) {
     return;
   }
 
+  if (path === "/api/routed") {
+    sendJson(req, res, 200, routedSummary(store), { "cache-control": "public, max-age=5" });
+    return;
+  }
+
   if (path === "/api/stealth/feed") {
     try {
       const since = Math.max(0, Number(url.searchParams.get("since") ?? 0) || 0);
@@ -757,6 +767,10 @@ process.on("uncaughtException", (e) => console.error(`web | uncaught exception: 
 // Warm the trade caches at boot: pool composition for today's busiest pools
 // and the token list. Building them takes dozens of round-trips, and the first
 // page load should never be the one paying for that.
+// Receipts for transactions the gateway forwarded, priced for the public counter.
+setInterval(() => resolveRouted(store).catch((e) => console.warn(`web | routed: ${e.message}`)), 10_000).unref?.();
+resolveRouted(store).catch(() => {});
+
 warmTradeCaches(store)
   .then((list) => console.log(`web | trade: ${list.length} tokens listed; resolvers ${JSON.stringify(resolverStats())}`))
   .catch((e) => console.warn(`web | trade warm-up failed: ${e.message}`));

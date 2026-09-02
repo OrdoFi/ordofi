@@ -126,6 +126,26 @@ export class OrdoStore {
 
       CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 
+      -- Every transaction that entered the chain through rpc.ordofi.network.
+      -- The gateway writes the row the moment it forwards; the web resolves the
+      -- receipt afterwards and prices what the sender moved, so the public
+      -- counter is the sum of confirmed, valued transactions and nothing else.
+      CREATE TABLE IF NOT EXISTS routed (
+        tx_hash TEXT PRIMARY KEY,
+        submitted_at INTEGER NOT NULL,
+        sender TEXT,
+        target TEXT,
+        value_wei TEXT NOT NULL DEFAULT '0',
+        key_label TEXT NOT NULL,
+        via TEXT NOT NULL,
+        status INTEGER,
+        block INTEGER,
+        volume_usd REAL,
+        resolved_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS routed_unresolved ON routed (resolved_at, submitted_at);
+      CREATE INDEX IF NOT EXISTS routed_time ON routed (submitted_at DESC);
+
       -- Per-pool minute candles, recorded live by the watcher from the swap
       -- events it already decodes. Public RPCs cap eth_getLogs at 10k results,
       -- which the busiest pool here exceeds in half an hour; recording the
@@ -561,6 +581,65 @@ export class OrdoStore {
       low: Math.max(r.low, Math.min(r.open, r.close) / OrdoStore.MAX_WICK),
       vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
     }));
+  }
+
+  // ---------- routed flow ----------
+
+  recordRouted(row: { txHash: string; sender?: string | null; target?: string | null; valueWei?: bigint; keyLabel: string; via: string }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO routed (tx_hash, submitted_at, sender, target, value_wei, key_label, via)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(row.txHash.toLowerCase(), Date.now(), row.sender?.toLowerCase() ?? null, row.target?.toLowerCase() ?? null, (row.valueWei ?? 0n).toString(), row.keyLabel, row.via);
+  }
+
+  unresolvedRouted(limit = 50): { txHash: string; sender: string | null; valueWei: string; submittedAt: number }[] {
+    return (
+      this.db
+        .prepare(`SELECT tx_hash, sender, value_wei, submitted_at FROM routed WHERE resolved_at IS NULL ORDER BY submitted_at ASC, rowid ASC LIMIT ?`)
+        .all(limit) as any[]
+    ).map((r) => ({ txHash: r.tx_hash, sender: r.sender, valueWei: r.value_wei, submittedAt: Number(r.submitted_at) }));
+  }
+
+  /** status 1 confirmed, 0 reverted, -1 never landed. */
+  resolveRouted(txHash: string, r: { status: number; block?: number | null; volumeUsd?: number | null }): void {
+    this.db
+      .prepare(`UPDATE routed SET status = ?, block = ?, volume_usd = ?, resolved_at = ? WHERE tx_hash = ?`)
+      .run(r.status, r.block ?? null, r.volumeUsd ?? null, Date.now(), txHash.toLowerCase());
+  }
+
+  routedTotals(): {
+    submitted: number; confirmed: number; reverted: number; pending: number;
+    volumeUsd: number; volume24hUsd: number; confirmed24h: number; firstAt: number | null; lastAt: number | null;
+  } {
+    const cutoff = Date.now() - 86_400_000;
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) n,
+                SUM(status = 1) ok,
+                SUM(status = 0) bad,
+                SUM(resolved_at IS NULL) pending,
+                COALESCE(SUM(CASE WHEN status = 1 THEN volume_usd END), 0) vol,
+                COALESCE(SUM(CASE WHEN status = 1 AND submitted_at >= ? THEN volume_usd END), 0) vol24,
+                SUM(status = 1 AND submitted_at >= ?) ok24,
+                MIN(submitted_at) f, MAX(submitted_at) l
+         FROM routed`,
+      )
+      .get(cutoff, cutoff) as any;
+    return {
+      submitted: Number(r.n ?? 0), confirmed: Number(r.ok ?? 0), reverted: Number(r.bad ?? 0), pending: Number(r.pending ?? 0),
+      volumeUsd: Number(r.vol ?? 0), volume24hUsd: Number(r.vol24 ?? 0), confirmed24h: Number(r.ok24 ?? 0),
+      firstAt: r.f == null ? null : Number(r.f), lastAt: r.l == null ? null : Number(r.l),
+    };
+  }
+
+  recentRouted(limit = 25): { txHash: string; submittedAt: number; sender: string | null; keyLabel: string; via: string; status: number | null; volumeUsd: number | null }[] {
+    return (
+      this.db
+        .prepare(`SELECT tx_hash, submitted_at, sender, key_label, via, status, volume_usd FROM routed ORDER BY submitted_at DESC, rowid DESC LIMIT ?`)
+        .all(limit) as any[]
+    ).map((r) => ({ txHash: r.tx_hash, submittedAt: Number(r.submitted_at), sender: r.sender, keyLabel: r.key_label, via: r.via, status: r.status == null ? null : Number(r.status), volumeUsd: r.volume_usd }));
   }
 
   /** How far back the tape goes for one pool, or null if it has none. */

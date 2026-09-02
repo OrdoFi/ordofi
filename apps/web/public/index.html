@@ -106,6 +106,12 @@
       <div class="stat"><div class="num" id="s-pools">—</div><div class="lbl">Pools tracked</div></div>
       <div class="stat"><div class="num" id="s-swaps">—</div><div class="lbl">Swaps analyzed</div></div>
     </div>
+    <div class="stats routed" id="routed">
+      <div class="stat"><div class="num" id="r-vol">—</div><div class="lbl">Volume through rpc.ordofi.network</div></div>
+      <div class="stat"><div class="num" id="r-tx">—</div><div class="lbl">Transactions routed</div></div>
+      <div class="stat"><div class="num" id="r-24">—</div><div class="lbl">Last 24 hours</div></div>
+      <div class="stat"><div class="num" id="r-since" style="font-size:clamp(16px,1.6vw,20px);padding-top:8px">—</div><div class="lbl">Counting since</div></div>
+    </div>
   </div>
 
   <section class="section-alt">
@@ -316,6 +322,14 @@
   </footer>
 
   <script>
+    fetch('/api/routed').then(r => r.json()).then(d => {
+      if (!d.available) return;
+      const usd = n => '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
+      document.getElementById('r-vol').textContent = usd(d.volumeUsd);
+      document.getElementById('r-tx').textContent = Number(d.transactions.confirmed).toLocaleString();
+      document.getElementById('r-24').textContent = usd(d.volume24hUsd) + ' · ' + Number(d.transactions.confirmed24h).toLocaleString() + ' tx';
+      document.getElementById('r-since').textContent = d.since ? new Date(d.since).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : 'today';
+    }).catch(() => {});
     fetch('/api/report').then(r => r.json()).then(rep => {
       if (rep.error || !rep.totals) { document.getElementById('report-box').textContent = 'No measurement data yet — run: npm run watcher && npm run report'; return; }
       const t = rep.totals, fmt = n => Number(n).toLocaleString();

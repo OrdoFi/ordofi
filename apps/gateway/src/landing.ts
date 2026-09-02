@@ -98,7 +98,7 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
   <div><div class="k">Endpoint</div><div class="v" id="st-status">checking…</div></div>
   <div><div class="k">Chain head</div><div class="v" id="st-head">—</div></div>
   <div><div class="k">Round trip</div><div class="v" id="st-rtt">—</div></div>
-  <div><div class="k">Gateway uptime</div><div class="v" id="st-up">—</div></div>
+  <div><div class="k">Routed through here</div><div class="v" id="st-routed">—</div></div>
 </div></div>
 
 <section><div class="wrap">
@@ -169,8 +169,11 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
       $("st-status").textContent = "unreachable"; $("st-status").className = "v bad";
     }
     try {
-      const h = await (await fetch("/health")).json();
-      $("st-up").textContent = fmtUp(h.uptimeSeconds ?? 0);
+      const d = await (await fetch("${app}/api/routed")).json();
+      if (d.available) {
+        const usd = (n) => "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
+        $("st-routed").innerHTML = usd(d.volumeUsd) + "<small>" + Number(d.transactions.confirmed).toLocaleString() + " tx</small>";
+      }
     } catch { /* cosmetic */ }
   }
   probe(); setInterval(probe, 10000);

@@ -8,6 +8,7 @@ import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
+import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 
 const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
@@ -71,34 +72,63 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
   }
 }
 
+/**
+ * Remember what went through us. This is the public "volume routed" counter:
+ * the row is written the moment a hash comes back, and the web app fills in
+ * the receipt and the value later. Best-effort — a bookkeeping failure must
+ * never fail a user's transaction.
+ */
+async function recordRouted(txHash: string, rawTx: string, keyLabel: string, via: string): Promise<void> {
+  if (!store || typeof txHash !== "string" || !txHash.startsWith("0x")) return;
+  try {
+    const tx = parseTransaction(rawTx as TransactionSerialized);
+    const sender = await recoverTransactionAddress({ serializedTransaction: rawTx as TransactionSerialized }).catch(() => null);
+    store.recordRouted({ txHash, sender, target: tx.to ?? null, valueWei: tx.value ?? 0n, keyLabel, via });
+  } catch (e) {
+    console.warn(`gateway | could not record routed tx ${txHash}: ${(e as Error).message}`);
+  }
+}
+
 async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Promise<any> {
   switch (method) {
     case "eth_sendRawTransaction": {
       metrics.inc("tx_submitted_total", { key: apiKey.label });
+      const raw = params[0] as string;
       // Keys configured for order flow get the auction; everyone else gets a
       // revert-protected direct send.
-      if (apiKey.mode !== "auction") return protectAndSend(upstream, params[0] as string);
-      const out = await routeOrderFlow(upstream, params[0] as string, apiKey);
+      if (apiKey.mode !== "auction") {
+        const hash = await protectAndSend(upstream, raw);
+        void recordRouted(hash, raw, apiKey.label, "protect");
+        return hash;
+      }
+      const out = await routeOrderFlow(upstream, raw, apiKey);
       metrics.inc(out.auctioned ? "orderflow_auctioned_total" : "orderflow_fallback_total", {
         key: apiKey.label,
       });
       if (!out.auctioned) console.warn(`gateway | auction unavailable (${out.reason}) — sent direct`);
+      void recordRouted(out.txHash, raw, apiKey.label, out.auctioned ? "auction" : "protect");
       return out.txHash;
     }
     // Always auction, regardless of how the key is configured.
     case "ordo_sendPrivateTransaction": {
       metrics.inc("tx_submitted_total", { key: apiKey.label });
-      const out = await routeOrderFlow(upstream, params[0] as string, apiKey);
+      const raw = params[0] as string;
+      const out = await routeOrderFlow(upstream, raw, apiKey);
       metrics.inc(out.auctioned ? "orderflow_auctioned_total" : "orderflow_fallback_total", {
         key: apiKey.label,
       });
+      void recordRouted(out.txHash, raw, apiKey.label, out.auctioned ? "auction" : "protect");
       return out.txHash;
     }
     case "ordo_simulate":
       return simulateRaw(upstream, params[0] as string);
-    case "ordo_sendBundle":
+    case "ordo_sendBundle": {
       metrics.inc("bundle_submitted_total", { key: apiKey.label });
-      return sendBundle(upstream, params[0] as { txs: string[]; allowRevert?: boolean | number[] });
+      const bundle = params[0] as { txs: string[]; allowRevert?: boolean | number[] };
+      const out = await sendBundle(upstream, bundle);
+      out.txHashes.forEach((h: string, i: number) => void recordRouted(h, bundle.txs[i], apiKey.label, "bundle"));
+      return out;
+    }
     case "ordo_bundlerInfo":
       return bundlerInfo(upstream, params[0] as string);
     default:
