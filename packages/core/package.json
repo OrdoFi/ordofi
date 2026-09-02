@@ -8,9 +8,11 @@
     ".": "./src/index.ts",
     "./pricing": "./src/pricing.ts",
     "./simulate": "./src/simulate.ts",
-    "./receipt": "./src/receipt.ts"
+    "./receipt": "./src/receipt.ts",
+    "./stealth": "./src/stealth.ts"
   },
   "dependencies": {
-    "viem": "^2.21.0"
+    "viem": "^2.21.0",
+    "@noble/curves": "^1.6.0"
   }
 }

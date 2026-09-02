@@ -7,6 +7,7 @@ import { ethUsd } from "@ordofi/core/pricing";
 import { OrdoStore } from "@ordofi/store";
 import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
+import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
 function sendJson(req, res, status, body, headers = {}) {
@@ -655,6 +656,39 @@ async function handle(req, res) {
     return;
   }
 
+  if (path === "/api/stealth/feed") {
+    try {
+      const since = Math.max(0, Number(url.searchParams.get("since") ?? 0) || 0);
+      sendJson(req, res, 200, await stealthFeed({ since }), { "cache-control": "public, max-age=5" });
+    } catch (e) {
+      sendJson(req, res, 502, { error: e.message }, { "cache-control": "no-store" });
+    }
+    return;
+  }
+
+  if (path === "/api/stealth/meta") {
+    try {
+      const a = url.searchParams.get("address") ?? "";
+      if (!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new Error("bad address");
+      sendJson(req, res, 200, await stealthMetaFor(a), { "cache-control": "public, max-age=30" });
+    } catch (e) {
+      sendJson(req, res, 400, { error: e.message }, { "cache-control": "no-store" });
+    }
+    return;
+  }
+
+  if (path === "/api/stealth/balances") {
+    try {
+      const addrs = (url.searchParams.get("addresses") ?? "").split(",").map((x) => x.trim()).filter((x) => /^0x[0-9a-fA-F]{40}$/.test(x));
+      const toks = (url.searchParams.get("tokens") ?? "").split(",").map((x) => x.trim()).filter((x) => /^0x[0-9a-fA-F]{40}$/.test(x));
+      if (!addrs.length) throw new Error("no addresses");
+      sendJson(req, res, 200, { balances: await stealthBalances(addrs, toks) }, { "cache-control": "no-store" });
+    } catch (e) {
+      sendJson(req, res, 400, { error: e.message }, { "cache-control": "no-store" });
+    }
+    return;
+  }
+
   if (path === "/api/desk") {
     let body;
     try {
@@ -692,6 +726,7 @@ async function handle(req, res) {
   if (path === "/portal") path = "/portal.html";
   if (path === "/trade") path = "/trade.html";
   if (path === "/desk") path = "/desk.html";
+  if (path === "/stealth") path = "/stealth.html";
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";

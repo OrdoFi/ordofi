@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" content="#ff6414" />
+  <title>OrdoFi — Stealth · private payments on Robinhood Chain</title>
+  <meta name="description" content="Publish one address, receive at a fresh one every time. ERC-5564 stealth addresses on Robinhood Chain — no pooling, no custody, no permission required." />
+  <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .stealth { padding-top: 40px; padding-bottom: 90px; }
+    .stealth h1 { font-size: 40px; letter-spacing: -0.02em; margin-bottom: 8px; display: flex; align-items: center; gap: 14px; }
+    .stealth .lede { color: var(--muted); max-width: 840px; margin-bottom: 26px; font-size: 15px; line-height: 1.7; }
+    .stealth .lede b { color: var(--text); font-weight: 600; }
+    .chip { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; padding: 5px 10px; border: 1px solid var(--border-light); color: var(--text-dim); text-transform: uppercase; }
+    .chip.on { border-color: var(--accent); color: var(--accent); }
+    .chip.warn { border-color: var(--danger); color: var(--danger); }
+
+    .gate { border: 1px solid var(--border); background: var(--card); padding: 30px 28px; display: flex; gap: 26px; align-items: flex-start; flex-wrap: wrap; }
+    .gate .g-main { flex: 1; min-width: 320px; }
+    .gate h3 { font-size: 19px; margin-bottom: 8px; }
+    .gate p { color: var(--muted); font-size: 13.5px; line-height: 1.7; max-width: 620px; }
+    .gate p + p { margin-top: 9px; }
+    .gate .g-act { display: flex; flex-direction: column; gap: 9px; min-width: 220px; }
+
+    .btn-a { font-family: inherit; font-size: 13.5px; padding: 11px 18px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; text-align: center; }
+    .btn-a:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+    .btn-a:disabled { opacity: .45; cursor: default; }
+    .btn-g { font-family: inherit; font-size: 13px; padding: 10px 16px; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); cursor: pointer; text-align: center; }
+    .btn-g:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-g:disabled { opacity: .45; cursor: default; }
+    .btn-g.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+    .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; margin-top: 22px; align-items: start; }
+    .panel { border: 1px solid var(--border); background: var(--card); }
+    .panel .ph { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+    .panel .ph h3 { font-size: 16px; }
+    .panel .ph span { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+    .panel .pb { padding: 17px 18px; }
+    .panel .pb > * + * { margin-top: 13px; }
+
+    label.f { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 5px; }
+    input.f, select.f { width: 100%; padding: 10px 12px; border: 1px solid var(--border); background: var(--bg-elev); font-family: var(--mono); font-size: 13px; color: var(--text); outline: none; }
+    input.f:focus, select.f:focus { border-color: var(--accent); }
+    .row2 { display: grid; grid-template-columns: 1fr 130px; gap: 10px; }
+
+    .meta { border: 1px solid var(--border); background: var(--bg-elev); padding: 13px; }
+    .meta code { font-family: var(--mono); font-size: 11.5px; word-break: break-all; line-height: 1.55; display: block; color: var(--text); }
+    .meta .macts { display: flex; gap: 7px; margin-top: 10px; flex-wrap: wrap; }
+    .meta .macts button { font-family: var(--mono); font-size: 10.5px; padding: 4px 9px; border: 1px solid var(--border); background: var(--card); color: var(--text-dim); cursor: pointer; }
+    .meta .macts button:hover { border-color: var(--accent); color: var(--accent); }
+
+    .steps { list-style: none; font-family: var(--mono); font-size: 11.5px; }
+    .steps li { display: flex; gap: 9px; padding: 5px 0; color: var(--muted); align-items: baseline; }
+    .steps li b { flex: none; width: 15px; color: var(--border-light); font-weight: 500; }
+    .steps li.now { color: var(--accent); } .steps li.now b { color: var(--accent); }
+    .steps li.ok { color: var(--text-dim); } .steps li.ok b { color: #1e9e6a; }
+    .steps li.bad { color: var(--danger); } .steps li.bad b { color: var(--danger); }
+    .steps li a { color: var(--accent); }
+
+    .note { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+    .note b { color: var(--text-dim); font-weight: 600; }
+    .warn { border: 1px solid #e6c2be; background: #fdf1ef; padding: 11px 13px; font-size: 12.5px; color: var(--danger); line-height: 1.6; }
+
+    .inbox { list-style: none; }
+    .inbox li { border-bottom: 1px solid var(--border); padding: 13px 18px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+    .inbox li:last-child { border-bottom: none; }
+    .inbox .amt { font-family: var(--mono); font-size: 16px; color: var(--text); }
+    .inbox .amt small { color: var(--muted); font-size: 11px; margin-left: 6px; }
+    .inbox .sub { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 4px; word-break: break-all; }
+    .inbox .sub a { color: var(--accent); }
+    .inbox .empty, .scanline { padding: 20px 18px; font-size: 13px; color: var(--muted); }
+    .scanline { border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11.5px; padding: 11px 18px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+    .how { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--border); margin-top: 34px; }
+    .how div { padding: 22px 20px; border-right: 1px solid var(--border); background: var(--card); }
+    .how div:last-child { border-right: none; }
+    .how .n { font-family: var(--mono); font-size: 11px; color: var(--accent); letter-spacing: .08em; margin-bottom: 8px; }
+    .how h4 { font-size: 16px; margin-bottom: 6px; }
+    .how p { font-size: 13px; color: var(--muted); line-height: 1.6; }
+    .how code { font-family: var(--mono); font-size: 11.5px; background: var(--accent-soft); color: var(--accent-dim); padding: 1px 5px; }
+    .honest { border: 1px solid var(--border); border-top: none; padding: 17px 20px; font-size: 13px; color: var(--muted); background: var(--card); line-height: 1.7; }
+    .honest b { color: var(--text); font-weight: 600; }
+    h2.sec { font-size: 22px; margin: 34px 0 12px; letter-spacing: -0.01em; }
+
+    @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } .how { grid-template-columns: 1fr 1fr; } .how div:nth-child(2) { border-right: none; } .how div:nth-child(-n+2) { border-bottom: 1px solid var(--border); } }
+    @media (max-width: 640px) { .stealth h1 { font-size: 30px; } .how { grid-template-columns: 1fr; } .how div { border-right: none; border-bottom: 1px solid var(--border); } }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
+      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/stealth" class="here">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/searchers">Searchers</a><a href="/apps">Apps</a><a href="/docs">Docs</a></div>
+    </div>
+  </nav>
+
+  <div class="wrap stealth">
+    <h1>Stealth <span class="chip" id="state-chip">locked</span></h1>
+    <div class="lede">
+      Every transfer on Robinhood Chain is public forever. Hand someone your address to be paid at and you hand them your balance and your entire payment history. <b>Stealth addresses fix exactly that.</b> You publish one meta-address; anyone paying you derives a brand new address from it that only you can spend from. The payments stay public — they just stop being linkable to you.
+    </div>
+
+    <div class="gate" id="gate">
+      <div class="g-main">
+        <h3>Your stealth account lives in your wallet</h3>
+        <p>Two keys are derived from a single signature: a <b>viewing key</b> that finds payments addressed to you, and a <b>spending key</b> that moves them. Nothing is stored on our servers and nothing is written to this device — sign again on any browser and you get the same account back.</p>
+        <p>Signing is free and costs no gas. It never authorises a transfer.</p>
+      </div>
+      <div class="g-act">
+        <button class="btn-a" id="unlock">Connect &amp; unlock</button>
+        <span class="note" id="gate-note">Requires a wallet on Robinhood Chain.</span>
+      </div>
+    </div>
+
+    <div id="app" style="display:none">
+      <div class="cols">
+        <div class="panel">
+          <div class="ph"><h3>Receive</h3><span id="reg-state">not published</span></div>
+          <div class="pb">
+            <div class="note">Give this to anyone who should be able to pay you privately. It is safe to publish — it reveals no balance and no history.</div>
+            <div class="meta">
+              <code id="meta-addr">—</code>
+              <div class="macts">
+                <button id="copy-meta">copy</button>
+                <button id="copy-link">copy pay link</button>
+                <button id="publish">publish to registry</button>
+              </div>
+            </div>
+            <div class="note"><b>Publishing</b> writes your meta-address to the ERC-6538 registry against your wallet address, so anyone can pay <span class="mono" id="my-addr">you</span> privately without asking for anything first. It is one transaction and it is optional.</div>
+            <ul class="steps" id="pub-steps" style="display:none"></ul>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="ph"><h3>Send privately</h3><span>2 transactions</span></div>
+          <div class="pb">
+            <div>
+              <label class="f" for="to">Recipient — meta-address, or an address to look up</label>
+              <input class="f" id="to" placeholder="st:rho:0x… or 0x…" autocomplete="off" spellcheck="false" />
+              <div class="note" id="to-note" style="margin-top:6px"></div>
+            </div>
+            <div class="row2">
+              <div>
+                <label class="f" for="amt">Amount</label>
+                <input class="f" id="amt" placeholder="0.0" autocomplete="off" inputmode="decimal" />
+              </div>
+              <div>
+                <label class="f" for="asset">Asset</label>
+                <select class="f" id="asset"><option value="eth">ETH</option><option value="usdg">USDG</option></select>
+              </div>
+            </div>
+            <div class="note" id="send-hint">The recipient sees the payment the moment it lands. Nobody else can tell who it went to.</div>
+            <button class="btn-a" id="send" style="width:100%">Send privately</button>
+            <ul class="steps" id="send-steps" style="display:none"></ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top:22px">
+        <div class="ph"><h3>Inbox</h3><span id="scan-span">—</span></div>
+        <div class="scanline" id="scanline"><span id="scan-status">scanning…</span><span id="scan-total"></span></div>
+        <ul class="inbox" id="inbox"><li class="empty">Scanning announcements for payments addressed to you…</li></ul>
+      </div>
+    </div>
+
+    <h2 class="sec">How it works</h2>
+    <div class="how">
+      <div><div class="n">01 · PUBLISH</div><h4>One meta-address</h4><p>Your wallet signs once. From that signature come a spending key and a viewing key, and from those a meta-address: <code>st:rho:0x…</code>. It is two public keys and nothing else, so publishing it gives away nothing.</p></div>
+      <div><div class="n">02 · DERIVE</div><h4>A fresh address per payment</h4><p>The payer rolls a random ephemeral key, combines it with your viewing key to get a shared secret, and adds that secret to your spending key. The result is an address nobody has ever used, which only you hold the key to.</p></div>
+      <div><div class="n">03 · ANNOUNCE</div><h4>A public breadcrumb only you can read</h4><p>The payer publishes their ephemeral public key to the canonical <code>ERC-5564</code> announcer. It tells the world nothing; it tells you, and only you, where to look. A one-byte view tag lets your browser skip 255 of every 256 announcements.</p></div>
+      <div><div class="n">04 · SPEND</div><h4>Yours, whenever</h4><p>Your browser recomputes the same secret with your viewing key, matches the address, and derives the spending key locally. Withdrawals are signed on your device and submitted through OrdoFi's own RPC, straight to the sequencer.</p></div>
+    </div>
+    <div class="honest">
+      <b>What this is not.</b> It is not a mixer and there is no anonymity set: no funds are pooled and nothing of yours is ever mingled with anyone else's. The <b>sender remains fully visible</b> — their wallet pays the announcement and the transfer. What is hidden is the <b>recipient</b>: nobody can tell that a stealth address belongs to you, so publishing one meta-address no longer publishes your balance and your history. Withdrawing several stealth payments into the same address links them back together, so withdraw to somewhere fresh if that matters to you. Keys are derived from a wallet signature and held in this tab only — close it and they are gone, sign again and they come back.
+    </div>
+  </div>
+
+  <script type="module">
+    import {
+      ANNOUNCER_ABI, ERC5564_ANNOUNCER, ERC6538_REGISTRY, NATIVE_TOKEN, REGISTRY_ABI, SCHEME_ID,
+      checkAnnouncement, computeStealthPrivateKey, decodeMetadata, encodeMetadata, generateStealthAddress,
+      keysFromSignature, metaAddressBytes, parseMetaAddress,
+      encodeFunctionData, formatEther, formatUnits, getAddress, isAddress, parseEther, parseUnits,
+      privateKeyToAccount,
+    } from "/vendor/stealth.js";
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const short = (a) => a.slice(0, 8) + "…" + a.slice(-6);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    // The signature the whole account hangs off. Changing a character of this
+    // changes everyone's stealth account, so it is frozen.
+    const UNLOCK_MESSAGE =
+      "OrdoFi Stealth\n\nSign to derive your stealth keys for Robinhood Chain.\n\n" +
+      "This signature is free, costs no gas, and never moves funds. It is the only\n" +
+      "thing that can recreate your stealth account, so only sign it on ordofi.network.\n\nVersion: 1";
+
+    const USDG = { symbol: "USDG", address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", decimals: 6 };
+    // A token sitting at a fresh address cannot pay for its own withdrawal, so
+    // the sender covers the first move. Without this the payment is stranded.
+    const GAS_STIPEND = parseEther("0.00006");
+
+    let CHAIN = null, provider = null, account = null, keys = null;
+    let feed = { announcements: [], syncing: true, scannedTo: null, head: null };
+    let mine = [];   // payments found for us
+    let scanning = false;
+
+    async function api(path) {
+      const r = await fetch(path, { cache: "no-store" });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`);
+      return d;
+    }
+    async function rpc(method, params) {
+      const r = await fetch(CHAIN.rpc, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error.message ?? "rpc error");
+      return d.result;
+    }
+    const explorer = () => CHAIN?.explorer ?? "https://robinhoodchain.blockscout.com";
+    const txLink = (h) => `<a href="${explorer()}/tx/${h}" target="_blank" rel="noopener">${h.slice(0, 12)}…</a>`;
+
+    // ---------- steps ----------
+    function steps(el, items) {
+      el.style.display = "block";
+      el.innerHTML = items.map((s, i) => `<li class="${s.state ?? ""}"><b>${i + 1}</b><span>${s.text}</span></li>`).join("");
+    }
+
+    // ---------- wallet ----------
+    function wallets() {
+      const found = [];
+      window.dispatchEvent(new Event("eip6963:requestProvider"));
+      for (const w of discovered.values()) found.push(w);
+      if (!found.length && window.ethereum) found.push({ info: { name: "Browser wallet" }, provider: window.ethereum });
+      return found;
+    }
+    const discovered = new Map();
+    window.addEventListener("eip6963:announceProvider", (e) => {
+      if (e.detail?.info?.rdns) discovered.set(e.detail.info.rdns, e.detail);
+    });
+    window.dispatchEvent(new Event("eip6963:requestProvider"));
+
+    async function ensureChain() {
+      const current = await provider.request({ method: "eth_chainId" });
+      if (current === CHAIN.idHex) return;
+      try {
+        await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN.idHex }] });
+      } catch {
+        await provider.request({
+          method: "wallet_addEthereumChain",
+          params: [{
+            chainId: CHAIN.idHex, chainName: CHAIN.name + " · OrdoFi protected", rpcUrls: [CHAIN.rpc],
+            nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: [CHAIN.explorer],
+          }],
+        });
+      }
+    }
+
+    async function unlock() {
+      const btn = $("unlock");
+      btn.disabled = true;
+      try {
+        const list = wallets();
+        if (!list.length) { $("gate-note").innerHTML = 'No wallet found. <a href="https://metamask.io/download" target="_blank" rel="noopener" style="color:var(--accent)">Install one</a>, then reload.'; return; }
+        provider = list[0].provider;
+        $("gate-note").textContent = "Confirm the connection in your wallet…";
+        const [a] = await provider.request({ method: "eth_requestAccounts" });
+        account = a;
+        await ensureChain();
+        $("gate-note").textContent = "Sign the message to derive your keys…";
+        const signature = await provider.request({ method: "personal_sign", params: [UNLOCK_MESSAGE, account] });
+        keys = keysFromSignature(signature);
+        onUnlocked();
+      } catch (e) {
+        $("gate-note").textContent = e?.code === 4001 ? "Rejected — nothing happened." : `Could not unlock: ${e?.message ?? e}`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function onUnlocked() {
+      $("gate").style.display = "none";
+      $("app").style.display = "block";
+      $("state-chip").textContent = "unlocked";
+      $("state-chip").className = "chip on";
+      $("meta-addr").textContent = keys.metaAddress;
+      $("my-addr").textContent = short(account);
+      refreshRegistry();
+      scan();
+      setInterval(scan, 20_000);
+    }
+
+    // ---------- receive ----------
+    async function refreshRegistry() {
+      try {
+        const d = await api(`/api/stealth/meta?address=${account}`);
+        const published = d.metaAddress && d.metaAddress.toLowerCase() === keys.metaAddress.toLowerCase();
+        $("reg-state").textContent = published ? "published" : d.metaAddress ? "a different key is published" : "not published";
+        $("publish").textContent = published ? "published ✓" : "publish to registry";
+        $("publish").disabled = !!published;
+      } catch { $("reg-state").textContent = "registry unreachable"; }
+    }
+
+    async function publish() {
+      const el = $("pub-steps");
+      steps(el, [{ text: "Confirm in your wallet", state: "now" }]);
+      try {
+        const data = encodeFunctionData({
+          abi: REGISTRY_ABI, functionName: "registerKeys",
+          args: [SCHEME_ID, metaAddressBytes(keys.spendingPublicKey, keys.viewingPublicKey)],
+        });
+        const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: ERC6538_REGISTRY, data }] });
+        steps(el, [{ text: `Sent ${txLink(hash)}`, state: "ok" }, { text: "Waiting for the block…", state: "now" }]);
+        await waitFor(hash);
+        steps(el, [{ text: `Published ${txLink(hash)}`, state: "ok" }]);
+        refreshRegistry();
+      } catch (e) {
+        steps(el, [{ text: e?.code === 4001 ? "Rejected — nothing happened." : esc(e?.message ?? e), state: "bad" }]);
+      }
+    }
+
+    async function waitFor(hash) {
+      for (let i = 0; i < 60; i++) {
+        await sleep(1000);
+        const r = await rpc("eth_getTransactionReceipt", [hash]).catch(() => null);
+        if (r) {
+          if (r.status !== "0x1") throw new Error("the transaction reverted");
+          return r;
+        }
+      }
+      throw new Error("not confirmed within a minute");
+    }
+
+    // ---------- send ----------
+    let resolvedMeta = null;
+    async function resolveRecipient() {
+      const raw = $("to").value.trim();
+      resolvedMeta = null;
+      if (!raw) { $("to-note").textContent = ""; return; }
+      if (isAddress(raw)) {
+        $("to-note").textContent = "Looking up a published meta-address…";
+        try {
+          const d = await api(`/api/stealth/meta?address=${getAddress(raw)}`);
+          if (!d.metaAddress) { $("to-note").innerHTML = "<b>This address has not published a stealth meta-address.</b> Ask them to open this page and publish one, or paste their meta-address directly."; return; }
+          resolvedMeta = d.metaAddress;
+          $("to-note").textContent = `Found a published meta-address for ${short(raw)}.`;
+        } catch (e) { $("to-note").textContent = `Lookup failed: ${e.message}`; }
+        return;
+      }
+      try {
+        parseMetaAddress(raw);
+        resolvedMeta = raw;
+        $("to-note").textContent = "Valid meta-address.";
+      } catch (e) { $("to-note").textContent = e.message; }
+    }
+
+    async function send() {
+      const el = $("send-steps");
+      const btn = $("send");
+      const isEth = $("asset").value === "eth";
+      let amount;
+      try {
+        if (!resolvedMeta) throw new Error("Enter a meta-address, or an address that has published one.");
+        amount = isEth ? parseEther($("amt").value || "0") : parseUnits($("amt").value || "0", USDG.decimals);
+        if (amount <= 0n) throw new Error("Enter an amount.");
+      } catch (e) { steps(el, [{ text: esc(e.message), state: "bad" }]); return; }
+
+      btn.disabled = true;
+      const plan = [
+        { text: "Announce the payment", state: "now" },
+        { text: isEth ? "Send the ETH" : "Send the USDG" },
+        ...(isEth ? [] : [{ text: "Include gas so it can be withdrawn" }]),
+      ];
+      steps(el, plan);
+      try {
+        const payment = generateStealthAddress(resolvedMeta);
+        const metadata = encodeMetadata({
+          viewTag: payment.viewTag,
+          token: isEth ? NATIVE_TOKEN : getAddress(USDG.address),
+          amount,
+        });
+
+        // Announce first, deliberately. The announcement is what makes the
+        // funds findable; if the transfer then fails the worst case is an empty
+        // announcement, whereas the reverse order can strand the money forever.
+        const annData = encodeFunctionData({
+          abi: ANNOUNCER_ABI, functionName: "announce",
+          args: [SCHEME_ID, payment.stealthAddress, payment.ephemeralPublicKey, metadata],
+        });
+        const annHash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: ERC5564_ANNOUNCER, data: annData }] });
+        plan[0] = { text: `Announced ${txLink(annHash)}`, state: "ok" };
+        plan[1].state = "now";
+        steps(el, plan);
+        await waitFor(annHash);
+
+        if (isEth) {
+          const hash = await provider.request({
+            method: "eth_sendTransaction",
+            params: [{ from: account, to: payment.stealthAddress, value: "0x" + amount.toString(16) }],
+          });
+          plan[1] = { text: `Sent ${txLink(hash)}`, state: "ok" };
+          steps(el, plan);
+          await waitFor(hash);
+        } else {
+          const transfer = encodeFunctionData({
+            abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] }],
+            functionName: "transfer", args: [payment.stealthAddress, amount],
+          });
+          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: getAddress(USDG.address), data: transfer }] });
+          plan[1] = { text: `Sent ${txLink(hash)}`, state: "ok" };
+          plan[2].state = "now";
+          steps(el, plan);
+          await waitFor(hash);
+          const gasHash = await provider.request({
+            method: "eth_sendTransaction",
+            params: [{ from: account, to: payment.stealthAddress, value: "0x" + GAS_STIPEND.toString(16) }],
+          });
+          plan[2] = { text: `Gas included ${txLink(gasHash)}`, state: "ok" };
+          steps(el, plan);
+          await waitFor(gasHash);
+        }
+
+        plan.push({ text: `Delivered to a one-time address only they can spend from.`, state: "ok" });
+        steps(el, plan);
+        $("amt").value = "";
+      } catch (e) {
+        const failed = plan.findIndex((s) => s.state === "now");
+        if (failed >= 0) plan[failed] = { text: e?.code === 4001 ? "Rejected in the wallet — nothing further was sent." : esc(e?.message ?? e), state: "bad" };
+        steps(el, plan);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // ---------- inbox ----------
+    async function scan() {
+      if (scanning || !keys) return;
+      scanning = true;
+      try {
+        feed = await api("/api/stealth/feed");
+        $("scan-status").textContent = feed.syncing
+          ? `reading announcements — block ${(feed.scannedTo ?? 0).toLocaleString()} of ${(feed.head ?? 0).toLocaleString()}`
+          : `${feed.total.toLocaleString()} announcements scanned, up to date`;
+
+        // The viewing key never leaves this tab: matching happens here, not on
+        // the server, which is the whole point of the scheme.
+        const found = [];
+        for (const a of feed.announcements) {
+          if (a.schemeId !== SCHEME_ID.toString()) continue;
+          const meta = decodeMetadata(a.metadata);
+          const hit = checkAnnouncement(keys, {
+            stealthAddress: a.stealthAddress,
+            ephemeralPublicKey: a.ephemeralPublicKey,
+            viewTag: meta?.viewTag,
+          });
+          if (hit) found.push({ ...a, meta, stealthAddress: hit });
+        }
+        $("scan-total").textContent = `${found.length} for you`;
+        $("scan-span").textContent = found.length ? `${found.length} payment${found.length === 1 ? "" : "s"}` : "nothing yet";
+
+        if (found.length) {
+          const addrs = found.map((f) => f.stealthAddress).join(",");
+          const bal = await api(`/api/stealth/balances?addresses=${addrs}&tokens=${USDG.address}`);
+          const byAddr = new Map(bal.balances.map((b) => [b.address.toLowerCase(), b]));
+          for (const f of found) f.balance = byAddr.get(f.stealthAddress.toLowerCase());
+        }
+        mine = found;
+        renderInbox();
+      } catch (e) {
+        $("scan-status").textContent = `scan failed: ${e.message}`;
+      } finally {
+        scanning = false;
+      }
+    }
+
+    function renderInbox() {
+      const el = $("inbox");
+      if (!mine.length) {
+        el.innerHTML = `<li class="empty">No payments yet. Share your meta-address above — anything sent to it will appear here.</li>`;
+        return;
+      }
+      el.innerHTML = mine.slice().reverse().map((f, i) => {
+        const b = f.balance;
+        const eth = BigInt(b?.eth ?? "0");
+        const usdg = BigInt(b?.tokens?.[USDG.address] ?? "0");
+        const held = [];
+        if (eth > 0n) held.push(`${formatEther(eth)} ETH`);
+        if (usdg > 0n) held.push(`${formatUnits(usdg, USDG.decimals)} USDG`);
+        const idx = mine.length - 1 - i;
+        const spent = !held.length;
+        return `<li>
+          <div>
+            <div class="amt">${spent ? "<span style='color:var(--muted)'>withdrawn</span>" : esc(held.join(" · "))}${spent ? "" : `<small>at block ${f.block.toLocaleString()}</small>`}</div>
+            <div class="sub"><a href="${explorer()}/address/${f.stealthAddress}" target="_blank" rel="noopener">${f.stealthAddress}</a></div>
+            <div class="sub" id="wd-${idx}"></div>
+          </div>
+          <div>${spent ? "" : `<button class="btn-g" data-i="${idx}">Withdraw</button>`}</div>
+        </li>`;
+      }).join("");
+      el.querySelectorAll("button[data-i]").forEach((b) => b.addEventListener("click", () => withdraw(Number(b.dataset.i), b)));
+    }
+
+    async function withdraw(i, btn) {
+      const f = mine[i];
+      const note = $(`wd-${i}`);
+      const to = prompt(
+        "Withdraw to which address?\n\nUse a fresh address if you don't want this payment linked to your main wallet.",
+        account,
+      );
+      if (!to) return;
+      if (!isAddress(to)) { note.textContent = "That is not an address."; return; }
+      btn.disabled = true;
+      note.textContent = "signing locally…";
+      try {
+        const key = computeStealthPrivateKey(keys, f.ephemeralPublicKey);
+        const acct = privateKeyToAccount(key);
+        if (acct.address.toLowerCase() !== f.stealthAddress.toLowerCase()) throw new Error("derived key does not match the address");
+
+        const usdg = BigInt(f.balance?.tokens?.[USDG.address] ?? "0");
+        const [nonceHex, gasPriceHex] = await Promise.all([
+          rpc("eth_getTransactionCount", [acct.address, "pending"]),
+          rpc("eth_gasPrice", []),
+        ]);
+        const nonce = parseInt(nonceHex, 16);
+        const maxFeePerGas = BigInt(gasPriceHex) * 2n;
+        const eth = BigInt(await rpc("eth_getBalance", [acct.address, "latest"]));
+
+        let tx;
+        if (usdg > 0n) {
+          const data = encodeFunctionData({
+            abi: [{ type: "function", name: "transfer", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] }],
+            functionName: "transfer", args: [getAddress(to), usdg],
+          });
+          const gas = BigInt(await rpc("eth_estimateGas", [{ from: acct.address, to: getAddress(USDG.address), data }])) * 3n / 2n;
+          if (eth < gas * maxFeePerGas) throw new Error("this address has no ETH for gas — send it a little and retry");
+          tx = { chainId: CHAIN.id, to: getAddress(USDG.address), data, value: 0n, gas, maxFeePerGas, maxPriorityFeePerGas: 0n, nonce, type: "eip1559" };
+        } else {
+          const gas = 21000n;
+          const cost = gas * maxFeePerGas;
+          if (eth <= cost) throw new Error("balance does not cover gas");
+          tx = { chainId: CHAIN.id, to: getAddress(to), value: eth - cost, gas, maxFeePerGas, maxPriorityFeePerGas: 0n, nonce, type: "eip1559" };
+        }
+
+        const raw = await acct.signTransaction(tx);
+        note.textContent = "submitting through rpc.ordofi.network…";
+        const hash = await rpc("eth_sendRawTransaction", [raw]);
+        note.innerHTML = `withdrawing ${txLink(hash)}`;
+        await waitFor(hash);
+        note.innerHTML = `withdrawn ${txLink(hash)}`;
+        scan();
+      } catch (e) {
+        note.textContent = e?.message ?? String(e);
+        btn.disabled = false;
+      }
+    }
+
+    // ---------- boot ----------
+    $("unlock").addEventListener("click", unlock);
+    $("publish").addEventListener("click", publish);
+    $("send").addEventListener("click", send);
+    $("to").addEventListener("change", resolveRecipient);
+    $("to").addEventListener("blur", resolveRecipient);
+    $("copy-meta").addEventListener("click", (e) => copy(e.target, keys.metaAddress));
+    $("copy-link").addEventListener("click", (e) => copy(e.target, `${location.origin}/stealth?to=${encodeURIComponent(keys.metaAddress)}`));
+    async function copy(btn, text) {
+      try { await navigator.clipboard.writeText(text); } catch { return; }
+      const was = btn.textContent;
+      btn.textContent = "copied";
+      setTimeout(() => { btn.textContent = was; }, 1400);
+    }
+
+    api("/api/trade/chain").then((c) => {
+      CHAIN = c;
+      const to = new URLSearchParams(location.search).get("to");
+      if (to) { $("to").value = to; resolveRecipient(); }
+    }).catch(() => { $("gate-note").textContent = "Could not reach the chain endpoint."; });
+  </script>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <div class="logo">ordo<span class="logo-app">app</span></div>
+          <p>The execution layer for Robinhood Chain.</p>
+        </div>
+        <div class="footer-col"><h5>Product</h5><a href="/trade">Trade</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/dashboard">Settlement dashboard</a><a href="/portal">Portal</a><a href="/docs">Documentation</a></div>
+        <div class="footer-col"><h5>Participate</h5><a href="/searchers">For searchers</a><a href="/apps">For apps &amp; wallets</a><a href="/operators">For node operators</a></div>
+        <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs#quickstart">Quickstart</a><a href="/docs#searcher">API reference</a></div>
+      </div>
+      <div class="footer-bottom">
+        <div class="disclaimer">© 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc.</div>
+        <div class="socials"><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs">Docs</a></div>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>
