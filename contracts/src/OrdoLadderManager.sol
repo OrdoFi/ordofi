@@ -6,6 +6,12 @@ interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function approve(address spender, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+}
+
+/// EIP-2612: an allowance granted by signature, consumed inside the same call.
+interface IERC20Permit {
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
 }
 
 interface IWETH is IERC20 {
@@ -128,6 +134,17 @@ contract OrdoLadderManager {
         uint256 amount1Min;
     }
 
+    /// An EIP-2612 signature over the token side of a deposit, so no separate
+    /// approve transaction is needed. `token` zero means none was provided.
+    struct Permit {
+        address token;
+        uint256 value;
+        uint256 deadline;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+    }
+
     /// One bin of a ladder. `open` flips off when its liquidity is withdrawn.
     struct Bin {
         uint256 tokenId;
@@ -180,6 +197,7 @@ contract OrdoLadderManager {
     error DuplicateBin(uint256 index);
     error NoBins();
     error TransferFailed();
+    error PermitFailed(address token);
 
     constructor(address positionManager_, address treasury_) {
         if (positionManager_ == address(0) || treasury_ == address(0)) revert ZeroAddress();
@@ -206,6 +224,25 @@ contract OrdoLadderManager {
         external
         payable
         nonReentrant
+        returns (uint256 ladderId)
+    {
+        return _openLadder(pool, rungs, shape, minTick, maxTick, deadline);
+    }
+
+    /// @notice `openLadder` with the token side allowed by an EIP-2612 signature
+    ///         instead of a prior approve transaction.
+    function openLadderWithPermit(address pool, Rung[] calldata rungs, uint8 shape, int24 minTick, int24 maxTick, uint256 deadline, Permit calldata permit)
+        external
+        payable
+        nonReentrant
+        returns (uint256 ladderId)
+    {
+        _permit(permit);
+        return _openLadder(pool, rungs, shape, minTick, maxTick, deadline);
+    }
+
+    function _openLadder(address pool, Rung[] calldata rungs, uint8 shape, int24 minTick, int24 maxTick, uint256 deadline)
+        private
         returns (uint256 ladderId)
     {
         if (block.timestamp > deadline) revert Expired();
@@ -244,6 +281,33 @@ contract OrdoLadderManager {
         external
         payable
         nonReentrant
+        returns (uint256 added0, uint256 added1)
+    {
+        return _addLiquidity(ladderId, rungs, deadline);
+    }
+
+    /// @notice `addLiquidity` with the token side allowed by an EIP-2612 signature.
+    function addLiquidityWithPermit(uint256 ladderId, Rung[] calldata rungs, uint256 deadline, Permit calldata permit)
+        external
+        payable
+        nonReentrant
+        returns (uint256 added0, uint256 added1)
+    {
+        _permit(permit);
+        return _addLiquidity(ladderId, rungs, deadline);
+    }
+
+    /// Consume a permit for msg.sender. A permit that was already used — by a
+    /// front-runner replaying the public signature, or by a wallet that sent an
+    /// approve as well — is not a failure: only the resulting allowance matters.
+    function _permit(Permit calldata pm) private {
+        if (pm.token == address(0)) return;
+        try IERC20Permit(pm.token).permit(msg.sender, address(this), pm.value, pm.deadline, pm.v, pm.r, pm.s) {} catch {}
+        if (IERC20(pm.token).allowance(msg.sender, address(this)) < pm.value) revert PermitFailed(pm.token);
+    }
+
+    function _addLiquidity(uint256 ladderId, Rung[] calldata rungs, uint256 deadline)
+        private
         returns (uint256 added0, uint256 added1)
     {
         if (block.timestamp > deadline) revert Expired();

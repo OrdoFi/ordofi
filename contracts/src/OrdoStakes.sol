@@ -17,12 +17,17 @@ pragma solidity ^0.8.24;
 ///
 /// No admin anywhere. The treasury address is fixed at deployment.
 
+interface IERC20Permit {
+    function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external;
+}
+
 interface IERC20 {
     function totalSupply() external view returns (uint256);
     function balanceOf(address) external view returns (uint256);
     function transfer(address to, uint256 amount) external returns (bool);
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function approve(address spender, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
     function decimals() external view returns (uint8);
     function symbol() external view returns (string memory);
 }
@@ -441,6 +446,10 @@ contract OrdoStakeZap is Guard {
 
     /// @notice Token in: half is swapped to WETH, both are deposited, shares are staked for you.
     function zapToken(address vault, uint256 amount, uint256 minWethOut) external nonReentrant returns (uint256 shares) {
+        return _zapToken(vault, amount, minWethOut);
+    }
+
+    function _zapToken(address vault, uint256 amount, uint256 minWethOut) private returns (uint256 shares) {
         if (amount == 0) revert NothingIn();
         IOrdoStakeVault v = IOrdoStakeVault(vault);
         address token = v.token0() == address(weth) ? v.token1() : v.token0();
@@ -452,6 +461,44 @@ contract OrdoStakeZap is Guard {
 
     /// @notice Both sides in (ETH as value, token by allowance), no swap, staked for you.
     function zapBoth(address vault, uint256 tokenAmount) external payable nonReentrant returns (uint256 shares) {
+        return _zapBoth(vault, tokenAmount);
+    }
+
+    /// An EIP-2612 signature standing in for the token approval.
+    struct Permit {
+        uint256 value;
+        uint256 deadline;
+        uint8 v;
+        bytes32 r;
+        bytes32 s;
+    }
+
+    error PermitFailed(address token);
+
+    /// @notice `zapToken` with the allowance granted by signature in the same transaction.
+    function zapTokenWithPermit(address vault, uint256 amount, uint256 minWethOut, Permit calldata pm) external nonReentrant returns (uint256 shares) {
+        _permit(_tokenOf(vault), pm);
+        return _zapToken(vault, amount, minWethOut);
+    }
+
+    /// @notice `zapBoth` with the token allowance granted by signature in the same transaction.
+    function zapBothWithPermit(address vault, uint256 tokenAmount, Permit calldata pm) external payable nonReentrant returns (uint256 shares) {
+        _permit(_tokenOf(vault), pm);
+        return _zapBoth(vault, tokenAmount);
+    }
+
+    function _tokenOf(address vault) private view returns (address) {
+        IOrdoStakeVault v = IOrdoStakeVault(vault);
+        return v.token0() == address(weth) ? v.token1() : v.token0();
+    }
+
+    /// A permit already consumed (replayed by a front-runner, or made redundant by an approve) is fine; the allowance is what counts.
+    function _permit(address token, Permit calldata pm) private {
+        try IERC20Permit(token).permit(msg.sender, address(this), pm.value, pm.deadline, pm.v, pm.r, pm.s) {} catch {}
+        if (IERC20(token).allowance(msg.sender, address(this)) < pm.value) revert PermitFailed(token);
+    }
+
+    function _zapBoth(address vault, uint256 tokenAmount) private returns (uint256 shares) {
         if (msg.value == 0 && tokenAmount == 0) revert NothingIn();
         IOrdoStakeVault v = IOrdoStakeVault(vault);
         address token = v.token0() == address(weth) ? v.token1() : v.token0();

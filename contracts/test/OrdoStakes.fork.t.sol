@@ -262,6 +262,48 @@ contract OrdoStakesForkTest is Test {
         assertEq(IERC20(WETH).balanceOf(address(zap)), 0);
     }
 
+    bytes32 constant PERMIT_TYPEHASH = keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+
+    function _permitFor(address owner, uint256 key, uint256 value, uint256 deadline) internal view returns (OrdoStakeZap.Permit memory pm) {
+        (, bytes memory ds) = NVDA.staticcall(abi.encodeWithSignature("DOMAIN_SEPARATOR()"));
+        (, bytes memory n) = NVDA.staticcall(abi.encodeWithSignature("nonces(address)", owner));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", abi.decode(ds, (bytes32)), keccak256(abi.encode(PERMIT_TYPEHASH, owner, address(zap), value, abi.decode(n, (uint256)), deadline))));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
+        pm = OrdoStakeZap.Permit({value: value, deadline: deadline, v: v, r: r, s: s});
+    }
+
+    function test_zapWithPermit_tokenAndBoth_needNoApprove() public onFork {
+        (address carol, uint256 carolKey) = makeAddrAndKey("carol");
+        vm.deal(carol, 10 ether);
+        vm.startPrank(carol);
+        IWETH(WETH).deposit{value: 2 ether}();
+        IERC20(WETH).approve(ROUTER, type(uint256).max);
+        ISwapRouter02(ROUTER).exactInputSingle(ISwapRouter02.ExactInputSingleParams(WETH, NVDA, 500, carol, 1 ether, 0, 0));
+        vm.stopPrank();
+        uint256 nvda = IERC20(NVDA).balanceOf(carol);
+        assertEq(IERC20(NVDA).allowance(carol, address(zap)), 0, "no allowance beforehand");
+        uint256 deadline = block.timestamp + 600;
+
+        // Permits are signed before pranking: signing reads the token, and a read would consume the prank.
+        OrdoStakeZap.Permit memory p1 = _permitFor(carol, carolKey, nvda / 2, deadline);
+        vm.prank(carol);
+        uint256 s1 = zap.zapTokenWithPermit(address(vault), nvda / 2, 0, p1);
+        assertGt(s1, 0, "token zap by permit");
+        OrdoStakeZap.Permit memory p2 = _permitFor(carol, carolKey, nvda / 4, deadline);
+        vm.prank(carol);
+        uint256 s2 = zap.zapBothWithPermit{value: 0.5 ether}(address(vault), nvda / 4, p2);
+        assertGt(s2, 0, "both zap by permit");
+        assertEq(farm.balanceOf(carol), s1 + s2);
+        assertEq(IERC20(NVDA).balanceOf(address(zap)), 0);
+
+        // A signature by someone else over Carol's account is refused before anything moves.
+        (, uint256 malloryKey) = makeAddrAndKey("mallory");
+        OrdoStakeZap.Permit memory bad = _permitFor(carol, malloryKey, nvda / 8, deadline);
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(OrdoStakeZap.PermitFailed.selector, NVDA));
+        zap.zapTokenWithPermit(address(vault), nvda / 8, 0, bad);
+    }
+
     function test_vault_refusesRandomETH() public onFork {
         vm.prank(alice);
         (bool ok,) = address(vault).call{value: 1 ether}("");

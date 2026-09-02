@@ -81,6 +81,87 @@ contract OrdoLadderManagerForkTest is Test {
         (,,,,,,, liq,,,,) = INonfungiblePositionManager(NPM).positions(tokenId);
     }
 
+    // ---------------------------------------------------------------- permit
+
+    bytes32 constant PERMIT_TYPEHASH = keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+
+    /// An EIP-2612 signature from `key` letting the manager pull `value` of `token`.
+    function _signPermit(address token, address owner, uint256 key, uint256 value, uint256 deadline) internal view returns (OrdoLadderManager.Permit memory pm) {
+        (, bytes memory ds) = token.staticcall(abi.encodeWithSignature("DOMAIN_SEPARATOR()"));
+        (, bytes memory n) = token.staticcall(abi.encodeWithSignature("nonces(address)", owner));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", abi.decode(ds, (bytes32)), keccak256(abi.encode(PERMIT_TYPEHASH, owner, address(mgr), value, abi.decode(n, (uint256)), deadline))));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, digest);
+        pm = OrdoLadderManager.Permit({token: token, value: value, deadline: deadline, v: v, r: r, s: s});
+    }
+
+    function test_openWithPermit_needsNoApproveTransaction() public onFork {
+        (address bob, uint256 bobKey) = makeAddrAndKey("bob-permit");
+        vm.deal(bob, 10 ether);
+        deal(USDG, bob, 100_000e6);
+        int24 tick = _tick();
+        uint256 deadline = block.timestamp + 600;
+        OrdoLadderManager.Permit memory pm = _signPermit(USDG, bob, bobKey, 6_000e6, deadline);
+        assertEq(IERC20(USDG).allowance(bob, address(mgr)), 0, "no allowance beforehand");
+
+        vm.prank(bob);
+        uint256 id = mgr.openLadderWithPermit{value: 2 ether}(POOL, _rungs(tick), 2, tick - 1000, tick + 1000, deadline, pm);
+
+        OrdoLadderManager.Ladder memory l = mgr.ladder(id);
+        assertEq(l.owner, bob);
+        assertEq(l.bins.length, 3);
+        assertGt(l.deposited1, 0, "USDG was pulled by the permit alone");
+        assertEq(IERC20(USDG).balanceOf(address(mgr)), 0, "nothing left in the manager");
+    }
+
+    function test_openWithPermit_refusesABadSignature() public onFork {
+        (address bob,) = makeAddrAndKey("bob-permit");
+        (, uint256 malloryKey) = makeAddrAndKey("mallory");
+        vm.deal(bob, 10 ether);
+        deal(USDG, bob, 100_000e6);
+        int24 tick = _tick();
+        uint256 deadline = block.timestamp + 600;
+        // Signed by someone else over Bob's account: the token rejects it, so no allowance appears.
+        OrdoLadderManager.Permit memory pm = _signPermit(USDG, bob, malloryKey, 6_000e6, deadline);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(OrdoLadderManager.PermitFailed.selector, USDG));
+        mgr.openLadderWithPermit{value: 2 ether}(POOL, _rungs(tick), 2, tick - 1000, tick + 1000, deadline, pm);
+    }
+
+    function test_openWithPermit_toleratesAReplayedPermit() public onFork {
+        (address bob, uint256 bobKey) = makeAddrAndKey("bob-permit");
+        vm.deal(bob, 10 ether);
+        deal(USDG, bob, 100_000e6);
+        int24 tick = _tick();
+        uint256 deadline = block.timestamp + 600;
+        OrdoLadderManager.Permit memory pm = _signPermit(USDG, bob, bobKey, 6_000e6, deadline);
+        // A front-runner submits the public signature first. The allowance now exists…
+        IERC20Permit(USDG).permit(bob, address(mgr), pm.value, pm.deadline, pm.v, pm.r, pm.s);
+        // …so Bob's own transaction, carrying the same now-spent permit, still goes through.
+        vm.prank(bob);
+        uint256 id = mgr.openLadderWithPermit{value: 2 ether}(POOL, _rungs(tick), 2, tick - 1000, tick + 1000, deadline, pm);
+        assertEq(mgr.ladder(id).owner, bob);
+    }
+
+    function test_addLiquidityWithPermit() public onFork {
+        (address bob, uint256 bobKey) = makeAddrAndKey("bob-permit");
+        vm.deal(bob, 10 ether);
+        deal(USDG, bob, 100_000e6);
+        int24 tick = _tick();
+        uint256 deadline = block.timestamp + 600;
+        // Permits are signed before pranking: signing reads the token, and a read would consume the prank.
+        OrdoLadderManager.Permit memory first = _signPermit(USDG, bob, bobKey, 6_000e6, deadline);
+        vm.prank(bob);
+        uint256 id = mgr.openLadderWithPermit{value: 2 ether}(POOL, _rungs(tick), 2, tick - 1000, tick + 1000, deadline, first);
+        uint256 before = mgr.ladder(id).deposited1;
+        // A fresh permit (the nonce moved on) for the top-up.
+        OrdoLadderManager.Rung[] memory more = new OrdoLadderManager.Rung[](1);
+        more[0] = OrdoLadderManager.Rung({tickLower: tick - 60, tickUpper: tick - 30, amount0: 0, amount1: 1_000e6, amount0Min: 0, amount1Min: 0});
+        OrdoLadderManager.Permit memory second = _signPermit(USDG, bob, bobKey, 1_000e6, deadline);
+        vm.prank(bob);
+        mgr.addLiquidityWithPermit(id, more, deadline, second);
+        assertGt(mgr.ladder(id).deposited1, before, "top-up landed by permit");
+    }
+
     // ------------------------------------------------------------------ open
 
     function test_open_mintsEveryBinAndRefundsTheRest() public onFork {
