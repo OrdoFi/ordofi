@@ -60,7 +60,14 @@ export const ERC6538_REGISTRY = "0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538" as 
  * OrdoStealthSend on Robinhood Chain: announce and deliver in one transaction.
  * Stateless and ownerless; see contracts/src/OrdoStealthSend.sol.
  */
-export const ORDO_STEALTH_SEND = "0x61EB326F7910d610Dbc6Abf268d4251B34552937" as const;
+export const ORDO_STEALTH_SEND = "0x43605141ae716E3e3b022288c4885276b908a374" as const;
+
+/** Matches FEE_BPS in the contract; taken from the gross amount in stealth mode. */
+export const STEALTH_FEE_BPS = 25n;
+export function stealthSplit(amount: bigint): { fee: bigint; net: bigint } {
+  const fee = (amount * STEALTH_FEE_BPS) / 10_000n;
+  return { fee, net: amount - fee };
+}
 
 export const STEALTH_SEND_ABI = [
   {
