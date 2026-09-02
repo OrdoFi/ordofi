@@ -417,9 +417,11 @@
             const h = await rpc("eth_sendRawTransaction", [raw]); lines.push(`${formatUnits(f.usdg, 6)} USDG ${txLink(h)}`); setResult("bal-result", lines.join("<br/>")); await waitFor(h);
             f.eth = BigInt(await rpc("eth_getBalance", [acct.address, "latest"]));
           }
-          const cost = 21000n * maxFeePerGas;
+          // Estimated, not assumed: Arbitrum charges L1 data posting as gas, so a transfer needs more than 21,000.
+          const gasEth = BigInt(await rpc("eth_estimateGas", [{ from: acct.address, to, value: "0x1" }])) * 5n / 4n;
+          const cost = gasEth * maxFeePerGas;
           if (f.eth > cost + DUST) {
-            const raw = await acct.signTransaction({ chainId: CHAIN.id, to, value: f.eth - cost, gas: 21000n, maxFeePerGas, maxPriorityFeePerGas: 0n, nonce: nonce++, type: "eip1559" });
+            const raw = await acct.signTransaction({ chainId: CHAIN.id, to, value: f.eth - cost, gas: gasEth, maxFeePerGas, maxPriorityFeePerGas: 0n, nonce: nonce++, type: "eip1559" });
             const h = await rpc("eth_sendRawTransaction", [raw]); lines.push(`${formatEther(f.eth - cost)} ETH ${txLink(h)}`); setResult("bal-result", lines.join("<br/>")); await waitFor(h);
           }
         }

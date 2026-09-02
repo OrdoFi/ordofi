@@ -176,11 +176,14 @@ for (const f of found) {
   if (stealth.address.toLowerCase() !== f.address.toLowerCase()) throw new Error("derived key controls a different address");
   const balance = BigInt(await rpcFetch("eth_getBalance", [stealth.address, "latest"]));
   if (balance === 0n) { ok(`${stealth.address} already empty`); continue; }
-  // One snapshot for both the fee and the amount, or the sweep is short.
+  // One snapshot for both the fee and the amount, or the sweep is short. Gas
+  // is estimated, not assumed: on Arbitrum a transfer's intrinsic gas includes
+  // posting its calldata to L1, so 21,000 is not enough.
   const maxFeePerGas = BigInt(await rpcFetch("eth_gasPrice", [])) * 2n;
-  const cost = 21000n * maxFeePerGas;
+  const gas = (BigInt(await rpcFetch("eth_estimateGas", [{ from: stealth.address, to: payer.address, value: "0x1" }])) * 5n) / 4n;
+  const cost = gas * maxFeePerGas;
   if (balance <= cost) { ok(`${stealth.address} holds ${formatEther(balance)} ETH, less than gas`); continue; }
-  swept = await send(stealth, { to: payer.address, value: balance - cost, gas: 21000n, maxFeePerGas });
+  swept = await send(stealth, { to: payer.address, value: balance - cost, gas, maxFeePerGas });
   sweptTotal += balance - cost;
   ok(`swept ${formatEther(balance - cost)} ETH from ${stealth.address} — ${swept.hash}`);
 }
