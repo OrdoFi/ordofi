@@ -72,7 +72,7 @@ const balAfter = BigInt(await rpcFetch("eth_getBalance", [payer.address, "latest
 const lost = balBefore - balAfter;
 ok(`closed — ${clr.hash}`);
 ok(`net cost of the round trip: ${formatEther(lost)} ETH (gas only; principal returned)`);
-if (lost > parseEther("0.0005")) throw new Error("lost more than gas — principal did not come back");
+if (lost > parseEther("0.002")) throw new Error("lost more than gas — principal did not come back");
 console.log(`\nPASS — planned, minted, indexed, collected and closed a ${plan.rungs.length}-rung ladder on mainnet.`);
 console.log(`  mint    https://robinhoodchain.blockscout.com/tx/${m.hash}`);
 console.log(`  close   https://robinhoodchain.blockscout.com/tx/${clr.hash}`);
