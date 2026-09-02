@@ -39,7 +39,15 @@ test("ledger replay sums wins net of principal and all gas, and survives a torn 
   const parsed = parseLedger(text);
   assert.equal(parsed.length, 4);
   const t = replayTotals(parsed);
-  assert.deepEqual(t, { fires: 2, won: 1, reverted: 1, gasWei: 3n, grossWei: 4n });
+  assert.deepEqual(t, { fires: 2, won: 1, reverted: 1, lost: 0, gasWei: 3n, grossWei: 4n });
+});
+
+test("a fill whose proceeds never reached the wallet is a loss of principal, not a win", () => {
+  const t = replayTotals([
+    { kind: "fire", t: 1, cycle: "A", sizeWei: "100", simNetWei: "3", hash: "0xa" },
+    { kind: "lost", t: 2, cycle: "A", sizeWei: "100", missingWei: "100", gasWei: "1", hash: "0xa" },
+  ]);
+  assert.deepEqual(t, { fires: 1, won: 0, reverted: 0, lost: 1, gasWei: 1n, grossWei: -100n });
 });
 
 test("Telemetry persists money events and rebuilds totals from disk", () => {

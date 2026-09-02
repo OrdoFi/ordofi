@@ -27,7 +27,8 @@
     "test": "node --import tsx --test apps/gateway/test/*.test.ts apps/auction/test/*.test.ts apps/watcher/test/*.test.ts apps/arb-bot/test/*.test.ts packages/store/test/*.test.ts packages/core/test/*.test.ts",
     "build:stealth": "esbuild apps/web/vendor/stealth-entry.js --bundle --format=esm --minify --target=es2022 --outfile=apps/web/public/vendor/stealth.js --legal-comments=none",
     "prove-stealth": "node --import tsx scripts/prove-stealth.mjs",
-    "prove-pools": "node --import tsx scripts/prove-pools.mjs"
+    "prove-pools": "node --import tsx scripts/prove-pools.mjs",
+    "prove-trade": "node --import tsx scripts/prove-trade.mjs"
   },
   "dependencies": {
     "tsx": "^4.19.0"

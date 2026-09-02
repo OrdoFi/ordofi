@@ -145,6 +145,7 @@
     .action:disabled { opacity: .55; cursor: default; }
     .status { margin-top: 10px; font-family: var(--mono); font-size: 11px; line-height: 1.65; color: var(--text-dim); word-break: break-word; }
     .status a { color: var(--accent); text-decoration: underline; }
+    .status .bad { color: var(--danger); font-weight: 600; }
 
     /* ---------- bottom panel ---------- */
     .bpanel { flex: none; height: 192px; border-top: 1px solid var(--border); background: var(--card); display: flex; flex-direction: column; }
@@ -1257,7 +1258,25 @@
       if (!quote) { b.textContent = verb; b.disabled = true; return; }
       if (quote.account && !quote.account.sufficient) { b.textContent = "Insufficient " + tokIn().symbol; b.disabled = true; return; }
       if (quote.approval) { b.textContent = "Approve " + tokIn().symbol; b.disabled = false; return; }
+      if (!sendable(quote)) {
+        // The server only hands out a transaction it has executed from this
+        // address and seen deliver the output. Anything else is not tradable.
+        b.textContent = "Trade blocked"; b.disabled = true;
+        setStatus(`<span class="bad">not sending: ${esc(quote.guard?.reason ?? "transaction not verified for this wallet")}</span>`);
+        return;
+      }
       b.textContent = verb; b.disabled = false;
+    }
+    /** A quote may be sent only with a delivery proof for the wallet that will sign it. */
+    function sendable(q) {
+      return !!(q && q.tx && q.tx.to && q.tx.data && q.guard?.ok === true && account && (q.for ?? "").toLowerCase() === account.toLowerCase());
+    }
+    /** Balance straight from the chain through the wallet's own connection, not our API. */
+    async function rawBalance(asset) {
+      if (asset === NATIVE) return BigInt(await provider.request({ method: "eth_getBalance", params: [account, "latest"] }));
+      const data = "0x70a08231" + account.slice(2).toLowerCase().padStart(64, "0");
+      const out = await provider.request({ method: "eth_call", params: [{ to: asset, data }, "latest"] });
+      return out && out !== "0x" ? BigInt(out) : 0n;
     }
     function setStatus(html) { $("status").innerHTML = html || ""; }
 
@@ -1286,16 +1305,45 @@
           setStatus("approved. Ready to trade.");
           return;
         }
+        if (!sendable(quote)) {
+          setStatus(`<span class="bad">not sending: ${esc(quote.guard?.reason ?? "this quote was not verified for the connected wallet")}</span>`);
+          requestQuote();
+          return;
+        }
+        const sent = quote; // pin it: a refresh must not swap the quote under the send
+        const outAsset = sent.tokenOut.address;
+        const outSym = sent.tokenOut.symbol;
+        const outDec = sent.tokenOut.decimals;
+        let before = null;
+        try { before = await rawBalance(outAsset); } catch { /* verified after by receipt only */ }
         setStatus("confirm in your wallet…");
         const hash = await provider.request({
           method: "eth_sendTransaction",
-          params: [{ from: account, to: quote.tx.to, data: quote.tx.data, value: quote.tx.value }],
+          params: [{ from: account, to: sent.tx.to, data: sent.tx.data, value: sent.tx.value }],
         });
         setStatus(`submitted through the protected RPC — <a target="_blank" href="${CHAIN.explorer}/tx/${hash}">view on explorer</a>`);
         const rec = await waitReceipt(hash);
         const ok = rec.status === "0x1";
+        // Success on-chain is not the same as the money arriving. Check that the
+        // wallet's own balance moved by what was promised before calling it filled.
+        let delivered = null;
+        if (ok && before != null) {
+          try {
+            const after = await rawBalance(outAsset);
+            const gas = BigInt(rec.gasUsed ?? "0x0") * BigInt(rec.effectiveGasPrice ?? "0x0");
+            const floor = BigInt(sent.minOut) - (outAsset === NATIVE ? gas : 0n);
+            delivered = { got: after - before, floor };
+          } catch { /* could not verify; say so below */ }
+        }
+        if (ok && delivered && delivered.got < delivered.floor) {
+          setStatus(`<span class="bad">the transaction succeeded but your wallet did not receive the expected ${esc(outSym)} `
+            + `(got ${esc(formatUnits(delivered.got < 0n ? 0n : delivered.got, outDec, 6))}, expected at least ${esc(formatUnits(sent.minOut, outDec, 6))}). `
+            + `Do not trade again. Contact support with this hash: <a target="_blank" href="${CHAIN.explorer}/tx/${hash}">${esc(hash)}</a></span>`);
+          console.error("delivery check failed", { hash, ...delivered, quote: sent });
+          return;
+        }
         setStatus((ok
-          ? `filled ✓ &nbsp;<a target="_blank" href="${CHAIN.explorer}/tx/${hash}">receipt</a> · routed privately via rpc.ordofi.network`
+          ? `filled ✓ &nbsp;<a target="_blank" href="${CHAIN.explorer}/tx/${hash}">receipt</a>${delivered ? ` · ${esc(formatUnits(delivered.got, outDec, 6))} ${esc(outSym)} received` : ""} · routed privately via rpc.ordofi.network`
           : `reverted — <a target="_blank" href="${CHAIN.explorer}/tx/${hash}">inspect</a> (price likely moved past your slippage)`));
         if (ok) {
           saveFill({ t: Date.now(), inS: `${$("amt-in").value} ${tokIn().symbol}`, outS: `${$("amt-out").value} ${tokOut().symbol}`, hash });

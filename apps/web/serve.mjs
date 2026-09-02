@@ -5,13 +5,14 @@ import { join, extname } from "node:path";
 import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
 import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
+import { startBlackholeWatch } from "@ordofi/core/blackhole-watch";
 import { OrdoStore } from "@ordofi/store";
 import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
 import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, LADDER_MANAGER } from "./pools.mjs";
-import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawCalldata, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
+import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawPlan, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
 function sendJson(req, res, status, body, headers = {}) {
@@ -729,10 +730,14 @@ async function handle(req, res) {
       else if (path === "/api/pools/stake-quote") body = await stakeQuote({
         vault: addr("vault"), mode: q.get("mode") === "both" ? "both" : "one", asset: ["eth", "weth", "token"].includes(q.get("asset")) ? q.get("asset") : "eth",
         amount: big("amount"), tokenAmount: big("tokenAmount"), slippageBps: Math.max(10, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
+        from: q.get("from") ? addr("from") : null,
       });
       else if (path === "/api/pools/stake-create") body = await stakeCreatePlan(addr("token"));
       else if (path === "/api/pools/stake-unstake") body = farmWithdrawCalldata(addr("farm"), big("shares"));
-      else if (path === "/api/pools/stake-withdraw") body = vaultWithdrawCalldata(addr("vault"), big("shares"), addr("to"));
+      else if (path === "/api/pools/stake-withdraw") body = await vaultWithdrawPlan({
+        vault: addr("vault"), shares: big("shares"), to: addr("to"), from: q.get("from") ? addr("from") : null,
+        slippageBps: Math.max(10, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
+      });
       else if (path === "/api/pools/stake-claim") body = claimCalldata(addr("farm"));
       else if (path === "/api/pools/stake-harvest") body = harvestCalldata(addr("vault"));
       else throw new Error("unknown pools endpoint");
@@ -866,6 +871,10 @@ setStakesStore(store);
 // Receipts for transactions the gateway forwarded, priced for the public counter.
 setInterval(() => resolveRouted(store).catch((e) => console.warn(`web | routed: ${e.message}`)), 10_000).unref?.();
 resolveRouted(store).catch(() => {});
+
+// If ETH ever lands on address(1) or its neighbours again, from anyone's
+// transaction, it is logged (and posted to ORDO_ALERT_WEBHOOK) within a minute.
+startBlackholeWatch();
 
 warmTradeCaches(store)
   .then((list) => console.log(`web | trade: ${list.length} tokens listed; resolvers ${JSON.stringify(resolverStats())}`))

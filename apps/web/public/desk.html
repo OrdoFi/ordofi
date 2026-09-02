@@ -277,6 +277,7 @@
         else if (e.kind === 'fire') txt = 'fired <code>' + esc(e.cycle) + '</code> at ' + fmtEthAbs(Number(e.sizeWei) / 1e18, 4) + ' · sim net ' + fmtEth(Number(e.simNetWei) / 1e18, 6) + ' · ' + txlink(e.hash);
         else if (e.kind === 'won') txt = 'won <code>' + esc(e.cycle) + '</code> · ' + fmtEth((Number(e.returnedWei) - Number(e.sizeWei)) / 1e18, 6) + ' gross, gas ' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + (e.estimated ? ' (proceeds at guard floor)' : '') + ' · ' + txlink(e.hash);
         else if (e.kind === 'reverted') txt = 'lost the race on <code>' + esc(e.cycle) + '</code> · cost gas ' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + ', principal safe · ' + txlink(e.hash);
+        else if (e.kind === 'lost') txt = 'PRINCIPAL MISSING on <code>' + esc(e.cycle) + '</code> · wallet short ' + fmtEthAbs(Number(e.missingWei) / 1e18, 6) + ' after a successful fill · bot halted · ' + txlink(e.hash);
         else txt = (e.cycle ? '<code>' + esc(e.cycle) + '</code> · ' : '') + esc(e.text);
         return '<li class="' + e.kind + '"><time>' + hhmm(e.t) + '</time><span class="k k-' + e.kind + '">' + e.kind + '</span><span class="t">' + txt + '</span></li>';
       }).join('');
@@ -284,13 +285,13 @@
     }
 
     function renderFills(ev) {
-      var fills = ev.filter(function (e) { return e.kind === 'won' || e.kind === 'reverted'; });
+      var fills = ev.filter(function (e) { return e.kind === 'won' || e.kind === 'reverted' || e.kind === 'lost'; });
       var tb = $('fills');
       if (!fills.length) return;
       tb.innerHTML = fills.slice(0, 40).map(function (e) {
         var won = e.kind === 'won';
-        var gross = won ? (Number(e.returnedWei) - Number(e.sizeWei)) / 1e18 : 0;
-        return '<tr><td>' + new Date(e.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + '</td><td>' + esc(e.cycle) + '</td><td>' + fmtEthAbs(Number(e.sizeWei) / 1e18, 4) + '</td><td class="' + (won ? 'pos' : 'neg') + '">' + (won ? 'won' : 'reverted') + '</td><td class="' + (won ? 'pos' : '') + '">' + (won ? fmtEth(gross, 6) : '—') + '</td><td>' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + '</td><td>' + txlink(e.hash) + '</td></tr>';
+        var gross = won ? (Number(e.returnedWei) - Number(e.sizeWei)) / 1e18 : e.kind === 'lost' ? -Number(e.missingWei) / 1e18 : 0;
+        return '<tr><td>' + new Date(e.t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + '</td><td>' + esc(e.cycle) + '</td><td>' + fmtEthAbs(Number(e.sizeWei) / 1e18, 4) + '</td><td class="' + (won ? 'pos' : 'neg') + '">' + (won ? 'won' : e.kind) + '</td><td class="' + (won ? 'pos' : e.kind === 'lost' ? 'neg' : '') + '">' + (won || e.kind === 'lost' ? fmtEth(gross, 6) : '—') + '</td><td>' + fmtEthAbs(Number(e.gasWei) / 1e18, 6) + '</td><td>' + txlink(e.hash) + '</td></tr>';
       }).join('');
       $('fills-span').textContent = fills.length + ' on record';
     }

@@ -1,6 +1,7 @@
 import { decodeFunctionResult, encodeFunctionData, getAddress, parseAbiItem } from "viem";
 import { rpcFetch } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
+import { proveDelivery, proofToJson } from "@ordofi/core/guard";
 import { amountsForLiquidity, tickToSqrtPriceX96 } from "@ordofi/core/liquidity";
 import { WETH, USDG, poolCache, quotePath, tradeTokens } from "./trade.mjs";
 import { poolState, poolsForToken } from "./pools.mjs";
@@ -141,7 +142,7 @@ export async function stakeView(vault, owner) {
  * "both": ETH and token together, no swap. Returns the zap calldata, the
  * quote for the swapped half, price impact and what protects the user.
  */
-export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 0n, tokenAmount = 0n, slippageBps = 100 }) {
+export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 0n, tokenAmount = 0n, slippageBps = 100, from = null }) {
   const s = await stakeView(vault);
   const zap = await zapAddress();
   const token = s.token;
@@ -174,11 +175,80 @@ export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 
       value = amount;
     }
   }
-  return { vault: s.vault, farm: s.farm, symbol: s.symbol, decimals: s.decimals, mode, asset, quote, slippageBps, tx: { to: zap, data, value: value.toString(), approve } };
+  // The zap swaps, deposits and stakes for msg.sender, then refunds dust to
+  // msg.sender. Prove exactly that from the depositor's address: their farm
+  // balance rises, they pay no more than they typed, the zap keeps nothing.
+  const check = await proven({
+    from,
+    tx: { to: zap, data, value },
+    approval: approve ? { token: approve.token, spender: zap, amount: BigInt(approve.amount) } : null,
+    expect: [{ asset: getAddress(s.farm), min: 1n }],
+    pay: [...(value > 0n ? [{ asset: "eth", max: value }] : []), ...(approve ? [{ asset: approve.token, max: BigInt(approve.amount) }] : [])],
+    mustNotRetain: [{ holder: zap, asset: "eth" }, { holder: zap, asset: getAddress(WETH) }, { holder: zap, asset: getAddress(token) }],
+  });
+  return {
+    vault: s.vault, farm: s.farm, symbol: s.symbol, decimals: s.decimals, mode, asset, quote, slippageBps,
+    ...check,
+    tx: check.guard.ok ? { to: zap, data, value: value.toString(), approve } : null,
+  };
+}
+
+/**
+ * Only a transaction that has been executed from the signer's own address, and
+ * seen to pay them, is handed out. Without a wallet there is nothing to prove
+ * against, so there is no `tx`.
+ */
+async function proven({ from, tx, approval = null, expect = [], pay = [], mustNotRetain = [] }) {
+  if (!from || !/^0x[0-9a-fA-F]{40}$/.test(from)) {
+    return { for: null, guard: { ok: false, reason: "connect a wallet: the transaction is built and verified for your address" } };
+  }
+  const proof = await proveDelivery({ from, tx, approval, expect, pay, mustNotRetain });
+  if (!proof.ok) console.error(`stakes | REFUSED ${from} -> ${tx.to}: ${proof.reason}`);
+  return { for: from, guard: proofToJson(proof) };
 }
 
 export const farmWithdrawCalldata = (farm, shares) => ({ to: getAddress(farm), data: encodeFunctionData({ abi: FARM_ABI, functionName: "withdraw", args: [BigInt(shares)] }) });
-export const vaultWithdrawCalldata = (vault, shares, to) => ({ to: getAddress(vault), data: encodeFunctionData({ abi: VAULT_ABI, functionName: "withdraw", args: [BigInt(shares), 0n, 0n, getAddress(to)] }) });
+
+/**
+ * Burn vault shares for their slice of the position. The minimums are the
+ * slice at the current price less `slippageBps`, so a price pushed between
+ * quote and inclusion makes the withdrawal revert instead of paying out a
+ * skewed mix. The proof then requires `from` to actually receive both sides.
+ */
+export async function vaultWithdrawPlan({ vault, shares, to, from = null, slippageBps = 100 }) {
+  shares = BigInt(shares);
+  if (shares <= 0n) throw new Error("nothing to withdraw");
+  const s = await stakeView(vault);
+  const supply = BigInt(s.shares);
+  if (supply === 0n) throw new Error("the vault has no shares");
+  if (shares > supply) throw new Error("more shares than exist");
+  const bps = BigInt(Math.max(0, Math.min(5000, Math.round(slippageBps))));
+  const wethPart = (BigInt(s.wethHeld) * shares) / supply;
+  const tokenPart = (BigInt(s.tokenHeld) * shares) / supply;
+  const minWeth = (wethPart * (10_000n - bps)) / 10_000n;
+  const minToken = (tokenPart * (10_000n - bps)) / 10_000n;
+  const wethIs0 = WETH.toLowerCase() < s.token.toLowerCase();
+  const data = encodeFunctionData({
+    abi: VAULT_ABI,
+    functionName: "withdraw",
+    args: [shares, wethIs0 ? minWeth : minToken, wethIs0 ? minToken : minWeth, getAddress(to)],
+  });
+  const tx = { to: getAddress(vault), data };
+  const check = await proven({
+    from,
+    tx,
+    // The WETH side is paid out as ETH.
+    expect: [{ asset: "eth", min: minWeth }, { asset: getAddress(s.token), min: minToken }],
+    pay: [{ asset: getAddress(vault), max: shares }],
+  });
+  return {
+    vault: s.vault, symbol: s.symbol, decimals: s.decimals, shares: shares.toString(), slippageBps: Number(bps),
+    expected: { weth: wethPart.toString(), token: tokenPart.toString() },
+    minimum: { weth: minWeth.toString(), token: minToken.toString() },
+    ...check,
+    tx: check.guard.ok ? tx : null,
+  };
+}
 export const claimCalldata = (farm) => ({ to: getAddress(farm), data: encodeFunctionData({ abi: FARM_ABI, functionName: "getReward" }) });
 export const harvestCalldata = (vault) => ({ to: getAddress(vault), data: encodeFunctionData({ abi: VAULT_ABI, functionName: "harvest" }) });
 

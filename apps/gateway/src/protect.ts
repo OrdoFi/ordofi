@@ -1,8 +1,10 @@
 import {
   parseTransaction,
   recoverTransactionAddress,
+  type Hex,
   type TransactionSerialized,
 } from "viem";
+import { proveDelivery, type DeliveryProof } from "@ordofi/core/guard";
 import { RpcError } from "./errors.js";
 
 export type Upstream = (method: string, params: unknown[]) => Promise<any>;
@@ -55,6 +57,31 @@ export async function simulateRaw(upstream: Upstream, rawTx: string): Promise<Si
   }
 }
 
+/**
+ * Would this transaction pay an address nobody controls?
+ *
+ * A transaction can succeed and still lose the money: SwapRouter02's
+ * `unwrapWETH9(amount, address(1))` sends ETH to the ecrecover precompile and
+ * reports success. The revert check above cannot see that; this one executes
+ * the transaction with eth_simulateV1 and looks at where the balances went.
+ * Whatever frontend built the calldata, a black-hole payment is refused here.
+ *
+ * Returns null when the upstream cannot simulate: a public RPC that refuses
+ * every send whenever one method is unavailable would be a worse outcome than
+ * one that only refuses what it can prove is a loss.
+ */
+export async function burnCheck(upstream: Upstream, rawTx: string): Promise<DeliveryProof | null> {
+  const tx = parseTransaction(rawTx as TransactionSerialized);
+  if (!tx.to) return null; // contract creation: nothing to misdirect
+  const from = await recoverTransactionAddress({ serializedTransaction: rawTx as TransactionSerialized });
+  const proof = await proveDelivery(
+    { from, tx: { to: tx.to, data: (tx.data ?? "0x") as Hex, value: tx.value ?? 0n } },
+    { simulate: (params) => upstream("eth_simulateV1", params) },
+  );
+  if (proof.unavailable) return null;
+  return proof;
+}
+
 export async function protectAndSend(upstream: Upstream, rawTx: string): Promise<string> {
   const sim = await simulateRaw(upstream, rawTx);
   if (!sim.ok) {
@@ -62,6 +89,18 @@ export async function protectAndSend(upstream: Upstream, rawTx: string): Promise
       -32000,
       `ordo: transaction would revert, not submitted: ${sim.revertReason}`,
       { ordoProtected: true },
+    );
+  }
+  const burn = await burnCheck(upstream, rawTx).catch(() => null);
+  if (burn && burn.leaks.length) {
+    throw new RpcError(
+      -32000,
+      `ordo: transaction would send funds to an address nobody controls, not submitted: ${burn.reason}`,
+      {
+        ordoProtected: true,
+        leaks: burn.leaks.map((l) => ({ to: l.to, asset: l.asset, amount: l.amount.toString() })),
+        hint: "a recipient in the calldata is a precompile or the zero/dead address; SwapRouter02 sentinels (address(1)/address(2)) are only resolved inside swap functions, never by unwrapWETH9/sweepToken/refundETH",
+      },
     );
   }
   return upstream("eth_sendRawTransaction", [rawTx]);

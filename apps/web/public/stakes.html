@@ -282,14 +282,22 @@
         if (e === 0n && t === 0n) { quote = null; q.innerHTML = ""; if (wallet.account) go.disabled = true; return; }
         url = `/api/pools/stake-quote?vault=${s.vault}&mode=both&amount=${e}&tokenAmount=${t}`;
       }
+      // The server executes the deposit from this account before handing it out;
+      // without the account there is no proof and no transaction.
+      if (wallet.account) url += `&from=${wallet.account}`;
       try {
         const p = await api(url);
         if (my !== qSeq) return;
         quote = p;
+        if (wallet.account && !p.tx) {
+          q.innerHTML = `<div class="kv"><span>Not offered</span><b class="dn">${esc(p.guard?.reason ?? "this deposit could not be verified for your wallet")}</b></div>`;
+          go.textContent = "Deposit blocked"; go.disabled = true;
+          return;
+        }
         q.innerHTML = p.quote ? `<div class="kv"><span>Swapped</span><b>${num(formatUnits(p.quote.swapIn, asset === "eth" ? 18 : s.decimals, 6), 6)} ${asset === "eth" ? "ETH" : esc(s.symbol)} → ${num(formatUnits(p.quote.swapOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"}</b></div>
           <div class="kv"><span>Price impact</span><b class="${p.quote.priceImpactBps > 100 ? "dn" : ""}">${p.quote.priceImpactBps == null ? "—" : (p.quote.priceImpactBps / 100).toFixed(2) + "%"}</b></div>
           <div class="kv"><span>Protection</span><b>at least ${num(formatUnits(p.quote.minOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"} or it reverts · through rpc.ordofi.network</b></div>` : `<div class="kv"><span>Protection</span><b>no swap · deposited at the pool's ratio, the rest refunded</b></div>`;
-        if (wallet.account) { go.textContent = p.tx.approve ? `Approve & deposit` : "Deposit & stake"; go.disabled = false; }
+        if (wallet.account) { go.textContent = p.tx?.approve ? `Approve & deposit` : "Deposit & stake"; go.disabled = !p.tx; }
       } catch (e) { if (my === qSeq) { q.innerHTML = `<div class="kv"><span>Quote</span><b class="dn">${esc(e.message)}</b></div>`; if (wallet.account) go.disabled = true; } }
     }
     const res = (id, html, bad) => { const el = $(id); if (el) { el.innerHTML = html; el.className = "res" + (bad ? " bad" : ""); } };
@@ -300,8 +308,9 @@
       try {
         if (quote.tx.approve) { res("d-res", "Approve in your wallet…"); await wallet.ensureAllowance(quote.tx.approve.token, quote.tx.approve.spender, quote.tx.approve.amount, (h) => res("d-res", `Approving ${txLink(h)}…`)); }
         await requote(s);
+        if (!quote?.tx) throw new Error(quote?.guard?.reason ?? "deposit not verified");
         res("d-res", "Confirm the deposit in your wallet…");
-        const r = await wallet.send(quote.tx, (h) => res("d-res", `Depositing & staking ${txLink(h)}…`));
+        const r = await wallet.sendProven(quote, (h) => res("d-res", `Depositing & staking ${txLink(h)}…`));
         res("d-res", `Staked · ${txLink(r.hash)}`);
         setTimeout(load, 1200);
       } catch (e) { res("d-res", fail(e), true); $("d-go").disabled = false; }
@@ -315,11 +324,12 @@
         // Compound: the WETH just paid goes straight back through the zap.
         const bal = BigInt(await wallet.rpc("eth_call", [{ to: WETH, data: "0x70a08231" + wallet.account.slice(2).padStart(64, "0") }, "latest"]));
         if (bal === 0n) { res("r-res", `Claimed · ${txLink(r.hash)} — nothing to compound`); return; }
-        const p = await api(`/api/pools/stake-quote?vault=${s.vault}&mode=one&asset=weth&amount=${bal}&slippageBps=${slippage}`);
+        const p = await api(`/api/pools/stake-quote?vault=${s.vault}&mode=one&asset=weth&amount=${bal}&slippageBps=${slippage}&from=${wallet.account}`);
+        if (!p.tx) throw new Error(p.guard?.reason ?? "compound not verified");
         res("r-res", "Approve WETH for the zap…");
         await wallet.ensureAllowance(p.tx.approve.token, p.tx.approve.spender, p.tx.approve.amount, (h) => res("r-res", `Approving ${txLink(h)}…`));
         res("r-res", "Confirm the compound in your wallet…");
-        const r2 = await wallet.send(p.tx, (h) => res("r-res", `Compounding ${txLink(h)}…`));
+        const r2 = await wallet.sendProven(p, (h) => res("r-res", `Compounding ${txLink(h)}…`));
         res("r-res", `Compounded · ${txLink(r2.hash)}`);
         setTimeout(load, 1200);
       } catch (e) { res("r-res", fail(e), true); }
@@ -336,9 +346,10 @@
           res("w-res", "1/2 · Confirm unstaking in your wallet…");
           await wallet.send(c, (h) => res("w-res", `1/2 · Unstaking ${txLink(h)}…`));
         }
-        const c2 = await api(`/api/pools/stake-withdraw?vault=${s.vault}&shares=${v}&to=${wallet.account}`);
-        res("w-res", "2/2 · Confirm the withdrawal in your wallet…");
-        const r = await wallet.send(c2, (h) => res("w-res", `2/2 · Withdrawing ${txLink(h)}…`));
+        const c2 = await api(`/api/pools/stake-withdraw?vault=${s.vault}&shares=${v}&to=${wallet.account}&from=${wallet.account}&slippageBps=${slippage}`);
+        if (!c2.tx) throw new Error(c2.guard?.reason ?? "withdrawal not verified");
+        res("w-res", `2/2 · Confirm the withdrawal in your wallet… (at least ${num(formatUnits(c2.minimum.weth, 18, 6), 6)} ETH + ${num(formatUnits(c2.minimum.token, s.decimals, 6), 6)} ${esc(s.symbol)} or it reverts)`);
+        const r = await wallet.sendProven(c2, (h) => res("w-res", `2/2 · Withdrawing ${txLink(h)}…`));
         res("w-res", `Withdrawn · ${txLink(r.hash)}`);
         setTimeout(load, 1200);
       } catch (e) { res("w-res", fail(e), true); $("w-go").disabled = false; }

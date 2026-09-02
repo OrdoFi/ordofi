@@ -104,7 +104,7 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
 <section><div class="wrap">
   <h2>What happens to a transaction here</h2>
   <div class="grid3">
-    <div><div class="n">01</div><h4>Simulated first</h4><p>Every <code>eth_sendRawTransaction</code> is executed from the recovered sender against the current state before it is forwarded. If it would revert, it is rejected with code <code>-32000</code> and never reaches the sequencer, so you do not pay gas for a guaranteed failure.</p></div>
+    <div><div class="n">01</div><h4>Simulated first</h4><p>Every <code>eth_sendRawTransaction</code> is executed from the recovered sender against the current state before it is forwarded. If it would revert, it is rejected with code <code>-32000</code> and never reaches the sequencer, so you do not pay gas for a guaranteed failure. If it would succeed but pay ETH or tokens to an address nobody controls — a precompile, the zero or dead address, the classic <code>unwrapWETH9(…, address(1))</code> mistake — it is rejected the same way, whichever app built the calldata.</p></div>
     <div><div class="n">02</div><h4>Delivered privately</h4><p>Robinhood Chain has no public mempool, but a public RPC still sees your intent before the sequencer does. Through OrdoFi it is held and handed straight to the sequencer, with nothing broadcast on the way.</p></div>
     <div><div class="n">03</div><h4>Backrun pays you</h4><p>With a key that carries a rebate address, transactions that move a pool go through a sealed-bid, second-price auction for the right to rebalance it. The clearing price is charged on-chain and 90% comes back as rebates.</p></div>
   </div>

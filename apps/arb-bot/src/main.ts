@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
 import { ROUTER, encodeExactInputSwap } from "@ordofi/core/router";
+import { proveDelivery } from "@ordofi/core/guard";
 import { Telemetry, edgeBps, wethReturned } from "./telemetry.js";
 
 /**
@@ -85,7 +86,7 @@ const STATUS_PORT = Number(process.env.ORDO_ARB_PORT ?? 8549);
 const tele = new Telemetry(join(DATA_DIR, "arb-ledger.ndjson"));
 // Past fills seed the breaker, so a restart cannot reset the daily gas budget.
 for (const e of tele.replay()) {
-  if ((e.kind === "won" || e.kind === "reverted") && e.t > Date.now() - 86_400_000) gasLedger.push({ at: e.t, wei: BigInt(e.gasWei) });
+  if ((e.kind === "won" || e.kind === "reverted" || e.kind === "lost") && e.t > Date.now() - 86_400_000) gasLedger.push({ at: e.t, wei: BigInt(e.gasWei) });
 }
 gasLedger.sort((a, b) => a.at - b.at);
 const STARTED_AT = Date.now();
@@ -249,6 +250,14 @@ function buildTx(c: Cycle, amountIn: bigint, minReturn: bigint): Hex {
 
 let busy = false; // one scan/fire at a time — quotes are many and the RPC is shared
 
+/**
+ * Set the moment a fill fails to bring the principal back to this wallet.
+ * From then on the bot scans but never fires again until a human restarts it:
+ * a round trip that "succeeds" while the ETH goes elsewhere is the one failure
+ * that gets worse with every repetition.
+ */
+let halted: string | null = null;
+
 /** Run tasks with bounded concurrency so a scan is fast but never floods the upstream. */
 async function pooled<T>(items: T[], limit: number, fn: (t: T) => Promise<void>): Promise<void> {
   let i = 0;
@@ -298,6 +307,10 @@ async function scan(cycles: Cycle[]): Promise<void> {
     return;
   }
   const best = found.reduce((a, b) => (b.gross > a.gross ? b : a));
+  if (halted) {
+    console.error(`[arb] HALTED — not firing on ${best.c.label}: ${halted}`);
+    return;
+  }
 
   // Price the real transaction. eth_estimateGas double-checks it would not
   // revert *and* gives the gas to subtract from the edge; a revert here means
@@ -312,6 +325,27 @@ async function scan(cycles: Cycle[]): Promise<void> {
   } catch {
     // would revert — edge taken, or too thin for the min-return guard
     tele.note("gone", `edge on ${best.c.label} (+${formatEther(best.gross)} ETH gross) vanished before we could price it`, best.c.label);
+    return;
+  }
+
+  // Not reverting is not the same as being paid. Execute the round trip from
+  // this wallet and require the ETH to come back here — principal plus the
+  // profit floor — with nothing left in the router or lost to a black hole.
+  const proof = await proveDelivery({
+    from: account.address,
+    tx: { to: ROUTER as Hex, data, value: best.amountIn },
+    expect: [{ asset: "eth", min: MIN_PROFIT }],
+    mustNotRetain: [{ holder: ROUTER as Hex, asset: "eth" }, { holder: ROUTER as Hex, asset: WETH as Hex }],
+  });
+  if (!proof.ok) {
+    if (proof.unavailable || proof.reverted) {
+      tele.note("gone", `could not prove the round trip on ${best.c.label}: ${proof.reason}`, best.c.label);
+      return;
+    }
+    // The transaction would succeed and the money would not come back to us.
+    halted = `delivery proof failed on ${best.c.label}: ${proof.reason}`;
+    console.error(`[arb] REFUSED and HALTED — ${halted}`);
+    tele.note("halt", halted, best.c.label);
     return;
   }
   const gasCost = gas * maxFeePerGas;
@@ -359,6 +393,19 @@ async function confirm(hash: string, cycle: string, amountIn: bigint, minReturn:
       // Exact proceeds from the WETH Withdrawal event; the min-return guard is
       // a floor if the log is ever missing, never an overstatement.
       const returned = wethReturned(rec.logs, WETH, ROUTER);
+      // The Withdrawal event says the router unwrapped the WETH; only the
+      // wallet's balance says who received it. Anything short of principal
+      // minus gas means the ETH went somewhere else, and the bot stops.
+      const before = lastBalance;
+      const after = BigInt((await rpcFetch("eth_getBalance", [account.address, "latest"]).catch(() => "0x0")) as string);
+      if (before != null && after > 0n && after < before - gasWei) {
+        const missing = before - gasWei - after;
+        halted = `fill ${hash} returned ${formatEther(returned ?? 0n)} ETH per the router but the wallet is short ${formatEther(missing)} ETH`;
+        console.error(`[arb] PROCEEDS MISSING — HALTED: ${halted}`);
+        tele.note("halt", halted, cycle);
+        tele.record({ kind: "lost", t: Date.now(), cycle, sizeWei: amountIn.toString(), missingWei: missing.toString(), gasWei: gasWei.toString(), hash });
+        return;
+      }
       console.log(`[arb] WON ${hash} — round trip cleared, +${formatEther((returned ?? minReturn) - amountIn)} ETH gross (gas ${formatEther(gasWei)} ETH)`);
       tele.record({ kind: "won", t: Date.now(), cycle, sizeWei: amountIn.toString(), returnedWei: (returned ?? minReturn).toString(), estimated: returned == null, gasWei: gasWei.toString(), hash });
     } else {

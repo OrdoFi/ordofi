@@ -193,12 +193,30 @@ class Wallet {
     return rec;
   }
 
-  /** ERC-20 allowance check + approve if short. */
+  /**
+   * Send a server-built plan, but only one the server has executed from this
+   * very account and seen deliver what it promises (`guard.ok`, `for`). A plan
+   * without that proof — fetched before the wallet connected, for another
+   * account, or refused by the simulation — is not sent, whatever it says.
+   */
+  async sendProven(plan, onSent) {
+    if (!this.account) throw new Error("connect a wallet first");
+    if (!plan?.tx || plan.guard?.ok !== true) throw new Error("not sending: " + (plan?.guard?.reason ?? "this transaction was not verified for your wallet"));
+    if ((plan.for ?? "").toLowerCase() !== this.account.toLowerCase()) throw new Error("not sending: this transaction was verified for a different account — refresh and try again");
+    return this.send(plan.tx, onSent);
+  }
+
+  /**
+   * ERC-20 allowance check + approve if short. Approves exactly what this
+   * action needs: an unlimited allowance turns any bug in the spender into a
+   * claim on the whole balance, and one more click is a fair price for not
+   * offering that.
+   */
   async ensureAllowance(token, spender, amount, onSent) {
     const sel = "0xdd62ed3e" + this.account.slice(2).padStart(64, "0") + spender.slice(2).padStart(64, "0");
     const cur = BigInt(await this.rpc("eth_call", [{ to: token, data: sel }, "latest"]));
     if (cur >= BigInt(amount)) return null;
-    const data = "0x095ea7b3" + spender.slice(2).padStart(64, "0") + "f".repeat(64);
+    const data = "0x095ea7b3" + spender.slice(2).padStart(64, "0") + BigInt(amount).toString(16).padStart(64, "0");
     return this.send({ to: token, data }, onSent);
   }
 }

@@ -16,13 +16,15 @@ import { formatEther, toEventSelector } from "viem";
 export type LedgerEvent =
   | { kind: "fire"; t: number; cycle: string; sizeWei: string; simNetWei: string; hash: string }
   | { kind: "won"; t: number; cycle: string; sizeWei: string; returnedWei: string; estimated: boolean; gasWei: string; hash: string }
-  | { kind: "reverted"; t: number; cycle: string; sizeWei: string; gasWei: string; hash: string };
+  | { kind: "reverted"; t: number; cycle: string; sizeWei: string; gasWei: string; hash: string }
+  /** The transaction succeeded but the wallet ended up short: money left and did not come back. */
+  | { kind: "lost"; t: number; cycle: string; sizeWei: string; missingWei: string; gasWei: string; hash: string };
 
-export interface Note { kind: "pass" | "gone" | "breaker" | "idle" | "info"; t: number; text: string; cycle?: string }
+export interface Note { kind: "pass" | "gone" | "breaker" | "idle" | "info" | "halt"; t: number; text: string; cycle?: string }
 
 export interface ScanSample { t: number; quotes: number; bestBps: number | null; bestLabel: string | null; positive: number }
 
-export interface Totals { fires: number; won: number; reverted: number; gasWei: bigint; grossWei: bigint }
+export interface Totals { fires: number; won: number; reverted: number; lost: number; gasWei: bigint; grossWei: bigint }
 
 /** Round-trip edge in basis points, signed; 2 decimals is plenty for display. */
 export function edgeBps(amountIn: bigint, amountOut: bigint): number {
@@ -54,7 +56,7 @@ export function wethReturned(
 }
 
 export function replayTotals(events: LedgerEvent[]): Totals {
-  const t: Totals = { fires: 0, won: 0, reverted: 0, gasWei: 0n, grossWei: 0n };
+  const t: Totals = { fires: 0, won: 0, reverted: 0, lost: 0, gasWei: 0n, grossWei: 0n };
   for (const e of events) {
     if (e.kind === "fire") t.fires++;
     else if (e.kind === "won") {
@@ -64,6 +66,10 @@ export function replayTotals(events: LedgerEvent[]): Totals {
     } else if (e.kind === "reverted") {
       t.reverted++;
       t.gasWei += BigInt(e.gasWei);
+    } else if (e.kind === "lost") {
+      t.lost++;
+      t.gasWei += BigInt(e.gasWei);
+      t.grossWei -= BigInt(e.missingWei);
     }
   }
   return t;
@@ -100,7 +106,7 @@ export class Telemetry {
   private events: LedgerEvent[] = [];
   private notes: Note[] = [];
   private samples: ScanSample[] = [];
-  private totals: Totals = { fires: 0, won: 0, reverted: 0, gasWei: 0n, grossWei: 0n };
+  private totals: Totals = { fires: 0, won: 0, reverted: 0, lost: 0, gasWei: 0n, grossWei: 0n };
   private scanCount = 0;
   private quotesTotal = 0;
 
@@ -129,6 +135,7 @@ export class Telemetry {
       fires: this.totals.fires + d.fires,
       won: this.totals.won + d.won,
       reverted: this.totals.reverted + d.reverted,
+      lost: this.totals.lost + d.lost,
       gasWei: this.totals.gasWei + d.gasWei,
       grossWei: this.totals.grossWei + d.grossWei,
     };

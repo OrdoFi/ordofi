@@ -19,6 +19,7 @@ import { encodeFunctionData, decodeFunctionResult, encodePacked, toEventSelector
 import { rpcFetch } from "@ordofi/core";
 import { getTokenInfo, toWhole } from "@ordofi/core/pricing";
 import { ROUTER as SWAP_ROUTER, encodeExactInputSwap } from "@ordofi/core/router";
+import { proveDelivery, proofToJson } from "@ordofi/core/guard";
 
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../data");
 const EXPLORER_API = "https://robinhoodchain.blockscout.com/api/v2";
@@ -653,6 +654,30 @@ export async function tradeQuote({ tokenIn, tokenOut, amountIn, slippageBps = 50
     }
   }
 
+  // The transaction is only handed out once it has been executed from the
+  // trader's own address and the trader provably ends up with the output.
+  // No wallet, no proof, no tx — an unverified swap is not offered to anyone.
+  const tx = { to: ROUTER, data, value: nativeIn ? "0x" + amt.toString(16) : "0x0" };
+  let guard;
+  if (!account) {
+    guard = { ok: false, reason: "connect a wallet: the transaction is built and verified for your address" };
+  } else if (!account.sufficient) {
+    guard = { ok: false, reason: "insufficient balance" };
+  } else {
+    const proof = await proveDelivery({
+      from,
+      tx: { to: ROUTER, data, value: nativeIn ? amt : 0n },
+      approval: account.needsApproval ? { token: tin, spender: ROUTER, amount: amt } : null,
+      expect: [{ asset: nativeOut ? "eth" : tout, min: minOut }],
+      pay: [{ asset: nativeIn ? "eth" : tin, max: amt }],
+      mustNotRetain: [{ holder: ROUTER, asset: nativeOut ? "eth" : tout }, { holder: ROUTER, asset: WETH }],
+    });
+    guard = proofToJson(proof);
+    if (!proof.ok) {
+      console.error(`trade | REFUSED ${from} ${amt} ${nativeIn ? "ETH" : tin} -> ${nativeOut ? "ETH" : tout}: ${proof.reason}`);
+    }
+  }
+
   const [infoIn, infoOut] = await Promise.all([getTokenInfo(tin), getTokenInfo(tout)]);
   return {
     amountIn: amt.toString(),
@@ -663,11 +688,9 @@ export async function tradeQuote({ tokenIn, tokenOut, amountIn, slippageBps = 50
     gasEstimate: best.gasEstimate.toString(),
     tokenIn: { address: nativeIn ? NATIVE : tin, symbol: nativeIn ? "ETH" : infoIn.symbol, decimals: infoIn.decimals },
     tokenOut: { address: nativeOut ? NATIVE : tout, symbol: nativeOut ? "ETH" : infoOut.symbol, decimals: infoOut.decimals },
-    tx: {
-      to: ROUTER,
-      data,
-      value: nativeIn ? "0x" + amt.toString(16) : "0x0",
-    },
+    for: account ? from : null,
+    guard,
+    tx: guard.ok ? tx : null,
     approval: account?.needsApproval
       ? {
           token: tin,
