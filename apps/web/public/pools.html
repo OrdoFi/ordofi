@@ -354,7 +354,7 @@
 
     // ---- depth + range guides
     async function loadDepth() {
-      try { depth = await api(`/api/pools/depth?pool=${pool}&span=${Math.round(Math.log(3) / Math.log(1.0001))}&buckets=80`); } catch { depth = null; }
+      try { depth = await api(`/api/pools/depth?pool=${pool}&span=${Math.round(Math.log(1.6) / Math.log(1.0001))}&buckets=96`); } catch { depth = null; }
       drawDepth();
     }
     const depthPx = { x0: 0, w: 0, lo: 0, hi: 0 }; // log-price → x mapping
@@ -362,7 +362,7 @@
       const cv = $("depth"); if (!cv || !state) return;
       const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = 220; cv.width = W * dpr; cv.height = H * dpr;
       const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, W, H);
-      const p = state.price, lo = Math.log(p / 3), hi = Math.log(p * 3);
+      const p = state.price, lo = Math.log(p / 1.6), hi = Math.log(p * 1.6);
       Object.assign(depthPx, { x0: 0, w: W, lo, hi });
       const X = (price) => ((Math.log(price) - lo) / (hi - lo)) * W;
       const padB = 18;
@@ -386,7 +386,7 @@
       const xc = X(p); ctx.strokeStyle = "#1d1616"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(xc, 0); ctx.lineTo(xc, H - padB); ctx.stroke(); ctx.setLineDash([]);
       // axis
       ctx.fillStyle = "#6d6660"; ctx.font = "10px Fira Code, monospace"; ctx.textAlign = "center";
-      for (const m of [1 / 2.5, 1 / 1.5, 1, 1.5, 2.5]) ctx.fillText(fmtPx(p * m), X(p * m), H - 4);
+      for (const m of [0.7, 0.85, 1, 1.2, 1.4]) ctx.fillText(fmtPx(p * m), X(p * m), H - 4);
       $("d-range").innerHTML = `range <b>${fmtPx(p * (1 + minPct / 100))}</b> – <b>${fmtPx(p * (1 + maxPct / 100))}</b> ${esc(state.quote.symbol)}`;
       $("range-hint").textContent = minPct >= 0 ? `entirely above price · ${token.symbol} only` : maxPct <= 0 ? `entirely below price · ${state.quote.symbol} only` : "straddles the price · both tokens";
     }
