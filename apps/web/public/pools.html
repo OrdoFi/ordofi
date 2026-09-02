@@ -9,7 +9,7 @@
   <link rel="manifest" href="/site.webmanifest" />
   <meta name="theme-color" content="#ff6414" />
   <title>OrdoFi — Pools · shaped liquidity on Robinhood Chain</title>
-  <meta name="description" content="Provide concentrated liquidity on Robinhood Chain in one transaction. Pick a token, drag a range, choose a shape, earn the fees." />
+  <meta name="description" content="Provide concentrated liquidity on Robinhood Chain in one transaction. Pick a token, set a range, choose a shape, earn the fees." />
   <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -19,6 +19,9 @@
     .pg .sub { color: var(--muted); max-width: 800px; margin: 6px 0 24px; font-size: 14.5px; line-height: 1.65; }
     .mono { font-family: var(--mono); }
     .chip { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; padding: 5px 10px; border: 1px solid var(--border-light); color: var(--text-dim); text-transform: uppercase; }
+    .search { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); background: var(--card); padding: 12px 16px; margin-bottom: 22px; }
+    .search input { flex: 1; border: none; background: none; font: inherit; font-size: 14px; letter-spacing: .04em; outline: none; color: var(--text); text-transform: uppercase; font-family: var(--mono); }
+    .search svg { color: var(--muted); }
 
     /* summary strip */
     .strip { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--border); background: var(--card); margin-bottom: 26px; }
@@ -48,95 +51,82 @@
     canvas.spark { width: 110px; height: 28px; display: inline-block; vertical-align: middle; }
 
     /* detail */
-    .head { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
-    .head .ic { width: 40px; height: 40px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); font-family: var(--mono); font-size: 14px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .head { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+    .head .ic { width: 56px; height: 56px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); font-family: var(--mono); font-size: 16px; display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
     .head .ic img { width: 100%; height: 100%; object-fit: cover; }
-    .head h1 { margin: 0; font-size: 30px; }
-    .head .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .head h1 { margin: 0; font-size: 34px; }
+    .head .nm { color: var(--muted); font-size: 14px; margin-top: 2px; }
+    .head .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 4px; }
     .head .meta a, .head .meta button { color: var(--accent); background: none; border: none; font: inherit; cursor: pointer; }
-    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 22px; align-items: start; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 22px; align-items: start; }
     .panel { border: 1px solid var(--border); background: var(--card); }
     .panel .ph { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-    .panel .ph h3 { font-size: 15px; }
+    .panel .ph h3 { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
     .panel .pb { padding: 16px; }
-    .pools { display: flex; gap: 6px; flex-wrap: wrap; }
-    .pools button { font-family: var(--mono); font-size: 11px; padding: 5px 9px; border: 1px solid var(--border); background: #fff; color: var(--text-dim); cursor: pointer; }
-    .pools button.on { border-color: var(--accent); color: var(--accent); }
-    .pools button small { color: var(--muted); margin-left: 5px; }
-    .tfs { display: flex; gap: 2px; }
-    .tfs button { font-family: var(--mono); font-size: 10.5px; padding: 4px 8px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; }
-    .tfs button.on { border-color: var(--border); background: #fff; color: var(--text); }
-    #candles { height: 220px; }
-    .depthwrap { position: relative; margin-top: 8px; border-top: 1px solid var(--border); padding-top: 10px; }
-    canvas#depth { width: 100%; height: 220px; display: block; cursor: crosshair; }
-    .depthnote { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 6px; flex-wrap: wrap; gap: 8px; }
-    .depthnote b { color: var(--text); font-weight: 500; }
+
+    /* pool groups */
+    .groups { display: flex; gap: 8px; flex-wrap: wrap; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .grp { position: relative; }
+    .grp > button { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; padding: 10px 14px; border: 1px solid var(--border); background: #fff; color: var(--text-dim); cursor: pointer; }
+    .grp > button small { color: var(--muted); font-size: 11px; letter-spacing: .06em; }
+    .grp > button b { font-weight: 500; }
+    .grp.on > button { border-color: var(--accent); color: var(--accent); }
+    .grp .menu { display: none; position: absolute; top: calc(100% + 4px); left: 0; min-width: 280px; background: #fff; border: 1px solid var(--border); z-index: 20; box-shadow: 0 10px 30px rgba(0,0,0,.08); }
+    .grp.open .menu { display: block; }
+    .grp .menu button { display: flex; justify-content: space-between; width: 100%; font-family: var(--mono); font-size: 12px; padding: 10px 14px; border: none; border-bottom: 1px solid var(--border); background: none; cursor: pointer; color: var(--text); text-align: left; }
+    .grp .menu button:last-child { border-bottom: none; }
+    .grp .menu button:hover { background: var(--bg-elev); }
+    .grp .menu button.on { color: var(--accent); }
+    .grp .menu button small { color: var(--muted); }
+    .grp .menu .v4 { color: var(--muted); cursor: default; }
+
+    /* chart */
+    .tfs { display: flex; gap: 2px; border: 1px solid var(--border); padding: 2px; background: #fff; }
+    .tfs button { font-family: var(--mono); font-size: 11px; padding: 6px 9px; border: none; background: none; color: var(--muted); cursor: pointer; }
+    .tfs button.on { background: var(--text); color: #fff; }
+    .seg { display: flex; border: 1px solid var(--border); padding: 2px; background: #fff; }
+    .seg button { font-family: var(--mono); font-size: 11px; padding: 6px 12px; border: none; background: none; color: var(--muted); cursor: pointer; }
+    .seg button.on { background: var(--text); color: #fff; }
+    .chartwrap { position: relative; height: 400px; }
+    #candles { position: absolute; inset: 0; }
+    #overlay { position: absolute; inset: 0; pointer-events: none; }
+    .guide { position: absolute; left: 8px; font-family: var(--mono); font-size: 10.5px; padding: 3px 8px; border: 1px solid var(--accent); background: #fff; color: var(--accent); pointer-events: none; z-index: 3; white-space: nowrap; }
     .stats4 { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--border); }
     .stats4 div { padding: 12px 16px; border-right: 1px solid var(--border); }
     .stats4 div:last-child { border-right: none; }
     .stats4 .k { font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
     .stats4 .v { font-family: var(--mono); font-size: 15px; margin-top: 3px; }
+    .chartnote { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 
     /* position builder */
-    .shapes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .shape { border: 1px solid var(--border); background: #fff; padding: 10px 10px 8px; cursor: pointer; text-align: center; }
-    .shape.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-    .shape canvas { width: 100%; height: 34px; display: block; }
-    .shape b { display: block; font-size: 12px; margin-top: 6px; }
-    .shape small { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.4; }
-    label.f { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin: 14px 0 6px; }
+    .stabs { display: flex; border: 1px solid var(--border); background: #fff; }
+    .stabs button { flex: 1; font-family: var(--mono); font-size: 12px; letter-spacing: .06em; padding: 11px 8px; border: none; border-right: 1px solid var(--border); background: none; color: var(--muted); cursor: pointer; }
+    .stabs button:last-child { border-right: none; }
+    .stabs button.on { background: var(--text); color: #fff; }
+    .sdesc { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-top: 10px; min-height: 38px; }
+    .sdesc canvas { width: 100%; height: 44px; display: block; margin-bottom: 8px; }
+    label.f { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 16px 0 6px; }
     .range2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .box { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); padding: 9px 11px; }
     .box input { flex: 1; min-width: 0; border: none; background: transparent; font-family: var(--mono); font-size: 14px; color: var(--text); outline: none; }
     .box .u { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: none; }
-    .box .pct { font-family: var(--mono); font-size: 10.5px; color: var(--accent); flex: none; }
+    .box .pct { display: flex; align-items: center; gap: 2px; border-left: 1px solid var(--border); padding-left: 8px; }
+    .box .pct input { width: 52px; flex: none; font-size: 12px; color: var(--accent); text-align: right; }
+    .box .pct span { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+    .box button.max { font-family: var(--mono); font-size: 10.5px; color: var(--accent); background: none; border: none; cursor: pointer; letter-spacing: .06em; }
+    .box.dim { opacity: .45; }
     .hint { font-family: var(--mono); font-size: 10.5px; color: var(--muted); margin-top: 5px; display: flex; justify-content: space-between; gap: 8px; }
     .hint button { background: none; border: none; color: var(--accent); font: inherit; cursor: pointer; }
-    .bins { display: flex; align-items: center; gap: 10px; }
-    .bins input[type=range] { flex: 1; accent-color: var(--accent); }
-    .bins span { font-family: var(--mono); font-size: 12px; width: 26px; text-align: right; }
     .preview { border: 1px solid var(--border); background: #fff; padding: 12px; margin-top: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.75; }
     .preview b { color: var(--text); font-weight: 500; }
     .preview canvas { width: 100%; height: 56px; display: block; margin: 8px 0 4px; }
-    .go { width: 100%; margin-top: 14px; padding: 13px; font-family: inherit; font-size: 14.5px; font-weight: 600; background: var(--accent); color: #fff; border: 1px solid var(--accent); cursor: pointer; }
-    .go:hover { background: var(--accent-dim); }
+    .go { width: 100%; margin-top: 14px; padding: 14px; font-family: inherit; font-size: 14.5px; font-weight: 600; background: var(--text); color: #fff; border: 1px solid var(--text); cursor: pointer; }
+    .go:hover { background: var(--accent); border-color: var(--accent); }
     .go:disabled { opacity: .45; cursor: default; }
     .result { margin-top: 10px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.6; min-height: 16px; }
     .result a { color: var(--accent); } .result.bad { color: var(--danger); }
     .feenote { font-size: 11.5px; color: var(--muted); margin-top: 12px; line-height: 1.6; }
-
-    /* positions */
-    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
-    .card { border: 1px solid var(--border); background: #fff; padding: 16px; }
-    .card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-    .card .top b { font-size: 15px; }
-    .card .top span { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
-    .card .val { font-family: var(--mono); font-size: 22px; margin: 8px 0 2px; }
-    .card .pnl { font-family: var(--mono); font-size: 12px; }
-    .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; margin-top: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
-    .kv b { color: var(--text); font-weight: 500; display: block; font-size: 12.5px; }
-    .rbar { position: relative; height: 6px; background: var(--bg-elev); margin: 14px 0 4px; }
-    .rbar i { position: absolute; top: 0; bottom: 0; background: var(--accent-soft); border: 1px solid var(--accent); box-sizing: border-box; }
-    .rbar em { position: absolute; top: -4px; width: 2px; height: 14px; background: var(--text); }
-    .rlab { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--muted); }
-    .acts { display: flex; gap: 8px; margin-top: 14px; }
-    .acts button { flex: 1; font-family: inherit; font-size: 12.5px; padding: 9px; border: 1px solid var(--border); background: #fff; color: var(--text-dim); cursor: pointer; }
-    .acts button:hover { border-color: var(--accent); color: var(--accent); }
-    .acts button:disabled { opacity: .45; cursor: default; }
     .empty { padding: 26px 18px; color: var(--muted); font-size: 13px; }
-
-    /* wallet picker */
-    .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 200; }
-    .modal.open { display: flex; }
-    .modal .sheet { background: var(--card); border: 1px solid var(--border); width: 440px; max-width: calc(100vw - 32px); }
-    .sheet .mh { padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; }
-    .sheet .mh .x { cursor: pointer; color: var(--muted); }
-    .wrow { display: flex; align-items: center; gap: 12px; padding: 12px 18px; cursor: pointer; border-bottom: 1px solid var(--border); color: inherit; }
-    .wrow:hover { background: var(--bg-elev); }
-    .wrow .wicon { width: 30px; height: 30px; background: var(--bg-elev); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-family: var(--mono); overflow: hidden; }
-    .wrow .wicon img { width: 100%; height: 100%; object-fit: contain; }
-    .wrow .wname { font-weight: 600; font-size: 13.5px; } .wrow .wsub, .wrow .wgo { font-family: var(--mono); font-size: 10px; color: var(--muted); }
-    .wrow .wmain { flex: 1; }
 
     @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } .strip { grid-template-columns: 1fr 1fr; } .stats4 { grid-template-columns: 1fr 1fr; } }
   </style>
@@ -145,57 +135,24 @@
   <nav>
     <div class="wrap">
       <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
-      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/docs">Docs</a></div>
+      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/pools" class="here">Pools</a><a href="/positions">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/docs">Docs</a></div>
       <div class="nav-side"><a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a></div>
     </div>
   </nav>
 
   <div class="wrap pg" id="root"><div class="empty">Loading…</div></div>
 
-  <div class="modal" id="wmodal"><div class="sheet"><div class="mh">Connect a wallet<span class="x" id="wmodal-x">✕</span></div><div id="wlist"></div></div></div>
-
   <script type="module">
+    import { wallet, rejected } from "/wallet.js";
+    import { renderLadders, esc, usd, num, fmtPx, fmtBig, formatUnits, parseUnits, SHAPE_DESC } from "/ladders.js";
     const $ = (id) => document.getElementById(id);
-    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const usd = (n, d) => n == null || !isFinite(n) ? "—" : "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: d ?? (Math.abs(n) >= 1000 ? 0 : Math.abs(n) >= 1 ? 2 : 4) });
-    const num = (n, d = 2) => n == null || !isFinite(n) ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d });
     const pct = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
     const cls = (v) => v == null ? "" : v >= 0 ? "up" : "dn";
-    const fmtPx = (p) => p == null ? "—" : p >= 1000 ? p.toLocaleString(undefined, { maximumFractionDigits: 2 }) : p >= 1 ? p.toFixed(4) : p >= 0.01 ? p.toFixed(6) : p.toExponential(3);
-    const parseUnits = (s, d) => { const [i, f = ""] = String(s || "0").trim().split("."); if (!/^\d*$/.test(i) || !/^\d*$/.test(f)) return null; return BigInt((i || "0") + f.slice(0, d).padEnd(d, "0")); };
-    const formatUnits = (v, d, dp = 6) => { const s = BigInt(v).toString().padStart(d + 1, "0"); const i = s.slice(0, -d) || "0", f = s.slice(-d).slice(0, dp).replace(/0+$/, ""); return f ? `${i}.${f}` : i; };
     const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
+    const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
     const EXPLORER = "https://robinhoodchain.blockscout.com";
     async function api(path) { const r = await fetch(path, { cache: "no-store" }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
-
-    // ---------------- wallet ----------------
-    let CHAIN = null, provider = null, account = null;
-    const discovered = new Map();
-    window.addEventListener("eip6963:announceProvider", (e) => { if (e.detail?.info?.rdns) discovered.set(e.detail.info.rdns, e.detail); });
-    const wallets = () => { window.dispatchEvent(new Event("eip6963:requestProvider")); const f = [...discovered.values()]; if (!f.length && window.ethereum) f.push({ info: { name: "Browser wallet", rdns: "injected" }, provider: window.ethereum }); return f; };
-    function openPicker() {
-      const found = wallets(), el = $("wlist");
-      el.innerHTML = found.length ? found.map((w, i) => `<div class="wrow" data-i="${i}"><div class="wicon">${w.info.icon ? `<img src="${esc(w.info.icon)}" alt="" />` : esc(w.info.name[0])}</div><div class="wmain"><div class="wname">${esc(w.info.name)}</div><div class="wsub">detected</div></div><div class="wgo">connect ›</div></div>`).join("")
-        : `<div class="empty">No wallet detected. Install MetaMask or Rabby, then reload.</div>`;
-      el.querySelectorAll(".wrow[data-i]").forEach((r) => r.addEventListener("click", () => connectWith(wallets()[Number(r.dataset.i)])));
-      $("wmodal").classList.add("open");
-    }
-    const closePicker = () => $("wmodal").classList.remove("open");
-    async function ensureChain() {
-      if ((await provider.request({ method: "eth_chainId" })) === CHAIN.idHex) return;
-      try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN.idHex }] }); }
-      catch { await provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: CHAIN.idHex, chainName: CHAIN.name + " · OrdoFi protected", rpcUrls: [CHAIN.rpc], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: [CHAIN.explorer] }] }); }
-    }
-    async function connectWith(entry) {
-      closePicker();
-      try { provider = entry.provider; const [a] = await provider.request({ method: "eth_requestAccounts" }); account = a; await ensureChain(); provider.on?.("accountsChanged", (x) => { account = x[0] ?? null; onAccount(); }); onAccount(); }
-      catch (e) { console.warn(e); }
-    }
-    function onAccount() { $("nav-connect").textContent = account ? short(account) : "Connect"; if (view === "detail") { loadBalances(); loadPositions(); replan(); } }
-    async function rpc(method, params) { const r = await fetch(CHAIN.rpc, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method, params }) }); const d = await r.json(); if (d.error) throw new Error(d.error.message); return d.result; }
-    async function waitFor(hash) { for (let i = 0; i < 90; i++) { await sleep(1000); const r = await rpc("eth_getTransactionReceipt", [hash]).catch(() => null); if (r) { if (r.status !== "0x1") throw new Error("transaction reverted"); return r; } } throw new Error("not confirmed in 90s"); }
     const txLink = (h) => `<a href="${EXPLORER}/tx/${h}" target="_blank" rel="noopener">${h.slice(0, 12)}…</a>`;
 
     // ---------------- routing ----------------
@@ -204,33 +161,36 @@
     let view = tokenParam ? "detail" : "list";
 
     // ================= LIST =================
-    let listData = null, tab = "trending";
+    let listData = null, tab = "trending", filter = "";
     async function renderList() {
       $("root").innerHTML = `
         <h1>Pools <span class="chip">Uniswap V3 · Robinhood Chain</span></h1>
-        <div class="sub">Provide liquidity to any token in one transaction. Pick a range on the chart, choose a shape, and your deposit is spread across it as a ladder of positions you control. Every swap through your range pays you. OrdoFi takes 1% of the fees you collect, never from your deposit.</div>
+        <div class="sub">Provide liquidity to any token in one transaction. Set a range on the chart, choose a shape, and your deposit is spread across it as a ladder of positions only your wallet controls. Every swap through your range pays you. OrdoFi takes 1% of the fees you collect, never from your deposit.</div>
+        <div class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q" placeholder="Search tokens" /></div>
         <div class="strip" id="strip"><div><div class="k">24h volume · all tokens</div><div class="v">—</div></div><div><div class="k">24h fees to LPs</div><div class="v">—</div></div><div><div class="k">Tokens with markets</div><div class="v">—</div></div><div><div class="k">ETH price</div><div class="v">—</div></div></div>
         <div class="tabs"><button class="on" data-t="trending">Trending</button><button data-t="established">Established</button></div>
         <table class="list"><thead><tr><th>Token</th><th>MC</th><th>24h</th><th>Fees 24h</th><th>Trades</th><th>Vol 24h</th><th>Age</th><th>Last 24h</th></tr></thead><tbody id="rows"><tr><td colspan="8" class="empty">Loading markets…</td></tr></tbody></table>`;
       document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => { tab = b.dataset.t; document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b)); renderRows(); }));
+      $("q").addEventListener("input", () => { filter = $("q").value.trim().toLowerCase(); renderRows(); });
       listData = await api("/api/pools");
-      const [eth] = await Promise.all([api("/api/trade/chain").then(() => api("/api/desk")).then((d) => d.ethUsd).catch(() => null)]);
+      const eth = await api("/api/desk").then((d) => d.ethUsd).catch(() => null);
       const s = $("strip").querySelectorAll(".v");
       s[0].textContent = usd(listData.totals.volume24Usd); s[1].textContent = usd(listData.totals.fees24Usd); s[2].textContent = listData.totals.tokens; s[3].textContent = usd(eth, 2);
       renderRows();
     }
     function renderRows() {
-      const rows = listData[tab] ?? [];
+      let rows = listData[tab] ?? [];
+      if (filter) rows = [...listData.trending, ...listData.established].filter((t, i, a) => a.findIndex((x) => x.token === t.token) === i).filter((t) => t.symbol.toLowerCase().includes(filter) || (t.name ?? "").toLowerCase().includes(filter) || t.token.includes(filter));
       $("rows").innerHTML = rows.length ? rows.map((t, i) => `<tr class="row" data-t="${t.token}">
         <td><div class="tok"><div class="ic">${t.icon ? `<img src="${esc(t.icon)}" alt="" />` : esc(t.symbol.slice(0, 2))}</div><div><b>${esc(t.symbol)}</b><small>${esc(t.name ?? "")}</small></div></div></td>
         <td>${usd(t.marketCapUsd)}</td><td class="${cls(t.change24)}">${pct(t.change24)}</td><td>${usd(t.fees24Usd)}</td><td>${num(t.trades24, 0)}</td><td>${usd(t.volume24Usd)}</td><td>${t.ageDays == null ? "—" : t.ageDays + "d"}</td>
-        <td><canvas class="spark" data-i="${i}" width="220" height="56"></canvas></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No markets yet.</td></tr>`;
+        <td><canvas class="spark" data-i="${i}" width="220" height="56"></canvas></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No markets match.</td></tr>`;
       $("rows").querySelectorAll("tr.row").forEach((r) => r.addEventListener("click", () => { location.href = `/pools/${r.dataset.t}`; }));
       rows.forEach((t, i) => spark(t, $("rows").querySelector(`canvas[data-i="${i}"]`)));
     }
     async function spark(t, cv) {
       try {
-        const d = await api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : "0x5fc5360d0400a0fd4f2af552add042d716f1d168"}&bucketSec=1800&hours=24`);
+        const d = await api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24`);
         const c = d.candles.map((x) => x.close); if (c.length < 2) return;
         const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...c), hi = Math.max(...c);
         ctx.strokeStyle = c.at(-1) >= c[0] ? "#1e9e6a" : "#c0392b"; ctx.lineWidth = 2.5; ctx.beginPath();
@@ -240,178 +200,248 @@
     }
 
     // ================= DETAIL =================
-    let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfMin = 5, chart, series;
-    let shape = "bidask", bins = 40, minPct = -30, maxPct = 40, balances = null, replanT = null, dragging = null;
+    const TFS = [[5, "5s"], [30, "30s"], [60, "1m"], [300, "5m"], [900, "15m"], [1800, "30m"], [3600, "1h"], [14400, "4h"], [43200, "12h"], [86400, "24h"]];
+    const HOURS = { 5: 1, 30: 2, 60: 8, 300: 48, 900: 168, 1800: 336, 3600: 720, 14400: 2880, 43200: 6000, 86400: 9600 };
+    let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfSec = 900, chart, series, minLine, maxLine;
+    let shape = "bidask", bins = 40, minPct = -30, maxPct = 40, balances = null, replanT = null, supply = null, mode = "price", candlesQ = [], portfolio = null;
+    // Everything on the chart is in display units: USD per token, or USD market cap.
+    const factor = () => (state?.quote.usdPerToken ?? 0) * (mode === "mc" && supply ? supply : 1);
+    const disp = (quotePrice) => quotePrice * factor();
+    const fromDisp = (v) => v / factor();
+    const fmtDisp = (v) => mode === "mc" ? fmtBig(v) : v >= 1 ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : fmtPx(v);
+    const rangeLo = () => state.price * (1 + minPct / 100), rangeHi = () => state.price * (1 + maxPct / 100);
 
     async function renderDetail() {
       $("root").innerHTML = `<div class="empty">Loading ${esc(tokenParam)}…</div>`;
       const tokens = await api("/api/trade/tokens");
       token = tokens.find((t) => t.address === tokenParam || t.symbol.toLowerCase() === tokenParam);
-      if (!token) { $("root").innerHTML = `<div class="empty">Unknown token. <a href="/pools" style="color:var(--accent)">Back to pools</a></div>`; return; }
-      const list = await api(`/api/pools/token?token=${token.address}`);
+      if (!token && !/^0x[0-9a-f]{40}$/.test(tokenParam)) { $("root").innerHTML = `<div class="empty">Unknown token. <a href="/pools" style="color:var(--accent)">Back to pools</a></div>`; return; }
+      const list = await api(`/api/pools/token?token=${token?.address ?? tokenParam}`);
       pools = list.pools;
-      if (!pools.length) { $("root").innerHTML = `<div class="empty">${esc(token.symbol)} has no Uniswap V3 pool against ETH or USDG yet.</div>`; return; }
-      pool = pools[0].pool;
+      if (!pools.length) { $("root").innerHTML = `<div class="empty">${esc(token?.symbol ?? tokenParam)} has no Uniswap V3 pool against ETH or USDG yet.</div>`; return; }
+      if (!token) { // a token the list has not ranked yet: take its identity from the pool
+        const st = await api(`/api/pools/state?pool=${pools[0].pool}&base=${tokenParam}`);
+        token = { address: tokenParam, symbol: st.base.symbol, name: st.base.name, icon: st.base.icon, decimals: st.base.decimals };
+      }
+      const want = new URLSearchParams(location.search).get("pool");
+      pool = pools.find((p) => p.pool === want)?.pool ?? pools[0].pool;
 
       $("root").innerHTML = `
         <div class="head"><div class="ic">${token.icon ? `<img src="${esc(token.icon)}" alt="" />` : esc(token.symbol.slice(0, 2))}</div>
-          <div><h1>${esc(token.symbol)}</h1><div class="meta">${esc(token.name ?? "")} · <span class="mono">${token.address}</span> <button id="copy-addr">copy</button> · <a href="${EXPLORER}/token/${token.address}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${token.address}">trade</a></div></div></div>
+          <div><h1>${esc(token.symbol)}</h1><div class="nm">${esc(token.name ?? "")} · Robinhood Chain</div><div class="meta"><span class="mono">${token.address}</span> <button id="copy-addr">copy</button> · <a href="${EXPLORER}/token/${token.address}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${token.address}">trade</a></div></div></div>
         <div class="grid">
           <div>
             <div class="panel">
-              <div class="ph"><h3>Liquidity pools</h3><div class="pools" id="poolbtns"></div></div>
-              <div class="ph"><div class="tfs" id="tfs">${[1, 5, 15, 60, 240, 1440].map((m) => `<button data-tf="${m}" class="${m === tfMin ? "on" : ""}">${m < 60 ? m + "m" : m < 1440 ? m / 60 + "h" : "1d"}</button>`).join("")}</div><span class="mono" style="font-size:10.5px;color:var(--muted)" id="chart-note"></span></div>
-              <div class="pb" style="padding-bottom:10px"><div id="candles"></div>
-                <div class="depthwrap"><canvas id="depth" height="220"></canvas>
-                  <div class="depthnote"><span>drag the guides to set your range · <b id="d-cur">—</b> per ${esc(token.symbol)}</span><span id="d-range">—</span></div></div></div>
+              <div class="ph"><h3>Liquidity pools</h3><span class="chartnote" id="pool-note"></span></div>
+              <div class="groups" id="groups"></div>
+              <div class="ph"><div class="tfs" id="tfs">${TFS.map(([s, l]) => `<button data-tf="${s}" class="${s === tfSec ? "on" : ""}">${l}</button>`).join("")}</div>
+                <div style="display:flex;gap:10px;align-items:center"><div class="seg" id="mode"><button data-m="price" class="on">Price</button><button data-m="mc">MC</button></div><span class="chartnote" id="chart-note"></span></div></div>
+              <div class="chartwrap" id="chartwrap"><div id="candles"></div><canvas id="overlay"></canvas><div class="guide" id="g-max" style="display:none"></div><div class="guide" id="g-min" style="display:none"></div></div>
               <div class="stats4"><div><div class="k">Market cap</div><div class="v" id="s-mc">—</div></div><div><div class="k">24h change</div><div class="v" id="s-chg">—</div></div><div><div class="k">24h volume</div><div class="v" id="s-vol">—</div></div><div><div class="k">24h fees</div><div class="v" id="s-fees">—</div></div></div>
             </div>
-            <div class="panel" style="margin-top:22px"><div class="ph"><h3>Your positions</h3><span class="mono" style="font-size:10.5px;color:var(--muted)" id="pos-note">connect a wallet</span></div><div class="pb"><div class="cards" id="cards"><div class="empty">Connect a wallet to see your positions.</div></div></div></div>
+            <div class="panel" style="margin-top:22px"><div class="ph"><h3>Your positions</h3><span class="chartnote" id="pos-note">connect a wallet</span></div><div id="cards"><div class="empty">Connect a wallet to see your positions.</div></div></div>
           </div>
           <div class="panel">
-            <div class="ph"><h3>Position shape</h3><span class="mono" style="font-size:10.5px;color:var(--muted)">one transaction</span></div>
+            <div class="ph"><h3>Position shape</h3><span class="chartnote">one transaction</span></div>
             <div class="pb">
-              <div class="shapes" id="shapes">
-                ${[["spot", "Spot", "Even across the range."], ["curve", "Curve", "Most where the price is now."], ["bidask", "Bid-Ask", "Heaviest at the edges. Converts as price walks through it, so it works as a ladder."]].map(([k, n, d]) => `<div class="shape ${k === shape ? "on" : ""}" data-s="${k}"><canvas width="200" height="68"></canvas><b>${n}</b><small>${d}</small></div>`).join("")}
-              </div>
-              <label class="f">Range · % from the current price</label>
-              <div class="range2">
-                <div class="box"><span class="pct">min</span><input id="minpct" value="${minPct}" inputmode="decimal" /><span class="u">%</span></div>
-                <div class="box"><span class="pct">max</span><input id="maxpct" value="${maxPct}" inputmode="decimal" /><span class="u">%</span></div>
-              </div>
-              <div class="hint"><span id="range-hint">—</span><span><button data-r="-5,5">±5%</button> <button data-r="-15,15">±15%</button> <button data-r="-30,40">−30/+40</button> <button data-r="-50,100">wide</button></span></div>
-              <label class="f">Bins</label>
-              <div class="bins"><input type="range" id="bins" min="1" max="40" value="${bins}" /><span id="bins-v">${bins}</span></div>
+              <div class="stabs" id="shapes">${[["spot", "Spot"], ["curve", "Curve"], ["bidask", "Bid-Ask"]].map(([k, n]) => `<button data-s="${k}" class="${k === shape ? "on" : ""}">${n}</button>`).join("")}</div>
+              <div class="sdesc"><canvas id="sglyph" width="600" height="88"></canvas><span id="sdesc-t"></span></div>
+              <label class="f" id="lab-min">Min price · USD</label>
+              <div class="box"><input id="minv" inputmode="decimal" placeholder="0.0" /><span class="pct"><input id="minpct" inputmode="decimal" value="${minPct}" /><span>%</span></span></div>
+              <label class="f" id="lab-max">Max price · USD</label>
+              <div class="box"><input id="maxv" inputmode="decimal" placeholder="0.0" /><span class="pct"><input id="maxpct" inputmode="decimal" value="+${maxPct}" /><span>%</span></span></div>
+              <div class="hint"><span id="range-hint">—</span><span><button data-r="-10,10">±10%</button> <button data-r="-30,40">−30/+40</button> <button data-r="-50,100">wide</button></span></div>
               <label class="f">Deposit</label>
-              <div class="box" id="box-base"><input id="amt-base" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(token.symbol)}</span></div>
-              <div class="hint"><span id="bal-base"></span><span><button id="max-base">max</button></span></div>
-              <div class="box" id="box-quote" style="margin-top:8px"><input id="amt-quote" placeholder="0.0" inputmode="decimal" /><span class="u" id="quote-sym">ETH</span></div>
-              <div class="hint"><span id="bal-quote"></span><span><button id="max-quote">max</button></span></div>
+              <div class="box" id="box-base"><input id="amt-base" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(token.symbol)}</span><button class="max" id="max-base">MAX</button></div>
+              <div class="hint"><span id="bal-base"></span></div>
+              <div class="box" id="box-quote" style="margin-top:8px"><input id="amt-quote" placeholder="0.0" inputmode="decimal" /><span class="u" id="quote-sym">ETH</span><button class="max" id="max-quote">MAX</button></div>
+              <div class="hint"><span id="bal-quote"></span></div>
+              <label class="f">Bins</label>
+              <div class="box"><input id="bins" inputmode="numeric" value="${bins}" /><span class="u">positions · max 40</span></div>
               <div class="preview" id="preview">Set a range and an amount to see the ladder.</div>
-              <button class="go" id="go" disabled>Connect wallet</button>
+              <button class="go" id="go">Connect wallet</button>
               <div class="result" id="result"></div>
-              <div class="feenote">Positions are minted into OrdoLadderManager and only your wallet can collect or close them. OrdoFi takes 1% of the swap fees you collect, never from your deposit. Sent through rpc.ordofi.network.</div>
+              <div class="feenote">Positions are minted into OrdoLadderManager and only your wallet can collect, add to, or close them. OrdoFi takes 1% of the swap fees you collect, never from your deposit. Sent through rpc.ordofi.network.</div>
             </div>
           </div>
         </div>`;
 
       $("copy-addr").addEventListener("click", () => navigator.clipboard.writeText(token.address));
-      document.querySelectorAll("#shapes .shape").forEach((el) => { drawShapeGlyph(el.querySelector("canvas"), el.dataset.s); el.addEventListener("click", () => { shape = el.dataset.s; document.querySelectorAll("#shapes .shape").forEach((x) => x.classList.toggle("on", x === el)); replan(); }); });
-      $("minpct").addEventListener("input", () => { minPct = Number($("minpct").value); drawDepth(); replan(); });
-      $("maxpct").addEventListener("input", () => { maxPct = Number($("maxpct").value); drawDepth(); replan(); });
-      document.querySelectorAll(".hint button[data-r]").forEach((b) => b.addEventListener("click", () => { [minPct, maxPct] = b.dataset.r.split(",").map(Number); $("minpct").value = minPct; $("maxpct").value = maxPct; drawDepth(); replan(); }));
-      $("bins").addEventListener("input", () => { bins = Number($("bins").value); $("bins-v").textContent = bins; replan(); });
+      document.querySelectorAll("#shapes button").forEach((el) => el.addEventListener("click", () => { shape = el.dataset.s; document.querySelectorAll("#shapes button").forEach((x) => x.classList.toggle("on", x === el)); drawShape(); replan(); }));
+      drawShape();
+      $("minpct").addEventListener("input", () => { const v = Number($("minpct").value.replace("+", "")); if (isFinite(v)) { minPct = Math.min(v, maxPct - 0.1); syncRange("pct"); } });
+      $("maxpct").addEventListener("input", () => { const v = Number($("maxpct").value.replace("+", "")); if (isFinite(v)) { maxPct = Math.max(v, minPct + 0.1); syncRange("pct"); } });
+      $("minv").addEventListener("input", () => { const v = Number($("minv").value.replace(/,/g, "")); if (v > 0 && state) { minPct = (fromDisp(v) / state.price - 1) * 100; syncRange("val"); } });
+      $("maxv").addEventListener("input", () => { const v = Number($("maxv").value.replace(/,/g, "")); if (v > 0 && state) { maxPct = (fromDisp(v) / state.price - 1) * 100; syncRange("val"); } });
+      document.querySelectorAll(".hint button[data-r]").forEach((b) => b.addEventListener("click", () => { [minPct, maxPct] = b.dataset.r.split(",").map(Number); syncRange(); }));
+      $("bins").addEventListener("input", () => { bins = Math.max(1, Math.min(40, Number($("bins").value) || 1)); replan(); });
       $("amt-base").addEventListener("input", replan); $("amt-quote").addEventListener("input", replan);
       $("max-base").addEventListener("click", () => { if (balances?.base != null) { $("amt-base").value = balances.base; replan(); } });
-      $("max-quote").addEventListener("click", () => { if (balances?.quote != null) { $("amt-quote").value = balances.quote; replan(); } });
-      $("go").addEventListener("click", mint);
-      document.querySelectorAll("#tfs button").forEach((b) => b.addEventListener("click", () => { tfMin = Number(b.dataset.tf); document.querySelectorAll("#tfs button").forEach((x) => x.classList.toggle("on", x === b)); loadCandles(); }));
-      renderPoolButtons();
+      $("max-quote").addEventListener("click", () => { if (balances?.quote != null) { $("amt-quote").value = Math.max(0, balances.quote - (state.quote.address === WETH ? 0.003 : 0)); replan(); } });
+      $("go").addEventListener("click", build);
+      document.querySelectorAll("#tfs button").forEach((b) => b.addEventListener("click", () => { tfSec = Number(b.dataset.tf); document.querySelectorAll("#tfs button").forEach((x) => x.classList.toggle("on", x === b)); loadCandles(); }));
+      document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => { if (b.dataset.m === "mc" && !supply) return; mode = b.dataset.m; document.querySelectorAll("#mode button").forEach((x) => x.classList.toggle("on", x === b)); applyMode(); }));
       initChart();
-      bindDepthDrag();
+      renderGroups();
       await selectPool(pool);
+      wallet.onChange(() => { loadBalances(); loadPositions(); replan(); });
       loadPositions();
+      setInterval(() => { if (document.visibilityState === "visible") loadCandles(true); }, tfSec < 60 ? 5000 : 30000);
     }
 
-    function renderPoolButtons() {
-      $("poolbtns").innerHTML = pools.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}">${esc(token.symbol)}/${p.quoteSymbol} ${(p.fee / 10000).toFixed(2)}%<small>${BigInt(p.liquidity) > 0n ? "" : "empty"}</small></button>`).join("");
-      $("poolbtns").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));
+    // ---- pool groups: USDG pools, ETH pools (V3), with V4 shown as coming
+    function renderGroups() {
+      const byQuote = { [USDG]: [], [WETH]: [] };
+      for (const p of pools) (byQuote[p.quote] ?? (byQuote[p.quote] = [])).push(p);
+      const fmtLiq = (p) => { const l = Number(BigInt(p.liquidity)); return l > 0 ? "live" : "empty"; };
+      const groups = [[USDG, "USDG"], [WETH, "V3 ETH"]].filter(([q]) => byQuote[q]?.length);
+      $("groups").innerHTML = groups.map(([q, label]) => {
+        const ps = byQuote[q], cur = ps.find((p) => p.pool === pool);
+        return `<div class="grp ${cur ? "on" : ""}" data-q="${q}"><button><small>${label}</small><b>${cur ? `${(cur.fee / 1e4).toFixed(2)}%` : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
+          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${(p.fee / 1e4).toFixed(2)}%</span><small>${fmtLiq(p)}</small></button>`).join("")}</div></div>`;
+      }).join("") + `<div class="grp"><button disabled style="cursor:default;opacity:.55"><small>V4 ETH</small><b>soon</b></button></div>`;
+      $("groups").querySelectorAll(".grp > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
+      $("groups").querySelectorAll(".menu button[data-p]").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));
     }
+    document.addEventListener("click", () => document.querySelectorAll(".grp.open").forEach((x) => x.classList.remove("open")));
+
     async function selectPool(p) {
-      pool = p; renderPoolButtons();
+      pool = p;
+      history.replaceState(null, "", `/pools/${token.address}${p !== pools[0].pool ? `?pool=${p}` : ""}`);
       state = await api(`/api/pools/state?pool=${pool}&base=${token.address}`);
+      renderGroups();
       $("quote-sym").textContent = state.quote.symbol;
-      $("d-cur").textContent = fmtPx(state.price) + " " + state.quote.symbol + (state.priceUsd ? ` (${usd(state.priceUsd)})` : "");
-      loadCandles(); loadDepth(); loadStats(); loadBalances(); replan();
+      $("pool-note").textContent = `${(state.fee / 1e4).toFixed(2)}% fee · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
+      await loadStats();
+      syncRange();
+      loadCandles(); loadDepth(); loadBalances(); replan();
     }
     async function loadStats() {
       try {
         const m = await api("/api/pools");
         const row = [...m.trending, ...m.established].find((t) => t.token === token.address);
+        supply = row?.marketCapUsd && row?.priceUsd ? row.marketCapUsd / row.priceUsd : null;
         $("s-mc").textContent = usd(row?.marketCapUsd); $("s-chg").textContent = pct(row?.change24); $("s-chg").className = "v " + cls(row?.change24);
         $("s-vol").textContent = usd(row?.volume24Usd); $("s-fees").textContent = usd(row?.fees24Usd);
+        $("mode").querySelector("[data-m=mc]").style.opacity = supply ? 1 : .35;
       } catch { /* cosmetic */ }
     }
 
-    // ---- candles
-    function initChart() {
-      chart = LightweightCharts.createChart($("candles"), { layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "Fira Code, monospace", fontSize: 10 }, grid: { vertLines: { color: "rgba(0,0,0,0.04)" }, horzLines: { color: "rgba(0,0,0,0.04)" } }, rightPriceScale: { borderColor: "#dedad1" }, timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: false, rightOffset: 3, barSpacing: 6 }, crosshair: { mode: 0 }, autoSize: true });
-      series = chart.addCandlestickSeries({ upColor: "#1e9e6a", downColor: "#c0392b", borderVisible: false, wickUpColor: "#1e9e6a", wickDownColor: "#c0392b" });
+    // ---- range: percent ⇄ value, guides, inputs
+    function syncRange(from) {
+      if (!state) return;
+      if (from !== "pct") { $("minpct").value = (minPct >= 0 ? "+" : "") + minPct.toFixed(1).replace(/\.0$/, ""); $("maxpct").value = (maxPct >= 0 ? "+" : "") + maxPct.toFixed(1).replace(/\.0$/, ""); }
+      if (from !== "val") { $("minv").value = fmtDisp(disp(rangeLo())); $("maxv").value = fmtDisp(disp(rangeHi())); }
+      $("range-hint").textContent = minPct >= 0 ? `entirely above the price · ${token.symbol} only` : maxPct <= 0 ? `entirely below the price · ${state.quote.symbol} only` : "straddles the price · both tokens";
+      $("box-quote").classList.toggle("dim", minPct >= 0); $("box-base").classList.toggle("dim", maxPct <= 0);
+      updateLines();
+      clearTimeout(replanT); replanT = setTimeout(replan, 200);
     }
-    async function loadCandles() {
-      const hours = { 1: 8, 5: 48, 15: 168, 60: 720, 240: 2880, 1440: 9600 }[tfMin];
-      try {
-        const q = state.quote.address === WETH ? "eth" : state.quote.address;
-        const d = await api(`/api/trade/candles?base=${token.address === WETH ? "eth" : token.address}&quote=${q}&bucketSec=${tfMin * 60}&hours=${hours}`);
-        const last = d.candles.at(-1)?.close ?? 1;
-        const precision = last >= 100 ? 2 : last >= 1 ? 4 : 6;
-        series.applyOptions({ priceFormat: { type: "price", precision, minMove: 10 ** -precision } });
-        series.setData(d.candles.map((c) => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
-        chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, d.candles.length - 120), to: d.candles.length + 3 });
-        $("chart-note").textContent = `${d.candles.length} candles · ${d.swaps.toLocaleString()} swaps`;
-      } catch (e) { $("chart-note").textContent = e.message; }
+    function applyMode() {
+      $("lab-min").textContent = mode === "mc" ? "Min market cap · USD" : "Min price · USD";
+      $("lab-max").textContent = mode === "mc" ? "Max market cap · USD" : "Max price · USD";
+      setSeriesData(); syncRange();
     }
 
-    // ---- depth + range guides
-    async function loadDepth() {
-      try { depth = await api(`/api/pools/depth?pool=${pool}&span=${Math.round(Math.log(1.6) / Math.log(1.0001))}&buckets=96`); } catch { depth = null; }
-      drawDepth();
+    // ---- chart with depth on the price axis and draggable range guides
+    function initChart() {
+      chart = LightweightCharts.createChart($("candles"), {
+        layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "Fira Code, monospace", fontSize: 10 },
+        grid: { vertLines: { color: "rgba(0,0,0,0.04)" }, horzLines: { color: "rgba(0,0,0,0.04)" } },
+        rightPriceScale: { borderColor: "#dedad1", scaleMargins: { top: 0.08, bottom: 0.08 } },
+        timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: tfSec < 60, rightOffset: 4, barSpacing: 7 },
+        crosshair: { mode: 0 }, autoSize: true,
+      });
+      series = chart.addCandlestickSeries({ upColor: "#1e9e6a", downColor: "#c0392b", borderVisible: false, wickUpColor: "#1e9e6a", wickDownColor: "#c0392b" });
+      // The range guides must always be on screen, whatever the candles span.
+      series.applyOptions({ autoscaleInfoProvider: (orig) => { const r = orig(); if (!r || !state) return r; const lo = disp(rangeLo()), hi = disp(rangeHi()); return { priceRange: { minValue: Math.min(r.priceRange.minValue, lo), maxValue: Math.max(r.priceRange.maxValue, hi) }, margins: r.margins }; } });
+      chart.timeScale().subscribeVisibleLogicalRangeChange(() => requestAnimationFrame(drawOverlay));
+      chart.subscribeCrosshairMove(() => requestAnimationFrame(drawOverlay));
+      new ResizeObserver(() => requestAnimationFrame(drawOverlay)).observe($("chartwrap"));
+      bindGuideDrag();
     }
-    const depthPx = { x0: 0, w: 0, lo: 0, hi: 0 }; // log-price → x mapping
-    function drawDepth() {
-      const cv = $("depth"); if (!cv || !state) return;
-      const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = 220; cv.width = W * dpr; cv.height = H * dpr;
+    async function loadCandles(quiet) {
+      if (!state) return;
+      try {
+        const q = state.quote.address === WETH ? "eth" : state.quote.address;
+        const d = await api(`/api/trade/candles?base=${token.address === WETH ? "eth" : token.address}&quote=${q}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}`);
+        candlesQ = d.candles;
+        const keep = quiet ? chart.timeScale().getVisibleLogicalRange() : null;
+        setSeriesData();
+        if (keep) chart.timeScale().setVisibleLogicalRange(keep); else chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candlesQ.length - 140), to: candlesQ.length + 4 });
+        chart.applyOptions({ timeScale: { secondsVisible: tfSec < 60 } });
+        $("chart-note").textContent = `${d.candles.length} candles · ${d.swaps.toLocaleString()} swaps${d.source === "tape" ? " · live tape" : ""}`;
+      } catch (e) { $("chart-note").textContent = e.message; }
+    }
+    function setSeriesData() {
+      const f = factor(); if (!f) return;
+      const last = (candlesQ.at(-1)?.close ?? state.price) * f;
+      series.applyOptions({ priceFormat: { type: "custom", minMove: mode === "mc" ? 1 : last >= 100 ? 0.01 : last >= 1 ? 0.0001 : 0.000001, formatter: (v) => fmtDisp(v) } });
+      series.setData(candlesQ.map((c) => ({ time: c.time, open: c.open * f, high: c.high * f, low: c.low * f, close: c.close * f })));
+      updateLines();
+    }
+    function updateLines() {
+      if (!state || !factor()) return;
+      const lo = disp(rangeLo()), hi = disp(rangeHi());
+      const opts = (p, t) => ({ price: p, color: "#ff6414", lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: t });
+      if (!minLine) { minLine = series.createPriceLine(opts(lo, "min")); maxLine = series.createPriceLine(opts(hi, "max")); }
+      else { minLine.applyOptions({ price: lo }); maxLine.applyOptions({ price: hi }); }
+      requestAnimationFrame(drawOverlay);
+    }
+    /** Depth histogram along the price axis, the selected band, and the guide labels. */
+    function drawOverlay() {
+      const cv = $("overlay"), wrap = $("chartwrap"); if (!cv || !state || !chart) return;
+      const dpr = devicePixelRatio || 1, W = wrap.clientWidth, H = wrap.clientHeight;
+      cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + "px"; cv.style.height = H + "px";
       const ctx = cv.getContext("2d"); ctx.scale(dpr, dpr); ctx.clearRect(0, 0, W, H);
-      const p = state.price, lo = Math.log(p / 1.6), hi = Math.log(p * 1.6);
-      Object.assign(depthPx, { x0: 0, w: W, lo, hi });
-      const X = (price) => ((Math.log(price) - lo) / (hi - lo)) * W;
-      const padB = 18;
+      const axisW = chart.priceScale("right").width(), plotW = W - axisW, timeH = chart.timeScale().height();
+      const yOf = (quotePrice) => series.priceToCoordinate(disp(quotePrice));
+      const yLo = yOf(rangeLo()), yHi = yOf(rangeHi());
+      if (yLo != null && yHi != null) { ctx.fillStyle = "rgba(255,100,20,.07)"; ctx.fillRect(0, Math.min(yLo, yHi), plotW, Math.abs(yLo - yHi)); }
       if (depth?.bars?.length) {
-        const max = Math.max(...depth.bars.map((b) => b.usd), 1);
+        const max = Math.max(...depth.bars.map((b) => b.usd), 1), bw = plotW * 0.28;
+        const sc = 10 ** (state.base.decimals - state.quote.decimals);
         for (const b of depth.bars) {
-          const raw = state.base.isToken0 ? [b.tickLower, b.tickUpper] : [b.tickUpper, b.tickLower];
-          const sc = 10 ** (state.base.decimals - state.quote.decimals);
-          const pr = raw.map((t) => { const r = Math.pow(1.0001, t); return state.base.isToken0 ? r * sc : 1 / (r * sc); });
-          const xa = X(Math.min(...pr)), xb = X(Math.max(...pr)), h = (b.usd / max) * (H - padB - 14);
-          const inRange = Math.min(...pr) >= p * (1 + minPct / 100) && Math.max(...pr) <= p * (1 + maxPct / 100);
-          ctx.fillStyle = inRange ? "rgba(255,100,20,.55)" : "rgba(29,22,22,.14)";
-          ctx.fillRect(xa, H - padB - h, Math.max(1, xb - xa - 0.5), h);
+          const pr = [b.tickLower, b.tickUpper].map((t) => { const r = Math.pow(1.0001, t); return state.base.isToken0 ? r * sc : 1 / (r * sc); });
+          const y1 = yOf(Math.max(...pr)), y2 = yOf(Math.min(...pr)); if (y1 == null || y2 == null) continue;
+          const inBand = Math.min(...pr) >= rangeLo() && Math.max(...pr) <= rangeHi();
+          ctx.fillStyle = inBand ? "rgba(255,100,20,.5)" : "rgba(29,22,22,.13)";
+          const w = (b.usd / max) * bw, h = Math.max(1, Math.abs(y2 - y1) - 1);
+          if (y1 < H - timeH) ctx.fillRect(plotW - w, Math.min(y1, y2), w, Math.min(h, H - timeH - Math.min(y1, y2)));
         }
       }
-      // selection band
-      const a = X(p * (1 + minPct / 100)), b = X(p * (1 + maxPct / 100));
-      ctx.fillStyle = "rgba(255,100,20,.08)"; ctx.fillRect(Math.min(a, b), 0, Math.abs(b - a), H - padB);
-      for (const [x, lab] of [[a, "min"], [b, "max"]]) { ctx.strokeStyle = "#ff6414"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H - padB); ctx.stroke(); ctx.fillStyle = "#ff6414"; ctx.fillRect(x - 6, 0, 12, 14); ctx.fillStyle = "#fff"; ctx.font = "9px Fira Code, monospace"; ctx.textAlign = "center"; ctx.fillText(lab, x, 10); }
-      // current price
-      const xc = X(p); ctx.strokeStyle = "#1d1616"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(xc, 0); ctx.lineTo(xc, H - padB); ctx.stroke(); ctx.setLineDash([]);
-      // axis
-      ctx.fillStyle = "#6d6660"; ctx.font = "10px Fira Code, monospace"; ctx.textAlign = "center";
-      for (const m of [0.7, 0.85, 1, 1.2, 1.4]) ctx.fillText(fmtPx(p * m), X(p * m), H - 4);
-      $("d-range").innerHTML = `range <b>${fmtPx(p * (1 + minPct / 100))}</b> – <b>${fmtPx(p * (1 + maxPct / 100))}</b> ${esc(state.quote.symbol)}`;
-      $("range-hint").textContent = minPct >= 0 ? `entirely above price · ${token.symbol} only` : maxPct <= 0 ? `entirely below price · ${state.quote.symbol} only` : "straddles the price · both tokens";
+      for (const [id, y, label, v] of [["g-max", yHi, "max", disp(rangeHi())], ["g-min", yLo, "min", disp(rangeLo())]]) {
+        const el = $(id); if (y == null || y < 0 || y > H - timeH) { el.style.display = "none"; continue; }
+        el.style.display = "block"; el.style.top = `${y - 11}px`; el.textContent = `${label} ${fmtDisp(v)}`;
+      }
     }
-    function bindDepthDrag() {
-      const cv = $("depth");
-      const priceAt = (clientX) => { const r = cv.getBoundingClientRect(); const f = (clientX - r.left) / r.width; return Math.exp(depthPx.lo + f * (depthPx.hi - depthPx.lo)); };
-      const near = (clientX) => { const r = cv.getBoundingClientRect(); const X = (pr) => ((Math.log(pr) - depthPx.lo) / (depthPx.hi - depthPx.lo)) * r.width; const x = clientX - r.left; const da = Math.abs(x - X(state.price * (1 + minPct / 100))), db = Math.abs(x - X(state.price * (1 + maxPct / 100))); return Math.min(da, db) < 14 ? (da <= db ? "min" : "max") : null; };
-      const start = (e) => { if (!state) return; dragging = near(e.clientX ?? e.touches?.[0]?.clientX) ?? (((e.clientX ?? e.touches?.[0]?.clientX) - cv.getBoundingClientRect().left) < cv.clientWidth * ((Math.log(state.price) - depthPx.lo) / (depthPx.hi - depthPx.lo)) ? "min" : "max"); move(e); };
-      const move = (e) => { if (!dragging || !state) return; const pr = priceAt(e.clientX ?? e.touches?.[0]?.clientX); const v = Math.round((pr / state.price - 1) * 1000) / 10; if (dragging === "min") { minPct = Math.min(v, maxPct - 0.1); $("minpct").value = minPct; } else { maxPct = Math.max(v, minPct + 0.1); $("maxpct").value = maxPct; } drawDepth(); clearTimeout(replanT); replanT = setTimeout(replan, 150); };
-      const end = () => { dragging = null; };
-      cv.addEventListener("mousedown", start); window.addEventListener("mousemove", move); window.addEventListener("mouseup", end);
-      cv.addEventListener("touchstart", start, { passive: true }); window.addEventListener("touchmove", move, { passive: true }); window.addEventListener("touchend", end);
-      cv.addEventListener("mousemove", (e) => { cv.style.cursor = near(e.clientX) ? "ew-resize" : "crosshair"; });
-      window.addEventListener("resize", drawDepth);
+    let dragging = null;
+    function bindGuideDrag() {
+      const wrap = $("chartwrap");
+      const near = (y) => { const a = series.priceToCoordinate(disp(rangeLo())), b = series.priceToCoordinate(disp(rangeHi())); if (a == null || b == null) return null; const da = Math.abs(y - a), db = Math.abs(y - b); return Math.min(da, db) < 9 ? (da <= db ? "min" : "max") : null; };
+      const yOf = (e) => (e.clientY ?? e.touches?.[0]?.clientY) - wrap.getBoundingClientRect().top;
+      wrap.addEventListener("mousemove", (e) => { if (!dragging) wrap.style.cursor = near(yOf(e)) ? "ns-resize" : ""; });
+      const start = (e) => { const which = near(yOf(e)); if (!which) return; dragging = which; chart.applyOptions({ handleScroll: false, handleScale: false }); e.preventDefault(); };
+      const move = (e) => { if (!dragging) return; const p = series.coordinateToPrice(yOf(e)); if (p == null || p <= 0) return; const v = (fromDisp(p) / state.price - 1) * 100; if (dragging === "min") minPct = Math.min(v, maxPct - 0.1); else maxPct = Math.max(v, minPct + 0.1); syncRange(); };
+      const end = () => { if (!dragging) return; dragging = null; chart.applyOptions({ handleScroll: true, handleScale: true }); };
+      wrap.addEventListener("mousedown", start); window.addEventListener("mousemove", move); window.addEventListener("mouseup", end);
+      wrap.addEventListener("touchstart", start, { passive: false }); window.addEventListener("touchmove", move, { passive: true }); window.addEventListener("touchend", end);
     }
-    function drawShapeGlyph(cv, s) {
-      const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, n = 9;
-      for (let i = 0; i < n; i++) { const x = (i + 0.5) / n, d = Math.abs(x - 0.5); const w = s === "spot" ? 1 : s === "curve" ? Math.exp(-(d * d) / (2 * 0.22 * 0.22)) : 0.15 + d * d * 4; const h = (w / (s === "bidask" ? 1.15 : 1)) * (H - 6); ctx.fillStyle = i === 4 ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect((i / n) * W + 3, H - h, W / n - 6, h); }
+    async function loadDepth() {
+      try { depth = await api(`/api/pools/depth?pool=${pool}&span=${Math.round(Math.log(3) / Math.log(1.0001))}&buckets=90`); } catch { depth = null; }
+      requestAnimationFrame(drawOverlay);
+    }
+    function drawShape() {
+      $("sdesc-t").textContent = SHAPE_DESC[shape];
+      const cv = $("sglyph"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height, n = 21; ctx.clearRect(0, 0, W, H);
+      for (let i = 0; i < n; i++) { const x = i / (n - 1), d = Math.abs(x - 0.5) * 2; const w = shape === "spot" ? 1 : shape === "curve" ? Math.max(0.05, 1 - d) : Math.max(0.05, d); const h = w * (H - 8); ctx.fillStyle = i === Math.floor(n / 2) ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect((i / n) * W + 3, H - h, W / n - 6, h); }
     }
 
     // ---- balances
     async function loadBalances() {
-      if (!account || !state) { balances = null; $("bal-base").textContent = ""; $("bal-quote").textContent = ""; return; }
+      if (!wallet.account || !state) { balances = null; $("bal-base").textContent = ""; $("bal-quote").textContent = ""; return; }
       try {
-        const d = await api(`/api/trade/balances?address=${account}`);
+        const d = await api(`/api/trade/balances?address=${wallet.account}`);
         const find = (addr) => d.tokens.find((t) => t.address === (addr === WETH ? "eth" : addr))?.amount ?? 0;
         balances = { base: find(token.address), quote: find(state.quote.address) };
         $("bal-base").textContent = `balance ${num(balances.base, 6)} ${token.symbol}`;
@@ -426,109 +456,63 @@
       const seq = ++planSeq;
       const baseAmt = parseUnits($("amt-base").value, state.base.decimals), quoteAmt = parseUnits($("amt-quote").value, state.quote.decimals);
       const go = $("go");
-      if (!account) { go.textContent = "Connect wallet"; go.disabled = false; }
-      const lo = state.price * (1 + minPct / 100), hi = state.price * (1 + maxPct / 100);
-      const oneSided = minPct >= 0 ? "base" : maxPct <= 0 ? "quote" : null;
-      $("box-quote").style.opacity = oneSided === "base" ? .4 : 1; $("box-base").style.opacity = oneSided === "quote" ? .4 : 1;
-      if ((baseAmt ?? 0n) === 0n && (quoteAmt ?? 0n) === 0n) { plan = null; $("preview").textContent = "Set a range and an amount to see the ladder."; if (account) { go.textContent = "Enter an amount"; go.disabled = true; } return; }
+      if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
+      if ((baseAmt ?? 0n) === 0n && (quoteAmt ?? 0n) === 0n) { plan = null; $("preview").textContent = "Set a range and an amount to see the ladder."; if (wallet.account) { go.textContent = "Build position"; go.disabled = true; } return; }
       try {
-        const q = new URLSearchParams({ pool, base: token.address, minPrice: lo, maxPrice: hi, shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps: 100 });
+        const q = new URLSearchParams({ pool, base: token.address, minPrice: rangeLo(), maxPrice: rangeHi(), shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps: 100 });
         const p = await api(`/api/pools/plan?${q}`);
         if (seq !== planSeq) return;
         plan = p;
-        if (!p.rungs.length) { $("preview").innerHTML = `Nothing to mint. ${p.limitedBy === "token1" || p.limitedBy === "token0" ? `This range needs <b>${esc(p.limitedBy === (p.base.isToken0 ? "token0" : "token1") ? token.symbol : state.quote.symbol)}</b> and you entered none.` : ""}`; if (account) { go.textContent = "Adjust the range or amounts"; go.disabled = true; } return; }
+        if (!p.rungs.length) { $("preview").innerHTML = `Nothing to mint: this range needs <b>${esc(minPct >= 0 ? token.symbol : state.quote.symbol)}</b>.`; if (wallet.account) { go.textContent = "Adjust the range or amounts"; go.disabled = true; } return; }
         const bt = formatUnits(p.baseTotal, state.base.decimals), qt = formatUnits(p.quoteTotal, state.quote.decimals);
         const usdTot = Number(bt) * (state.priceUsd ?? 0) + Number(qt) * (state.quote.usdPerToken ?? 0);
         $("preview").innerHTML = `<canvas id="pv" width="600" height="112"></canvas>
-          <b>${p.rungs.length}</b> positions · <b>${fmtPx(p.minPrice)}</b> – <b>${fmtPx(p.maxPrice)}</b> ${esc(state.quote.symbol)}<br/>
-          uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}<br/>
-          ${p.limitedBy !== "none" ? `limited by your ${esc(p.limitedBy === (p.base.isToken0 ? "token0" : "token1") ? token.symbol : state.quote.symbol)}; the rest is refunded in the same transaction` : "the pool takes what the price allows from each rung and refunds the rest in the same transaction"}`;
+          <b>${p.rungs.length}</b> positions · <b>${fmtDisp(disp(p.minPrice))}</b> – <b>${fmtDisp(disp(p.maxPrice))}</b> ${mode === "mc" ? "market cap" : "USD"}<br/>
+          uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}${p.tx.approve ? `<br/>needs a one-time ${esc(token.symbol)} approval first` : ""}`;
         const cv = $("pv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height, mx = Math.max(...p.rungs.map((r) => r.weight));
-        p.rungs.forEach((r, i) => { const x0 = (i / p.rungs.length) * W, w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(x0 + 1, H - h, Math.max(1, w - 2), h); });
-        if (account) { go.textContent = p.tx.approve ? `Approve & mint ${p.rungs.length} positions` : `Mint ${p.rungs.length} positions`; go.disabled = false; }
-      } catch (e) { if (seq === planSeq) { $("preview").textContent = e.message; if (account) { go.textContent = "Cannot plan"; go.disabled = true; } } }
+        p.rungs.forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
+        if (wallet.account) { go.textContent = "Build position"; go.disabled = false; }
+      } catch (e) { if (seq === planSeq) { $("preview").textContent = e.message; if (wallet.account) { go.textContent = "Cannot plan"; go.disabled = true; } } }
     }
 
-    // ---- mint / collect / close
-    const ERC20 = [{ type: "function", name: "approve", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "bool" }] }, { type: "function", name: "allowance", inputs: [{ type: "address" }, { type: "address" }], outputs: [{ type: "uint256" }] }];
+    // ---- build
     const setResult = (h, bad) => { $("result").innerHTML = h; $("result").className = "result" + (bad ? " bad" : ""); };
-    async function mint() {
-      if (!account) return openPicker();
+    async function build() {
+      if (!wallet.account) return wallet.openPicker();
       if (!plan?.tx) return;
       $("go").disabled = true;
       try {
-        if (plan.tx.approve) {
-          const sel = "0xdd62ed3e" + account.slice(2).padStart(64, "0") + plan.tx.approve.spender.slice(2).padStart(64, "0");
-          const cur = BigInt(await rpc("eth_call", [{ to: plan.tx.approve.token, data: sel }, "latest"]));
-          if (cur < BigInt(plan.tx.approve.amount)) {
-            setResult(`Approve ${esc(plan.tx.approve.token === state.quote.address ? state.quote.symbol : token.symbol)} in your wallet…`);
-            const data = "0x095ea7b3" + plan.tx.approve.spender.slice(2).padStart(64, "0") + "f".repeat(64);
-            const ah = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: plan.tx.approve.token, data }] });
-            setResult(`Approving ${txLink(ah)}…`); await waitFor(ah);
-          }
-        }
-        // The plan was made for a price; take a fresh one right before signing.
-        await replan();
-        setResult(`Confirm the mint in your wallet…`);
-        const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: plan.tx.to, data: plan.tx.data, value: "0x" + BigInt(plan.tx.value).toString(16) }] });
-        setResult(`Minting ${txLink(hash)} — waiting for the block…`); await waitFor(hash);
-        setResult(`Minted ${plan.rungs.length} positions · ${txLink(hash)}`);
+        if (plan.tx.approve) { setResult(`Approve ${esc(token.symbol)} in your wallet…`); await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => setResult(`Approving ${txLink(h)}…`)); }
+        await replan(); // the plan was made for a price; take a fresh one right before signing
+        setResult(`Confirm in your wallet…`);
+        const rec = await wallet.send(plan.tx, (h) => setResult(`Building ${txLink(h)} — waiting for the block…`));
+        setResult(`Built ${plan.rungs.length} positions · ${txLink(rec.hash)}`);
         $("amt-base").value = ""; $("amt-quote").value = ""; plan = null;
-        loadBalances(); loadPositions(); loadDepth();
-      } catch (e) { setResult(e?.code === 4001 ? "Rejected in the wallet — nothing happened." : esc(e?.message ?? e), true); }
+        setTimeout(() => { loadBalances(); loadPositions(); loadDepth(); }, 1200);
+      } catch (e) { setResult(rejected(e) ? "Rejected in the wallet — nothing happened." : esc(e?.message ?? e), true); }
       replan();
     }
 
     async function loadPositions() {
       const el = $("cards"); if (!el) return;
-      if (!account) { el.innerHTML = `<div class="empty">Connect a wallet to see your positions.</div>`; $("pos-note").textContent = "connect a wallet"; return; }
+      if (!wallet.account) { el.innerHTML = `<div class="empty">Connect a wallet to see your positions.</div>`; $("pos-note").textContent = "connect a wallet"; return; }
       try {
-        const d = await api(`/api/pools/positions?owner=${account}`);
-        const mine = d.ladders.filter((l) => !l.closed);
-        $("pos-note").textContent = mine.length ? `${mine.length} open · value ${usd(d.totals.valueUsd)} · unclaimed ${usd(d.totals.unclaimedUsd)}` : "none open";
-        el.innerHTML = mine.length ? mine.map((l) => {
-          const lo = Math.min(...l.rungs.map((r) => r.tickLower)), hi = Math.max(...l.rungs.map((r) => r.tickUpper));
-          const f = Math.min(1, Math.max(0, (l.tick - lo) / (hi - lo)));
-          const sc = 10 ** (l.base.decimals - l.quote.decimals), px = (t) => { const r = Math.pow(1.0001, t); return l.base.isToken0 ? r * sc : 1 / (r * sc); };
-          const b0 = l.base.isToken0, held = [formatUnits(b0 ? l.held0 : l.held1, l.base.decimals), formatUnits(b0 ? l.held1 : l.held0, l.quote.decimals)];
-          const unc = [formatUnits(b0 ? l.unclaimed0 : l.unclaimed1, l.base.decimals), formatUnits(b0 ? l.unclaimed1 : l.unclaimed0, l.quote.decimals)];
-          return `<div class="card">
-            <div class="top"><b>${esc(l.base.symbol)} / ${esc(l.quote.symbol)}</b><span>#${l.id} · ${l.rungs.length} rungs · ${new Date(l.mintedAt * 1000).toLocaleDateString()}</span></div>
-            <div class="val">${usd(l.valueUsd)}</div>
-            <div class="pnl ${cls(l.pnlUsd)}">${l.pnlUsd >= 0 ? "+" : ""}${usd(l.pnlUsd)} PnL · ${l.depositedUsd ? pct(l.pnlUsd / l.depositedUsd) : ""}</div>
-            <div class="rbar"><i style="left:0;right:0"></i><em style="left:${(f * 100).toFixed(1)}%"></em></div>
-            <div class="rlab"><span>${fmtPx(Math.min(px(lo), px(hi)))}</span><span>${l.rungs.some((r) => r.inRange) ? "in range" : "out of range"}</span><span>${fmtPx(Math.max(px(lo), px(hi)))}</span></div>
-            <div class="kv"><div>Holdings<b>${num(held[0], 6)} ${esc(l.base.symbol)}<br/>${num(held[1], 6)} ${esc(l.quote.symbol)}</b></div><div>Unclaimed fees<b>${num(unc[0], 6)} ${esc(l.base.symbol)}<br/>${num(unc[1], 6)} ${esc(l.quote.symbol)}</b></div><div>Claimed<b>${usd(l.claimedUsd)}</b></div><div>Deposited<b>${usd(l.depositedUsd)}</b></div></div>
-            <div class="acts"><button data-a="collect" data-id="${l.id}" ${l.unclaimedUsd > 0 || Number(l.unclaimed0) + Number(l.unclaimed1) > 0 ? "" : "disabled"}>Collect fees</button><button data-a="close" data-id="${l.id}">Close position</button></div>
-            <div class="result" id="pr-${l.id}"></div></div>`;
-        }).join("") : `<div class="empty">No open positions yet.</div>`;
-        el.querySelectorAll("button[data-a]").forEach((b) => b.addEventListener("click", () => act(b.dataset.a, b.dataset.id, b)));
+        portfolio = await api(`/api/pools/positions?owner=${wallet.account}`);
+        const mine = portfolio.ladders.filter((l) => !l.closed && l.base.address === token.address);
+        $("pos-note").textContent = mine.length ? `${mine.length} open · ${usd(mine.reduce((n, l) => n + l.valueUsd, 0))} · unclaimed ${usd(mine.reduce((n, l) => n + l.unclaimedUsd, 0), 4)}` : "none open for this token";
+        renderLadders(el, portfolio, { token: token.address, onChange: () => { loadPositions(); loadBalances(); loadDepth(); }, emptyText: `No open ${token.symbol} positions yet.` });
       } catch (e) { el.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
-    }
-    async function act(kind, id, btn) {
-      const out = $(`pr-${id}`); btn.disabled = true;
-      try {
-        if (kind === "close" && !confirm("Close this position? Liquidity is withdrawn and paid back to your wallet along with any fees.")) { btn.disabled = false; return; }
-        const c = await api(`/api/pools/${kind}?id=${id}`);
-        out.textContent = "Confirm in your wallet…";
-        const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: c.to, data: c.data }] });
-        out.innerHTML = `${kind === "close" ? "Closing" : "Collecting"} ${txLink(hash)}…`; await waitFor(hash);
-        out.innerHTML = `${kind === "close" ? "Closed" : "Collected"} · ${txLink(hash)}`;
-        setTimeout(() => { loadPositions(); loadBalances(); }, 1500);
-      } catch (e) { out.textContent = e?.code === 4001 ? "Rejected." : e?.message ?? String(e); btn.disabled = false; }
     }
 
     // ---------------- boot ----------------
-    $("nav-connect").addEventListener("click", (e) => { e.preventDefault(); openPicker(); });
-    $("wmodal-x").addEventListener("click", closePicker); $("wmodal").addEventListener("click", (e) => { if (e.target === $("wmodal")) closePicker(); });
-    api("/api/trade/chain").then((c) => { CHAIN = c; return view === "list" ? renderList() : renderDetail(); }).catch((e) => { $("root").innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
+    api("/api/trade/chain").then(async (c) => { await wallet.init(c); wallet.bindButton($("nav-connect")); return view === "list" ? renderList() : renderDetail(); }).catch((e) => { $("root").innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
   </script>
 
   <footer class="site-footer">
     <div class="wrap">
       <div class="footer-grid">
         <div class="footer-brand"><div class="logo">ordo<span class="logo-app">app</span></div><p>The execution layer for Robinhood Chain.</p></div>
-        <div class="footer-col"><h5>Product</h5><a href="/trade">Trade</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/docs">Documentation</a></div>
+        <div class="footer-col"><h5>Product</h5><a href="/trade">Trade</a><a href="/pools">Pools</a><a href="/positions">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/docs">Documentation</a></div>
         <div class="footer-col"><h5>Participate</h5><a href="/searchers">For searchers</a><a href="/apps">For apps &amp; wallets</a><a href="/operators">For node operators</a></div>
         <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs#quickstart">Quickstart</a></div>
       </div>
