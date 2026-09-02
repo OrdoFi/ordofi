@@ -29,8 +29,10 @@ const args = {};
 for (let k = 2; k < process.argv.length; k++) {
   if (!process.argv[k].startsWith("--")) continue;
   const next = process.argv[k + 1];
-  if (next !== undefined && !next.startsWith("--")) { args[process.argv[k].slice(2)] = next; k++; }
-  else args[process.argv[k].slice(2)] = "1";
+  // --max-logs reads as args.maxLogs, so a dashed flag is not silently ignored.
+  const name = process.argv[k].slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  if (next !== undefined && !next.startsWith("--")) { args[name] = next; k++; }
+  else args[name] = "1";
 }
 const RPCS = (args.rpc ?? process.env.ORDO_ARCHIVE_RPC ?? "").split(",").map((u) => u.trim()).filter(Boolean);
 if (RPCS.length === 0) {
