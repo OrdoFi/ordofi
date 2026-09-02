@@ -676,8 +676,9 @@ async function handle(req, res) {
       else if (path === "/api/pools/plan") body = await planPosition({
         pool: addr("pool"), base: q.get("base") ?? undefined,
         minPrice: Number(q.get("minPrice")), maxPrice: Number(q.get("maxPrice")),
-        shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "curve",
-        bins: Math.max(1, Math.min(40, Number(q.get("bins") ?? 10))),
+        shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "bidask",
+        bins: Math.max(1, Math.min(40, Number(q.get("bins") ?? 40))),
+        mode: q.get("mode") === "scale" ? "scale" : "split",
         baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
         slippageBps: Math.max(0, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
       });

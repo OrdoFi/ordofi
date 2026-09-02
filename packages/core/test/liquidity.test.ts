@@ -115,3 +115,43 @@ test("bins are clamped to what the spacing allows and to 40", () => {
   const many = planLadder({ ...POOL, minTick: POOL.tick - 500, maxTick: POOL.tick + 500, bins: 100, shape: "spot", budget0: 10n ** 18n, budget1: 10n ** 10n });
   assert.ok(many.rungs.length <= 40);
 });
+
+import { splitLadder } from "../src/liquidity.ts";
+
+test("split allocation spends each token across the bins that can hold it", () => {
+  const rs = splitLadder({ tick: -198553, tickSpacing: 1, minTick: -198753, maxTick: -198353, bins: 8, shape: "spot", budget0: 10n ** 18n, budget1: 5_000_000n });
+  const sum0 = rs.reduce((n, r) => n + r.amount0, 0n), sum1 = rs.reduce((n, r) => n + r.amount1, 0n);
+  assert.equal(sum0, 10n ** 18n, "all of token0 is placed");
+  assert.equal(sum1, 5_000_000n, "all of token1 is placed");
+  for (const r of rs) {
+    if (r.side === "token0") assert.equal(r.amount1, 0n);
+    if (r.side === "token1") assert.equal(r.amount0, 0n);
+    if (r.side === "both") assert.ok(r.amount0 > 0n && r.amount1 > 0n);
+  }
+  assert.equal(rs.filter((r) => r.side === "both").length, 1);
+});
+
+test("split shapes: tent for curve, V for bid-ask, floor at 0.02", () => {
+  const base = { tick: -198553, tickSpacing: 1, minTick: -198753, maxTick: -198353, bins: 9, budget0: 10n ** 18n, budget1: 10n ** 9n };
+  const curve = splitLadder({ ...base, shape: "curve" });
+  assert.ok(curve[4].weight === 1 && curve[0].weight < curve[4].weight && curve[8].weight < curve[4].weight);
+  const bidask = splitLadder({ ...base, shape: "bidask" });
+  const both = bidask.find((r) => r.side === "both")!;
+  assert.equal(both.weight, 0.02, "the price bin is the floor of the V");
+  assert.ok(bidask[0].weight === 1 || bidask[bidask.length - 1].weight === 1, "an edge carries full weight");
+});
+
+test("split drops the straddling bin when only one token is offered", () => {
+  const rs = splitLadder({ tick: -198553, tickSpacing: 1, minTick: -198753, maxTick: -198353, bins: 8, shape: "spot", budget0: 10n ** 18n, budget1: 0n });
+  assert.ok(rs.every((r) => r.side === "token0"), "only above-price bins remain");
+  // The price bin took its share before being dropped, exactly as Delta does,
+  // so slightly less than the budget is placed and the rest is never pulled.
+  const placed = rs.reduce((n, r) => n + r.amount0, 0n);
+  assert.ok(placed < 10n ** 18n && placed >= (10n ** 18n * 5n) / 10n, `placed ${placed}`);
+});
+
+test("split bins are cut on spacing boundaries and never exceed the spacings available", () => {
+  const rs = splitLadder({ tick: -198553, tickSpacing: 60, minTick: -198780, maxTick: -198480, bins: 40, shape: "spot", budget0: 1n, budget1: 1n });
+  assert.ok(rs.length <= 5);
+  for (const r of rs) { assert.ok(r.tickLower % 60 === 0 && r.tickUpper % 60 === 0); }
+});

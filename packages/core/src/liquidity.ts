@@ -261,3 +261,85 @@ export function planLadder(input: PlanInput): Plan {
   const singleSided: Plan["singleSided"] = maxTick <= tick ? 1 : minTick > tick ? 0 : null;
   return { rungs, total0, total1, minTick, maxTick, limitedBy, singleSided };
 }
+
+// ------------------------------------------------- split allocation (Delta)
+
+/**
+ * The allocation Delta uses, reproduced exactly so a ladder built here comes
+ * out the same as one built there for the same inputs.
+ *
+ * Instead of scaling both sides to whichever budget binds, each token's whole
+ * budget is split across the bins that can hold it, in proportion to the
+ * shape's weight: token0 across bins above the price, token1 across bins
+ * below, and the bin containing the price takes a share of both. The pool
+ * then takes what the current price allows and the rest is refunded in the
+ * same transaction. It spends what the user typed, which is what people
+ * expect a deposit form to do.
+ *
+ * Weights are linear, not gaussian: Curve is a tent peaked at the middle bin,
+ * Bid-Ask a V with its floor at the bin holding the price. Both are clamped
+ * at 0.02 so no bin is ever empty.
+ */
+export interface SplitRung {
+  index: number;
+  tickLower: number;
+  tickUpper: number;
+  side: "token0" | "token1" | "both";
+  weight: number;
+  amount0: bigint;
+  amount1: bigint;
+}
+
+export function splitLadder(input: {
+  tick: number;
+  tickSpacing: number;
+  minTick: number;
+  maxTick: number;
+  bins: number;
+  shape: Shape;
+  budget0: bigint;
+  budget1: bigint;
+}): SplitRung[] {
+  const { tick, tickSpacing: sp, shape } = input;
+  const lo = Math.round(Math.min(input.minTick, input.maxTick) / sp) * sp;
+  const hi = Math.round(Math.max(input.minTick, input.maxTick) / sp) * sp;
+  if (!(hi > lo)) return [];
+  const spacings = Math.round((hi - lo) / sp);
+  const n = Math.max(1, Math.min(Math.floor(input.bins) || 1, spacings));
+  const rungs: SplitRung[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = lo + Math.floor((spacings * i) / n) * sp;
+    const b = lo + Math.floor((spacings * (i + 1)) / n) * sp;
+    if (b <= a) continue;
+    const side: SplitRung["side"] = tick >= b ? "token1" : tick < a ? "token0" : "both";
+    rungs.push({ index: rungs.length, tickLower: a, tickUpper: b, side, weight: 0, amount0: 0n, amount1: 0n });
+  }
+  if (!rungs.length) return [];
+
+  const mid = (rungs.length - 1) / 2;
+  const bothIdx = rungs.findIndex((r) => r.side === "both");
+  const anchor = bothIdx >= 0 ? bothIdx : tick >= rungs[rungs.length - 1].tickUpper ? rungs.length - 1 : 0;
+  const reach = (x: number) => Math.max(x, rungs.length - 1 - x, 1);
+  for (const r of rungs) {
+    if (shape === "spot") r.weight = 1;
+    else if (shape === "curve") r.weight = Math.max(0.02, 1 - Math.abs(r.index - mid) / (reach(mid) + 1));
+    else r.weight = Math.max(0.02, Math.abs(r.index - anchor) / reach(anchor));
+  }
+  const share = (rs: SplitRung[], total: bigint, key: "amount0" | "amount1") => {
+    if (!rs.length || total === 0n) return;
+    const w = rs.map((r) => BigInt(Math.max(1, Math.round(r.weight * 1e6))));
+    const sum = w.reduce((a, b) => a + b, 0n);
+    let given = 0n;
+    rs.forEach((r, i) => {
+      const amt = i === rs.length - 1 ? total - given : (total * w[i]) / sum;
+      r[key] = amt;
+      given += amt;
+    });
+  };
+  share(rungs.filter((r) => r.side !== "token1"), input.budget0, "amount0");
+  share(rungs.filter((r) => r.side !== "token0"), input.budget1, "amount1");
+
+  // A bin that straddles the price needs both tokens; with only one on offer
+  // it would mint lopsided, so it is left out rather than minted wrong.
+  return rungs.filter((r) => (r.amount0 > 0n || r.amount1 > 0n) && (r.side !== "both" || (r.amount0 > 0n && r.amount1 > 0n)));
+}

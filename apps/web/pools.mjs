@@ -6,6 +6,7 @@ import {
   amountsForLiquidity,
   planLadder,
   priceToTick,
+  splitLadder,
   tickToPrice,
   tickToSqrtPriceX96,
 } from "@ordofi/core/liquidity";
@@ -311,7 +312,7 @@ export async function poolDepth(pool, { spanTicks = 3000, buckets = 60 } = {}) {
  * units, as shown on the chart. Amounts are raw units of the base and quote
  * tokens the user is willing to spend.
  */
-export async function planPosition({ pool, base, minPrice, maxPrice, shape = "curve", bins = 10, baseAmount = 0n, quoteAmount = 0n, slippageBps = 100 }) {
+export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bidask", bins = 40, baseAmount = 0n, quoteAmount = 0n, slippageBps = 100, mode = "split" }) {
   const st = await poolState(pool, base);
   const sc = 10 ** (st.base.decimals - st.quote.decimals);
   // Back to raw token1/token0 ticks. For an inverted pool a higher quote price is a lower tick.
@@ -320,13 +321,30 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "cu
   const minTick = Math.min(tA, tB), maxTick = Math.max(tA, tB);
   const budget0 = st.base.isToken0 ? baseAmount : quoteAmount;
   const budget1 = st.base.isToken0 ? quoteAmount : baseAmount;
-  const plan = planLadder({ tick: st.tick, tickSpacing: st.tickSpacing, minTick, maxTick, bins, shape, budget0, budget1, slippageBps });
+
+  // "split" places every token the user typed, Delta's way; "scale" keeps
+  // the shape exact and refunds whichever side is in surplus.
+  let plan;
+  if (mode === "scale") {
+    plan = planLadder({ tick: st.tick, tickSpacing: st.tickSpacing, minTick, maxTick, bins, shape, budget0, budget1, slippageBps });
+  } else {
+    const rs = splitLadder({ tick: st.tick, tickSpacing: st.tickSpacing, minTick, maxTick, bins, shape, budget0, budget1 });
+    const total0 = rs.reduce((n, r) => n + r.amount0, 0n), total1 = rs.reduce((n, r) => n + r.amount1, 0n);
+    plan = {
+      rungs: rs.map((r) => ({ ...r, amount0Min: 0n, amount1Min: 0n, liquidity: 0n })),
+      total0, total1,
+      minTick: rs.length ? rs[0].tickLower : minTick, maxTick: rs.length ? rs[rs.length - 1].tickUpper : maxTick,
+      limitedBy: "none",
+      singleSided: maxTick <= st.tick ? 1 : minTick > st.tick ? 0 : null,
+    };
+  }
 
   // The contract refuses to mint if the price has left this band by inclusion
-  // time: half a percent either side is generous on a 100 ms chain.
-  const band = Math.max(st.tickSpacing, 50);
-  const deadline = Math.floor(Date.now() / 1000) + 600;
-  const rungs = plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: r.amount0Min, amount1Min: r.amount1Min }));
+  // time. Delta passes the full tick range and minimums of zero; we keep a
+  // one-percent band so a fast market cannot mint a shape nobody asked for.
+  const band = Math.max(st.tickSpacing, 100);
+  const deadline = Math.floor(Date.now() / 1000) + 900;
+  const rungs = plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: r.amount0Min ?? 0n, amount1Min: r.amount1Min ?? 0n }));
   const data = rungs.length
     ? encodeFunctionData({ abi: LADDER_ABI, functionName: "mintLadder", args: [getAddress(st.pool), rungs, st.tick - band, st.tick + band, BigInt(deadline)] })
     : null;
@@ -340,11 +358,11 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "cu
     base: st.base, quote: st.quote,
     minTick: plan.minTick, maxTick: plan.maxTick,
     minPrice: Math.min(toPrice(plan.minTick), toPrice(plan.maxTick)), maxPrice: Math.max(toPrice(plan.minTick), toPrice(plan.maxTick)),
-    shape, bins: plan.rungs.length, limitedBy: plan.limitedBy, singleSided: plan.singleSided,
+    shape, mode, bins: plan.rungs.length, limitedBy: plan.limitedBy, singleSided: plan.singleSided,
     total0: plan.total0.toString(), total1: plan.total1.toString(),
     baseTotal: (st.base.isToken0 ? plan.total0 : plan.total1).toString(),
     quoteTotal: (st.base.isToken0 ? plan.total1 : plan.total0).toString(),
-    rungs: plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight })),
+    rungs: plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight, side: r.side ?? (r.amount0 > 0n && r.amount1 > 0n ? "both" : r.amount0 > 0n ? "token0" : "token1") })),
     tx: data ? {
       to: getAddress(LADDER_MANAGER), data,
       // Pay the WETH side as native ETH; the other token needs an allowance.

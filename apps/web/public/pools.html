@@ -241,7 +241,7 @@
 
     // ================= DETAIL =================
     let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfMin = 5, chart, series;
-    let shape = "curve", bins = 10, minPct = -5, maxPct = 5, balances = null, replanT = null, dragging = null;
+    let shape = "bidask", bins = 40, minPct = -30, maxPct = 40, balances = null, replanT = null, dragging = null;
 
     async function renderDetail() {
       $("root").innerHTML = `<div class="empty">Loading ${esc(tokenParam)}…</div>`;
@@ -279,9 +279,9 @@
                 <div class="box"><span class="pct">min</span><input id="minpct" value="${minPct}" inputmode="decimal" /><span class="u">%</span></div>
                 <div class="box"><span class="pct">max</span><input id="maxpct" value="${maxPct}" inputmode="decimal" /><span class="u">%</span></div>
               </div>
-              <div class="hint"><span id="range-hint">—</span><span><button data-r="-2,2">±2%</button> <button data-r="-5,5">±5%</button> <button data-r="-15,15">±15%</button> <button data-r="-50,100">wide</button></span></div>
+              <div class="hint"><span id="range-hint">—</span><span><button data-r="-5,5">±5%</button> <button data-r="-15,15">±15%</button> <button data-r="-30,40">−30/+40</button> <button data-r="-50,100">wide</button></span></div>
               <label class="f">Bins</label>
-              <div class="bins"><input type="range" id="bins" min="1" max="30" value="${bins}" /><span id="bins-v">${bins}</span></div>
+              <div class="bins"><input type="range" id="bins" min="1" max="40" value="${bins}" /><span id="bins-v">${bins}</span></div>
               <label class="f">Deposit</label>
               <div class="box" id="box-base"><input id="amt-base" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(token.symbol)}</span></div>
               <div class="hint"><span id="bal-base"></span><span><button id="max-base">max</button></span></div>
@@ -442,9 +442,9 @@
         $("preview").innerHTML = `<canvas id="pv" width="600" height="112"></canvas>
           <b>${p.rungs.length}</b> positions · <b>${fmtPx(p.minPrice)}</b> – <b>${fmtPx(p.maxPrice)}</b> ${esc(state.quote.symbol)}<br/>
           uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}<br/>
-          ${p.limitedBy !== "none" ? `limited by your ${esc(p.limitedBy === (p.base.isToken0 ? "token0" : "token1") ? token.symbol : state.quote.symbol)}; the rest is refunded in the same transaction` : ""}`;
+          ${p.limitedBy !== "none" ? `limited by your ${esc(p.limitedBy === (p.base.isToken0 ? "token0" : "token1") ? token.symbol : state.quote.symbol)}; the rest is refunded in the same transaction` : "the pool takes what the price allows from each rung and refunds the rest in the same transaction"}`;
         const cv = $("pv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height, mx = Math.max(...p.rungs.map((r) => r.weight));
-        p.rungs.forEach((r, i) => { const x0 = (i / p.rungs.length) * W, w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); const inR = state.tick >= r.tickLower && state.tick < r.tickUpper; ctx.fillStyle = inR ? "#ff6414" : Number(r.amount0) > 0 && Number(r.amount1) > 0 ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(x0 + 2, H - h, w - 4, h); });
+        p.rungs.forEach((r, i) => { const x0 = (i / p.rungs.length) * W, w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(x0 + 1, H - h, Math.max(1, w - 2), h); });
         if (account) { go.textContent = p.tx.approve ? `Approve & mint ${p.rungs.length} positions` : `Mint ${p.rungs.length} positions`; go.disabled = false; }
       } catch (e) { if (seq === planSeq) { $("preview").textContent = e.message; if (account) { go.textContent = "Cannot plan"; go.disabled = true; } } }
     }
