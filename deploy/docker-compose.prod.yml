@@ -75,6 +75,7 @@ services:
       ORDO_AUCTION_URL: http://auction:8548
       ORDO_ARB_URL: http://arb:8549
       ORDO_STEALTH_SEND_ADDRESS: ${ORDO_STEALTH_SEND_ADDRESS:-}
+      ORDO_LADDER_ADDRESS: ${ORDO_LADDER_ADDRESS:-}
     depends_on: [auction]
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped

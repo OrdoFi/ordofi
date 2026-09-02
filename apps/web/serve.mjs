@@ -9,6 +9,7 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
+import { poolsList, poolState, poolsForToken, poolDepth, planPosition, positionsOf, collectCalldata, closeCalldata, setPoolsStore, LADDER_MANAGER } from "./pools.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
 function sendJson(req, res, status, body, headers = {}) {
@@ -661,6 +662,35 @@ async function handle(req, res) {
     return;
   }
 
+  if (path.startsWith("/api/pools")) {
+    try {
+      const q = url.searchParams;
+      const addr = (k) => { const v = q.get(k) ?? ""; if (!/^0x[0-9a-fA-F]{40}$/.test(v)) throw new Error(`bad ${k}`); return v; };
+      const big = (k) => { const v = q.get(k); if (v == null || v === "") return 0n; if (!/^\d+$/.test(v)) throw new Error(`bad ${k}`); return BigInt(v); };
+      let body;
+      if (path === "/api/pools") body = await poolsList(store);
+      else if (path === "/api/pools/token") body = { token: q.get("token"), pools: await poolsForToken(addr("token")) };
+      else if (path === "/api/pools/state") body = await poolState(addr("pool"), q.get("base") ?? undefined);
+      else if (path === "/api/pools/depth") body = await poolDepth(addr("pool"), { spanTicks: Math.max(200, Math.min(20_000, Number(q.get("span") ?? 3000))), buckets: Math.max(10, Math.min(120, Number(q.get("buckets") ?? 60))) });
+      else if (path === "/api/pools/plan") body = await planPosition({
+        pool: addr("pool"), base: q.get("base") ?? undefined,
+        minPrice: Number(q.get("minPrice")), maxPrice: Number(q.get("maxPrice")),
+        shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "curve",
+        bins: Math.max(1, Math.min(40, Number(q.get("bins") ?? 10))),
+        baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
+        slippageBps: Math.max(0, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
+      });
+      else if (path === "/api/pools/positions") body = await positionsOf(store, addr("owner"));
+      else if (path === "/api/pools/collect") body = collectCalldata(q.get("id"));
+      else if (path === "/api/pools/close") body = closeCalldata(q.get("id"));
+      else throw new Error("unknown pools endpoint");
+      sendJson(req, res, 200, body, { "cache-control": path === "/api/pools" ? "public, max-age=15" : "no-store" });
+    } catch (e) {
+      sendJson(req, res, 400, { error: e.message }, { "cache-control": "no-store" });
+    }
+    return;
+  }
+
   if (path === "/api/routed") {
     sendJson(req, res, 200, routedSummary(store), { "cache-control": "public, max-age=5" });
     return;
@@ -737,6 +767,7 @@ async function handle(req, res) {
   if (path === "/trade") path = "/trade.html";
   if (path === "/desk") path = "/desk.html";
   if (path === "/stealth") path = "/stealth.html";
+  if (path === "/pools" || path.startsWith("/pools/")) path = "/pools.html";
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";
@@ -767,6 +798,8 @@ process.on("uncaughtException", (e) => console.error(`web | uncaught exception: 
 // Warm the trade caches at boot: pool composition for today's busiest pools
 // and the token list. Building them takes dozens of round-trips, and the first
 // page load should never be the one paying for that.
+setPoolsStore(store);
+
 // Receipts for transactions the gateway forwarded, priced for the public counter.
 setInterval(() => resolveRouted(store).catch((e) => console.warn(`web | routed: ${e.message}`)), 10_000).unref?.();
 resolveRouted(store).catch(() => {});

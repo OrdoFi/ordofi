@@ -583,6 +583,9 @@ export async function tradeMarkets(store) {
 }
 
 /** Warm the caches at boot so the first visitor never waits on a cold lookup. */
+/** Shared with the pools module so both see one cache of pool metadata. */
+export const poolCache = pools;
+
 export function warmTradeCaches(store) {
   for (const { pool } of activePoolList(store).slice(0, 600)) pools.enqueue(pool);
   return tradeTokens(store);
