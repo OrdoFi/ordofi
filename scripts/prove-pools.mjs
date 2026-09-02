@@ -43,11 +43,15 @@ const m = await send({ to: plan.tx.to, data: plan.tx.data, value: BigInt(plan.tx
 ok(`minted — ${m.hash}`);
 
 step(3, "Read it back through the positions API");
-await new Promise((r) => setTimeout(r, 1500));
-const pos = await api(`/api/pools/positions?owner=${payer.address}`);
-const mine = pos.ladders.filter((l) => !l.closed);
-if (!mine.length) throw new Error("positions API shows nothing");
-const l = mine[0];
+// The upstream's "latest" can trail the sequencer by a second or two.
+let l = null;
+for (let i = 0; i < 12 && !l; i++) {
+  await new Promise((r) => setTimeout(r, 1500));
+  const pos = await api(`/api/pools/positions?owner=${payer.address}`);
+  const open = pos.ladders.filter((x) => !x.closed).sort((a, b) => Number(b.id) - Number(a.id));
+  if (open.length && open[0].rungs.length === plan.rungs.length && open[0].rungs[0].tickLower === plan.rungs[0].tickLower) l = open[0];
+}
+if (!l) throw new Error("positions API never showed the new ladder");
 ok(`ladder #${l.id} · ${l.rungs.length} rungs · value ${l.valueUsd.toFixed(2)} USD · deposited ${l.depositedUsd.toFixed(2)} USD · in range: ${l.rungs.filter((r) => r.inRange).length}`);
 if (l.rungs.length !== plan.rungs.length) throw new Error("rung count mismatch");
 for (let i = 0; i < l.rungs.length; i++) if (l.rungs[i].tickLower !== plan.rungs[i].tickLower || l.rungs[i].tickUpper !== plan.rungs[i].tickUpper) throw new Error(`rung ${i} ticks differ from the plan`);
