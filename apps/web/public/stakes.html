@@ -161,7 +161,7 @@
       else r.sort((a, b) => b.tvlWeth - a.tvlWeth);
       return r;
     }
-    const icon = (s) => `<div class="ic">${s.icon ? `<img src="${esc(s.icon)}" alt="" loading="lazy" />` : esc(s.symbol.slice(0, 2))}</div>`;
+    const icon = (s) => `<div class="ic" data-i="${esc(s.symbol.slice(0, 2))}">${s.icon ? `<img src="${esc(s.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc(s.symbol.slice(0, 2))}</div>`;
     const fees24 = (s) => usd(market.get(s.token)?.fees24Usd);
     function render() {
       const r = rows();

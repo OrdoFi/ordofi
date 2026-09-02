@@ -189,7 +189,8 @@
     let listData = null;
     const quoteFilter = { trending: "all", established: "all" };
     const sparkCache = new Map(); // token → closes (24h, 30m buckets)
-    const tokenCell = (t) => `<div class="tok"><div class="ic">${t.icon ? `<img src="${esc(t.icon)}" alt="" loading="lazy" />` : esc(t.symbol.slice(0, 2))}</div><div><b>${esc(t.symbol)}</b><small>${esc(t.name ?? "")}</small></div></div>`;
+    const logo = (t) => `<div class="ic" data-i="${esc(t.symbol.slice(0, 2))}">${t.icon ? `<img src="${esc(t.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc(t.symbol.slice(0, 2))}</div>`;
+    const tokenCell = (t) => `<div class="tok">${logo(t)}<div><b>${esc(t.symbol)}</b><small>${esc(t.name ?? "")}</small></div></div>`;
     async function renderList() {
       $("root").innerHTML = `
         <div id="lq-shell"></div>
@@ -295,7 +296,7 @@
 
       $("root").innerHTML = `
         <div id="lq-shell"></div>
-        <div class="head"><div class="ic">${token.icon ? `<img src="${esc(token.icon)}" alt="" />` : esc(token.symbol.slice(0, 2))}</div>
+        <div class="head">${logo(token)}
           <div><h1>${esc(token.symbol)}</h1><div class="nm">${esc(token.name ?? "")} · Robinhood Chain</div><div class="meta"><span class="mono">${token.address}</span> <button id="copy-addr">copy</button> · <a href="${EXPLORER}/token/${token.address}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${token.address}">trade</a></div></div></div>
         <div class="grid">
           <div>

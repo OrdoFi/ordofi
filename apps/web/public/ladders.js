@@ -118,7 +118,7 @@ export function renderLadders(container, portfolio, opts = {}) {
   container.innerHTML = [...groups.values()].map((ls) => {
     const b = ls[0].base;
     return `<div class="lg" data-token="${b.address}">
-      <div class="lg-h"><div class="ic">${b.icon ? `<img src="${esc(b.icon)}" alt="" />` : esc(b.symbol.slice(0, 2))}</div><b>${esc(b.name ?? b.symbol).toUpperCase()}</b><small>${esc(b.symbol)}</small>
+      <div class="lg-h"><div class="ic" data-i="${esc(b.symbol.slice(0, 2))}">${b.icon ? `<img src="${esc(b.icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc(b.symbol.slice(0, 2))}</div><b>${esc(b.name ?? b.symbol).toUpperCase()}</b><small>${esc(b.symbol)}</small>
         ${opts.token ? "" : `<a href="/pools/${b.address}">open pool page →</a>`}<button class="closeall" data-ids="${ls.filter((l) => !l.closed).map((l) => l.id).join(",")}" ${ls.filter((l) => !l.closed).length > 1 ? "" : "disabled"}>Close all</button></div>
       ${ls.map((l) => card(l)).join("")}</div>`;
   }).join("");

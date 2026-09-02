@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { decodeEventLog, decodeFunctionResult, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
 import { rpcFetch, rpcOnce, rpcUrls, RPC_HEADERS } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
@@ -153,6 +154,60 @@ async function cached(key, ttlMs, fn) {
   cache.set(key, { at: Date.now(), v });
   return v;
 }
+/**
+ * Like `cached`, but once a value exists nobody waits for a refresh: a stale
+ * value is served and rebuilt in the background. For the list, whose rebuild
+ * is a few hundred reads, this is the difference between a page and a spinner.
+ */
+const refreshing = new Map();
+async function cachedSWR(key, ttlMs, fn) {
+  const hit = cache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.v;
+  if (hit) {
+    if (!refreshing.has(key)) refreshing.set(key, fn().then((v) => cache.set(key, { at: Date.now(), v })).catch(() => {}).finally(() => refreshing.delete(key)));
+    return hit.v;
+  }
+  if (!refreshing.has(key)) refreshing.set(key, fn().then((v) => { cache.set(key, { at: Date.now(), v }); return v; }).finally(() => refreshing.delete(key)));
+  return refreshing.get(key);
+}
+
+// ---------------------------------------------------------------- icons
+
+/**
+ * Token logos. First the curated map (the same CoinGecko / GeckoTerminal /
+ * DexScreener / IPFS images the other LP front ends show), then whatever the
+ * indexer already knows, then DexScreener's per-address image — probed once in
+ * the background and remembered, so a missing logo never costs a request.
+ */
+let ICON_SEED = {};
+try { ICON_SEED = JSON.parse(readFileSync(new URL("./token-icons.json", import.meta.url), "utf8")); } catch { /* optional */ }
+const iconCache = new Map(); // address → { url: string|null, at }
+const NEG_ICON_TTL = 6 * 3_600_000;
+export function iconFor(address) {
+  const a = lower(address);
+  return ICON_SEED[a] ?? iconCache.get(a)?.url ?? null;
+}
+async function probeIcon(a) {
+  const u = `https://dd.dexscreener.com/ds-data/tokens/robinhood/${a}.png?size=lg`;
+  try {
+    const r = await fetch(u, { signal: AbortSignal.timeout(6_000), headers: { "user-agent": "Mozilla/5.0 (compatible; OrdoFi)" } });
+    const ok = r.ok && (r.headers.get("content-type") ?? "").startsWith("image/");
+    try { await r.body?.cancel(); } catch { /* already drained */ }
+    return ok ? u : null;
+  } catch { return null; }
+}
+let iconJob = null;
+function scheduleIconProbe(addresses) {
+  const now = Date.now();
+  const todo = [...new Set(addresses.map(lower))].filter((a) => !ICON_SEED[a] && (!iconCache.has(a) || (iconCache.get(a).url == null && now - iconCache.get(a).at > NEG_ICON_TTL)));
+  if (!todo.length || iconJob) return;
+  iconJob = (async () => {
+    let i = 0;
+    const worker = async () => { while (i < todo.length) { const a = todo[i++]; iconCache.set(a, { url: await probeIcon(a), at: Date.now() }); } };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    cache.delete("list"); // the next list carries the new logos
+  })().catch(() => {}).finally(() => { iconJob = null; });
+}
 
 const lower = (a) => String(a ?? "").toLowerCase();
 
@@ -170,7 +225,7 @@ const isMoney = (a) => a === WETH || a === USDG;
  * Fees are volume times the pool's fee tier; that is what LPs split.
  */
 export async function poolsList(store) {
-  return cached("list", 20_000, async () => {
+  return cachedSWR("list", 30_000, async () => {
     const [markets, tokens] = await Promise.all([tradeMarkets(store), tradeTokens(store)]);
     const tokenBy = new Map(tokens.map((t) => [t.address, t]));
     const byToken = new Map();
@@ -184,7 +239,7 @@ export async function poolsList(store) {
         token: baseAddr,
         symbol: m.base.symbol,
         name: tokenBy.get(baseAddr)?.name ?? null,
-        icon: m.base.icon ?? tokenBy.get(baseAddr)?.icon ?? null,
+        icon: m.base.icon ?? tokenBy.get(baseAddr)?.icon ?? iconFor(baseAddr),
         decimals: m.base.decimals,
         priceUsd: m.base.usdPerToken ?? (m.quote.usdPerToken ? m.price * m.quote.usdPerToken : null),
         change24: m.change24,
@@ -213,6 +268,7 @@ export async function poolsList(store) {
       const cov = store?.candleCoverage?.(r.pool);
       r.ageDays = cov ? Math.max(0, Math.floor((Date.now() / 1000 - cov.from) / 86_400)) : null;
     }
+    scheduleIconProbe(rows.filter((r) => !r.icon).map((r) => r.token));
     const all = rows.slice().sort((a, b) => b.volume24Usd - a.volume24Usd);
     const trending = all.slice(0, 40);
     const established = rows.filter((r) => r.marketCapUsd).sort((a, b) => b.marketCapUsd - a.marketCapUsd).slice(0, 40);
@@ -266,7 +322,7 @@ export async function poolState(pool, baseToken) {
 
 async function tokenInfo(address) {
   const t = (await tradeTokens(STORE)).find((x) => x.address === address);
-  return { address, symbol: address === WETH ? "ETH" : t?.symbol ?? address.slice(0, 8), name: t?.name ?? null, decimals: t?.decimals ?? 18, icon: t?.icon ?? null, usdPerToken: t?.usdPerToken ?? null };
+  return { address, symbol: address === WETH ? "ETH" : t?.symbol ?? address.slice(0, 8), name: t?.name ?? null, decimals: t?.decimals ?? 18, icon: t?.icon ?? iconFor(address), usdPerToken: t?.usdPerToken ?? null };
 }
 
 /** The token a pool is "about": whichever side is not ETH or USDG. */

@@ -101,8 +101,8 @@ export function mountShell(root, { page } = {}) {
   const close = () => { box.classList.remove("open"); sel = -1; };
   const render = (d) => {
     const rows = [];
-    if (d.tokens.length) { rows.push(`<h6>Tokens</h6>`); for (const x of d.tokens) rows.push(`<a href="/pools/${x.token}"><div class="ic">${x.icon ? `<img src="${esc(x.icon)}" alt="" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>${esc(x.name ?? "")}</small></span><span class="r">${usd(x.marketCapUsd)} MC</span></a>`); }
-    if (d.stakes.length) { rows.push(`<h6>Stakes</h6>`); for (const x of d.stakes) rows.push(`<a href="/stakes?vault=${x.vault}"><div class="ic">${x.icon ? `<img src="${esc(x.icon)}" alt="" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>stake · ${(x.rate7d * 100).toFixed(1)}% 7d</small></span><span class="r">${usd(x.tvlUsd)} TVL</span></a>`); }
+    if (d.tokens.length) { rows.push(`<h6>Tokens</h6>`); for (const x of d.tokens) rows.push(`<a href="/pools/${x.token}"><div class="ic" data-i="${esc((x.symbol ?? "?").slice(0, 2))}">${x.icon ? `<img src="${esc(x.icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>${esc(x.name ?? "")}</small></span><span class="r">${usd(x.marketCapUsd)} MC</span></a>`); }
+    if (d.stakes.length) { rows.push(`<h6>Stakes</h6>`); for (const x of d.stakes) rows.push(`<a href="/stakes?vault=${x.vault}"><div class="ic" data-i="${esc((x.symbol ?? "?").slice(0, 2))}">${x.icon ? `<img src="${esc(x.icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>stake · ${(x.rate7d * 100).toFixed(1)}% 7d</small></span><span class="r">${usd(x.tvlUsd)} TVL</span></a>`); }
     out.innerHTML = rows.length ? rows.join("") : `<div class="none">Nothing matches “${esc(q.value.trim())}”.</div>`;
     box.classList.add("open"); sel = -1;
   };
