@@ -904,6 +904,19 @@ export class OrdoStore {
     };
   }
 
+  /**
+   * Distinct searcher addresses that landed an atomic arbitrage at or after
+   * `sinceSec` (a block timestamp, seconds). "Active" needs a window: the
+   * all-time distinct count only ever grows and says nothing about who is
+   * still competing today.
+   */
+  activeSearchers(sinceSec: number): number {
+    const r = this.db
+      .prepare(`SELECT COUNT(DISTINCT sender) n FROM arbs WHERE timestamp >= ?`)
+      .get(Math.floor(sinceSec)) as { n?: number } | undefined;
+    return Number(r?.n ?? 0);
+  }
+
   recentArbs(limit = 40): ArbRow[] {
     const rows = this.db
       .prepare(`SELECT * FROM arbs ORDER BY block DESC LIMIT ?`)

@@ -129,6 +129,24 @@ function indexedReport() {
   reportMemo = { at: Date.now(), v };
   return v;
 }
+/**
+ * Searchers that landed an arbitrage in the last 24 hours. A window scan of
+ * the arb table, so it shares the report's reasoning and its sixty-second memo.
+ */
+let activeMemo = null;
+function activeSearchers24h() {
+  if (!store?.activeSearchers) return 0;
+  if (activeMemo && Date.now() - activeMemo.at < 60_000) return activeMemo.v;
+  let v = 0;
+  try {
+    v = store.activeSearchers(Date.now() / 1000 - 86_400);
+  } catch {
+    /* index optional */
+  }
+  activeMemo = { at: Date.now(), v };
+  return v;
+}
+
 function computeIndexedReport() {
   try {
     const totals = store.totals();
@@ -434,18 +452,29 @@ async function handle(req, res) {
     } catch {
       /* ignore */
     }
+    const usdEth = await ethUsd().catch(() => null);
+    const active24h = activeSearchers24h();
+    const num = (s) => (s == null ? 0 : Number(s));
+    const toUsd = (eth) => (usdEth == null ? null : Math.round(eth * usdEth * 100) / 100);
+    // What the auction actually charged searchers and settled on-chain — not
+    // the arbitrage the watcher merely observed, which is a different number
+    // and a much larger one.
+    const capturedEth = onchain.deployed ? num(onchain.totals.totalSettledEth) : 0;
+    const returnedEth = onchain.deployed ? num(onchain.totals.rebatesToUsersEth) + num(onchain.totals.rebatesToAppsEth) : 0;
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
         chain: { name: "Robinhood Chain", chainId: 4663 },
         arbs: rep?.totals?.arbs ?? 0,
         searchers: rep?.totals?.uniqueSearchers ?? 0,
+        activeSearchers24h: active24h,
         pools: rep?.totals?.uniquePools ?? 0,
         swaps: rep?.totals?.swaps ?? 0,
         // null until the sample is long enough to extrapolate honestly.
         arbsPerDay: rep?.perDay?.arbs == null ? null : Math.round(rep.perDay.arbs),
+        ethUsd: usdEth,
         routed: routed.available
-          ? { transactions: routed.transactions.confirmed, volumeUsd: routed.volumeUsd, volume24hUsd: routed.volume24hUsd, since: routed.since }
+          ? { transactions: routed.transactions.confirmed, transactions24h: routed.transactions.confirmed24h, volumeUsd: routed.volumeUsd, volume24hUsd: routed.volume24hUsd, since: routed.since }
           : null,
         settlement: onchain.deployed
           ? {
@@ -454,9 +483,28 @@ async function handle(req, res) {
               settlements: onchain.totals.settlements,
               totalSettledEth: onchain.totals.totalSettledEth,
               rebatesToUsersEth: onchain.totals.rebatesToUsersEth,
+              rebatesToAppsEth: onchain.totals.rebatesToAppsEth,
+              protocolFeesEth: onchain.totals.protocolFeesEth,
               totalBondedEth: onchain.totals.totalBondedEth,
+              stale: Boolean(onchain.stale),
             }
           : { deployed: false },
+        // The five figures the dashboards lead with, precomputed so an
+        // embedding site does not repeat the arithmetic or the caveats.
+        headline: {
+          protectedVolumeUsd: routed.available ? routed.volumeUsd : 0,
+          protectedVolume24hUsd: routed.available ? routed.volume24hUsd : 0,
+          transactions: routed.available ? routed.transactions.confirmed : 0,
+          transactions24h: routed.available ? routed.transactions.confirmed24h : 0,
+          mevCapturedEth: capturedEth,
+          mevCapturedUsd: toUsd(capturedEth),
+          settlements: onchain.deployed ? onchain.totals.settlements : 0,
+          rebatesReturnedEth: returnedEth,
+          rebatesReturnedUsd: toUsd(returnedEth),
+          activeSearchers24h: active24h,
+          searchersAllTime: rep?.totals?.uniqueSearchers ?? 0,
+          since: routed.available ? routed.since : null,
+        },
         updatedAt: new Date().toISOString(),
       }),
     );

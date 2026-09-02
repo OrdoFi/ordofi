@@ -300,8 +300,15 @@ can embed live numbers directly.
 
 ```js
 const s = await fetch("https://app.ordofi.network/api/stats").then(r => r.json());
-// { arbs, searchers, pools, swaps, arbsPerDay,
-//   settlement: { deployed, settlements, totalSettledEth, rebatesToUsersEth, totalBondedEth } }
+// { arbs, searchers, activeSearchers24h, pools, swaps, arbsPerDay, ethUsd,
+//   routed: { transactions, transactions24h, volumeUsd, volume24hUsd, since },
+//   settlement: { deployed, settlements, totalSettledEth, rebatesToUsersEth, rebatesToAppsEth, ... },
+//   headline: { protectedVolumeUsd, transactions, mevCapturedEth, mevCapturedUsd,
+//               rebatesReturnedEth, rebatesReturnedUsd, activeSearchers24h, ... } }
+// `headline` is the five-figure strip on the home and RPC pages: protected volume
+// and transactions are what went through rpc.ordofi.network; MEV captured and
+// rebates returned are what OrdoSettlement charged and credited on-chain, not the
+// arbitrage merely observed; active searchers landed an arb in the last 24h.
 ```
 
 | Endpoint | Returns |

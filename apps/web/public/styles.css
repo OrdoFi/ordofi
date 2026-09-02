@@ -121,9 +121,14 @@ nav .wrap { display: flex; align-items: center; justify-content: space-between; 
 .stat:last-child { border-right: none; }
 .stat .num { font-family: var(--display); font-size: clamp(30px, 3.6vw, 44px); font-weight: 500; letter-spacing: -0.02em; color: var(--text); line-height: 1.1; }
 .stat .lbl { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-top: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
-/* The counter that is ours: what actually went through our RPC. */
+/* The counters that are ours: what went through our RPC, what the auction
+   captured and paid back, who is competing for it right now. */
 .stats.routed { background: var(--card); }
 .stats.routed .stat .num { color: var(--accent); }
+.stats.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.stats.five .stat { padding: 30px 24px; }
+.stats.five .stat .num { font-size: clamp(24px, 2.6vw, 34px); }
+.stat .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- Ticker ---------- */
 .ticker { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); overflow: hidden; white-space: nowrap; position: relative; background: var(--bg); }
@@ -277,15 +282,17 @@ section { padding: 96px 0; position: relative; }
   .problem:last-child { border-bottom: none; }
   .steps { grid-template-columns: 1fr 1fr; }
   .step:nth-child(2n) { border-right: none; }
-  .stats { grid-template-columns: 1fr 1fr; }
+  .stats, .stats.five { grid-template-columns: 1fr 1fr; }
   .stat:nth-child(2n) { border-right: none; }
   .stat { border-bottom: 1px solid var(--border); }
+  .stats.five .stat:last-child { grid-column: 1 / -1; border-bottom: none; }
   .footer-grid { grid-template-columns: 1fr 1fr; gap: 36px; }
   .phase { grid-template-columns: 1fr; gap: 10px; }
   .frame { padding: 22px; }
 }
 @media (max-width: 600px) {
-  .stats, .steps { grid-template-columns: 1fr; }
+  .stats, .stats.five, .steps { grid-template-columns: 1fr; }
+  .stat { border-right: none; }
   .step { border-right: none; border-bottom: 1px solid var(--border); }
   .step:last-child { border-bottom: none; }
   .footer-grid { grid-template-columns: 1fr; }

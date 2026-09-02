@@ -46,13 +46,16 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
   .btn.ghost { background:transparent; color:var(--text); border-color:var(--border2); }
   .btn.ghost:hover { border-color:var(--text); }
   .cta .note { font-family:var(--mono); font-size:11.5px; color:var(--muted); }
-  .status { display:grid; grid-template-columns:repeat(4,1fr); border:1px solid var(--border); border-top:none; }
+  .status { display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--border); border-top:none; }
   .status > div { padding:22px 24px; border-right:1px solid var(--border); }
   .status > div:last-child { border-right:none; }
   .status .k { font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
   .status .v { font-family:var(--display); font-size:26px; font-weight:500; margin-top:6px; letter-spacing:-.01em; }
   .status .v small { font-family:var(--mono); font-size:11px; color:var(--muted); font-weight:400; margin-left:6px; }
   .status .v.ok { color:var(--ok); } .status .v.bad { color:var(--bad); }
+  .status.protocol { grid-template-columns:repeat(5,minmax(0,1fr)); background:var(--card); }
+  .status.protocol .v { font-size:22px; color:var(--accent); }
+  .status.protocol .v small { display:block; margin:4px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   section { padding:64px 0; border-bottom:1px solid var(--border); }
   h2 { font-family:var(--display); font-weight:500; font-size:30px; letter-spacing:-.015em; margin-bottom:26px; }
   .grid3 { display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--border); }
@@ -73,8 +76,8 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
   .lede { color:var(--muted); font-size:15.5px; max-width:640px; margin:-14px 0 26px; }
   footer { padding:36px 0 40px; display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; font-family:var(--mono); font-size:12px; color:#8a847a; }
   footer a { color:var(--muted); } footer a:hover { color:var(--accent); }
-  @media (max-width:860px) { .status, .grid3 { grid-template-columns:1fr 1fr; } .status > div:nth-child(2n), .grid3 > div:nth-child(2n) { border-right:none; } .status > div, .grid3 > div { border-bottom:1px solid var(--border); } .two { grid-template-columns:1fr; } nav .links { display:none; } }
-  @media (max-width:560px) { .status, .grid3 { grid-template-columns:1fr; } .status > div, .grid3 > div { border-right:none; } header { padding:48px 0 36px; } }
+  @media (max-width:860px) { .status, .status.protocol, .grid3 { grid-template-columns:1fr 1fr; } .status > div:nth-child(2n), .grid3 > div:nth-child(2n) { border-right:none; } .status > div, .grid3 > div { border-bottom:1px solid var(--border); } .status.protocol > div:last-child { grid-column:1 / -1; } .two { grid-template-columns:1fr; } nav .links { display:none; } }
+  @media (max-width:560px) { .status, .status.protocol, .grid3 { grid-template-columns:1fr; } .status > div, .grid3 > div { border-right:none; } header { padding:48px 0 36px; } }
 </style>
 </head>
 <body>
@@ -94,12 +97,20 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
   </div>
 </div></header>
 
-<div class="wrap"><div class="status">
-  <div><div class="k">Endpoint</div><div class="v" id="st-status">checking…</div></div>
-  <div><div class="k">Chain head</div><div class="v" id="st-head">—</div></div>
-  <div><div class="k">Round trip</div><div class="v" id="st-rtt">—</div></div>
-  <div><div class="k">Routed through here</div><div class="v" id="st-routed">—</div></div>
-</div></div>
+<div class="wrap">
+  <div class="status">
+    <div><div class="k">Endpoint</div><div class="v" id="st-status">checking…</div></div>
+    <div><div class="k">Chain head</div><div class="v" id="st-head">—</div></div>
+    <div><div class="k">Round trip</div><div class="v" id="st-rtt">—</div></div>
+  </div>
+  <div class="status protocol" aria-label="What has gone through OrdoFi">
+    <div><div class="k">Protected volume</div><div class="v" id="st-vol">—<small>through rpc.ordofi.network</small></div></div>
+    <div><div class="k">Transactions</div><div class="v" id="st-tx">—<small>simulated, delivered privately</small></div></div>
+    <div><div class="k">MEV captured</div><div class="v" id="st-mev">—<small>settled on-chain</small></div></div>
+    <div><div class="k">Rebates returned</div><div class="v" id="st-reb">—<small>to users and apps</small></div></div>
+    <div><div class="k">Active searchers</div><div class="v" id="st-srch">—<small>last 24h on-chain</small></div></div>
+  </div>
+</div>
 
 <section><div class="wrap">
   <h2>What happens to a transaction here</h2>
@@ -168,15 +179,26 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
     } catch (e) {
       $("st-status").textContent = "unreachable"; $("st-status").className = "v bad";
     }
+  }
+  // The protocol row comes from the app, which reads the settlement contract
+  // for it; once a minute is plenty for numbers that move by the settlement.
+  async function headline() {
     try {
-      const d = await (await fetch("${app}/api/routed")).json();
-      if (d.available) {
-        const usd = (n) => "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
-        $("st-routed").innerHTML = usd(d.volumeUsd) + "<small>" + Number(d.transactions.confirmed).toLocaleString() + " tx</small>";
-      }
+      const h = (await (await fetch("${app}/api/stats")).json()).headline;
+      if (!h) return;
+      const usd = (n) => "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
+      const eth = (n) => Number(n).toLocaleString(undefined, { maximumSignificantDigits: 4 }) + " ETH";
+      const int = (n) => Number(n).toLocaleString();
+      const money = (usdV, ethV) => (usdV == null ? eth(ethV) : usd(usdV));
+      $("st-vol").innerHTML = usd(h.protectedVolumeUsd) + "<small>" + usd(h.protectedVolume24hUsd) + " in 24h</small>";
+      $("st-tx").innerHTML = int(h.transactions) + "<small>" + int(h.transactions24h) + " in 24h · simulated, private</small>";
+      $("st-mev").innerHTML = money(h.mevCapturedUsd, h.mevCapturedEth) + "<small>" + eth(h.mevCapturedEth) + " settled on-chain</small>";
+      $("st-reb").innerHTML = money(h.rebatesReturnedUsd, h.rebatesReturnedEth) + "<small>" + eth(h.rebatesReturnedEth) + " to users and apps</small>";
+      $("st-srch").innerHTML = int(h.activeSearchers24h) + "<small>last 24h · " + int(h.searchersAllTime) + " all time</small>";
     } catch { /* cosmetic */ }
   }
   probe(); setInterval(probe, 10000);
+  headline(); setInterval(headline, 60000);
 
   $("add").addEventListener("click", async () => {
     const eth = window.ethereum;

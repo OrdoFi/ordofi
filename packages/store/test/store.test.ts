@@ -61,6 +61,23 @@ test("window reports the indexed block range and span", () => {
   s.close();
 });
 
+test("activeSearchers counts distinct senders inside the window only", () => {
+  const s = new OrdoStore(":memory:");
+  // arb() stamps timestamp = 1_700_000_000 + block, so block gaps are seconds.
+  s.insertArbs([
+    arb("0x1", 0, "0xold", ["0xp"]),
+    arb("0x2", 90_000, "0xalice", ["0xp"]),
+    arb("0x3", 90_100, "0xalice", ["0xp"]),
+    arb("0x4", 90_200, "0xbob", ["0xp"]),
+  ]);
+  const since = 1_700_000_000 + 90_200 - 86_400;
+  assert.equal(s.activeSearchers(since), 2, "alice once, bob once; the day-old sender is out");
+  assert.equal(s.activeSearchers(1_700_000_000 + 90_200), 1, "the boundary is inclusive");
+  assert.equal(s.activeSearchers(1_700_000_000 + 99_999), 0, "nothing in an empty window");
+  assert.equal(s.totals().searchers, 3, "the all-time count is unaffected");
+  s.close();
+});
+
 test("swaps are counted, not stored", () => {
   const s = new OrdoStore(":memory:");
   s.addSwaps(120);
