@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { decodeEventLog, encodeFunctionData, decodeFunctionResult, toEventSelector } from "viem";
 import { rpcFetch } from "@ordofi/core";
-import { ANNOUNCER_ABI, ERC5564_ANNOUNCER, ERC6538_REGISTRY, REGISTRY_ABI } from "@ordofi/core/stealth";
+import { ANNOUNCER_ABI, ERC5564_ANNOUNCER, ERC6538_REGISTRY, ORDO_STEALTH_SEND, REGISTRY_ABI } from "@ordofi/core/stealth";
 
 /**
  * The announcement feed the Stealth page scans against.
@@ -154,6 +154,7 @@ export async function stealthFeed({ since = 0 } = {}) {
   return {
     announcer: ERC5564_ANNOUNCER,
     registry: ERC6538_REGISTRY,
+    sender: process.env.ORDO_STEALTH_SEND_ADDRESS ?? ORDO_STEALTH_SEND,
     scannedFrom: state.scannedFrom,
     scannedTo: state.scannedTo,
     head: state.head ?? null,

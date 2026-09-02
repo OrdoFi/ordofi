@@ -62,6 +62,7 @@ contract OrdoStealthSendTest is Test {
     MockToken token;
     address alice = makeAddr("alice");
     address stealth = makeAddr("stealth");
+    address treasury = makeAddr("treasury");
     bytes ephemeral = hex"02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     bytes metadata = hex"2a";
 
@@ -76,7 +77,7 @@ contract OrdoStealthSendTest is Test {
     function setUp() public {
         vm.etch(ANNOUNCER, address(new MockAnnouncer()).code);
         announcer = MockAnnouncer(ANNOUNCER);
-        send = new OrdoStealthSend();
+        send = new OrdoStealthSend(treasury);
         token = new MockToken();
         vm.deal(alice, 10 ether);
     }
@@ -88,9 +89,24 @@ contract OrdoStealthSendTest is Test {
         vm.prank(alice);
         send.sendETH{value: 1 ether}(stealth, ephemeral, metadata);
 
-        assertEq(stealth.balance, 1 ether, "ETH delivered");
+        assertEq(stealth.balance, 0.9975 ether, "ETH delivered less 0.25%");
+        assertEq(treasury.balance, 0.0025 ether, "fee to treasury");
         assertEq(announcer.count(), 1, "exactly one announcement");
         assertEq(address(send).balance, 0, "contract keeps nothing");
+    }
+
+    function test_split_isExactAndNeverLosesWei() public view {
+        (uint256 fee, uint256 net) = send.split(1 ether);
+        assertEq(fee, 0.0025 ether);
+        assertEq(net + fee, 1 ether);
+        (fee, net) = send.split(1);
+        assertEq(fee, 0, "sub-wei fee rounds to zero, never up");
+        assertEq(net, 1);
+    }
+
+    function test_constructor_refusesZeroTreasury() public {
+        vm.expectRevert(OrdoStealthSend.ZeroAddress.selector);
+        new OrdoStealthSend(address(0));
     }
 
     function test_sendETH_refusesZero() public {
@@ -107,6 +123,7 @@ contract OrdoStealthSendTest is Test {
         send.sendETH{value: 1 ether}(refuses, ephemeral, metadata);
         assertEq(announcer.count(), 0, "an announcement must never stand without the funds");
         assertEq(alice.balance, 10 ether, "sender keeps their ETH");
+        assertEq(treasury.balance, 0, "no fee on a failed payment");
     }
 
     function test_sendToken_movesTokensAndGasTogether() public {
@@ -116,9 +133,11 @@ contract OrdoStealthSendTest is Test {
         send.sendToken{value: 0.00006 ether}(address(token), 250e6, stealth, ephemeral, metadata);
         vm.stopPrank();
 
-        assertEq(token.balanceOf(stealth), 250e6, "tokens delivered");
+        assertEq(token.balanceOf(stealth), 249_375_000, "tokens delivered less 0.25%");
+        assertEq(token.balanceOf(treasury), 625_000, "fee to treasury");
         assertEq(token.balanceOf(alice), 750e6, "taken from the sender");
-        assertEq(stealth.balance, 0.00006 ether, "gas stipend delivered");
+        assertEq(stealth.balance, 0.00006 ether, "gas stipend delivered in full, uncharged");
+        assertEq(treasury.balance, 0, "no fee on the gas stipend");
         assertEq(announcer.count(), 1);
         assertEq(address(send).balance, 0, "contract keeps nothing");
     }
@@ -129,7 +148,8 @@ contract OrdoStealthSendTest is Test {
         token.approve(address(send), 100e6);
         send.sendToken(address(token), 100e6, stealth, ephemeral, metadata);
         vm.stopPrank();
-        assertEq(token.balanceOf(stealth), 100e6);
+        assertEq(token.balanceOf(stealth), 99_750_000);
+        assertEq(token.balanceOf(treasury), 250_000);
         assertEq(stealth.balance, 0);
     }
 

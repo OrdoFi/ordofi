@@ -56,6 +56,39 @@ export const UNLOCK_MESSAGE =
 export const ERC5564_ANNOUNCER = "0x55649E01B5Df198D18D95b5cc5051630cfD45564" as const;
 export const ERC6538_REGISTRY = "0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538" as const;
 
+/**
+ * OrdoStealthSend on Robinhood Chain: announce and deliver in one transaction.
+ * Stateless and ownerless; see contracts/src/OrdoStealthSend.sol.
+ */
+export const ORDO_STEALTH_SEND = "0x61EB326F7910d610Dbc6Abf268d4251B34552937" as const;
+
+export const STEALTH_SEND_ABI = [
+  {
+    type: "function",
+    name: "sendETH",
+    stateMutability: "payable",
+    inputs: [
+      { name: "stealthAddress", type: "address" },
+      { name: "ephemeralPubKey", type: "bytes" },
+      { name: "metadata", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "sendToken",
+    stateMutability: "payable",
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "stealthAddress", type: "address" },
+      { name: "ephemeralPubKey", type: "bytes" },
+      { name: "metadata", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
 /** Sentinel used in announcement metadata for the chain's native currency. */
 export const NATIVE_TOKEN = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" as const;
 
