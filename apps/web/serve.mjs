@@ -663,6 +663,7 @@ async function handle(req, res) {
   }
 
   if (path.startsWith("/api/pools")) {
+    if (process.env.ORDO_POOLS_ENABLED !== "1") { sendJson(req, res, 404, { error: "not found" }, { "cache-control": "no-store" }); return; }
     try {
       const q = url.searchParams;
       const addr = (k) => { const v = q.get(k) ?? ""; if (!/^0x[0-9a-fA-F]{40}$/.test(v)) throw new Error(`bad ${k}`); return v; };
@@ -767,13 +768,14 @@ async function handle(req, res) {
   if (path === "/trade") path = "/trade.html";
   if (path === "/desk") path = "/desk.html";
   if (path === "/stealth") path = "/stealth.html";
-  if (path === "/pools" || path.startsWith("/pools/")) path = "/pools.html";
+  if ((path === "/pools" || path.startsWith("/pools/")) && process.env.ORDO_POOLS_ENABLED === "1") path = "/pools.html";
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";
   if (path === "/searchers") path = "/searchers.html";
   if (path === "/apps") path = "/apps.html";
   if (path === "/operators") path = "/operators.html";
+  if (path === "/pools.html" && process.env.ORDO_POOLS_ENABLED !== "1") { res.writeHead(404).end("not found"); return; }
   const file = join(ROOT, path);
   if (!file.startsWith(ROOT) || !existsSync(file)) {
     res.writeHead(404).end("not found");
