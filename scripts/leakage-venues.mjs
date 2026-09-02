@@ -127,18 +127,22 @@ async function pricedUsdFor(pools) {
 }
 
 const rows = [];
+const isV4PoolId = (k) => /^0x[0-9a-f]{64}$/i.test(k);
 for (const { pool, count } of pools) {
   // The V4 singleton is the venue, not a pool deployed by one: probing it for
-  // token0()/factory() reverts by design. Its per-pool story comes from the
-  // poolId breakdown below.
-  if (pool.toLowerCase() === V4_POOL_MANAGER) {
+  // token0()/factory() reverts by design. Rows the watcher wrote before it
+  // keyed V4 swaps by PoolId carry the singleton's address and get their
+  // per-pool story from the poolId breakdown below; newer rows are PoolIds
+  // and the watcher's Initialize table names their pair directly.
+  if (pool.toLowerCase() === V4_POOL_MANAGER || isV4PoolId(pool)) {
     const priced = await pricedUsdFor([pool]);
+    const key = isV4PoolId(pool) ? store.v4Pool(pool) : null;
     rows.push({
       pool,
       arbs: count,
       factory: V4_POOL_MANAGER,
-      pair: "all V4 pools (singleton)",
-      fee: null,
+      pair: key ? `${await v4Symbol(key.currency0)}/${await v4Symbol(key.currency1)}` : isV4PoolId(pool) ? `V4 pool ${short(pool)}` : "all V4 pools (singleton)",
+      fee: key ? key.fee : null,
       usd: priced.usd,
       searchers: priced.searchers,
       unpricedTokens: priced.unpricedTokens,

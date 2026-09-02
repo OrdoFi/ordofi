@@ -4,6 +4,7 @@ import { ENDPOINTS, rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { analyzeBlock } from "./detect.js";
 import { extractPricePoints, extractTrades } from "./candles.js";
+import { backfillV4Pools, extractV4Initializes, V4_SCANNED_KEY } from "./v4.js";
 
 const RPC = ENDPOINTS.rpc;
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data");
@@ -82,6 +83,7 @@ const stats = {
   arbProfitByToken: new Map<string, bigint>(),
   arbSenders: new Map<string, number>(),
   poolsSeen: new Set<string>(),
+  v4PoolsSeen: 0,
 };
 
 function printSummary(head: number, next: number, concurrency: number) {
@@ -103,7 +105,7 @@ function printSummary(head: number, next: number, concurrency: number) {
   console.log(
     `[summary] head=${head} lag=${lag} (${(lag * 0.1 / 60).toFixed(1)}m) rate=${rate.toFixed(1)}blk/s ` +
       `conc=${concurrency} uptime=${mins}m blocks=${stats.blocksSeen} txs=${stats.txsSeen} ` +
-      `swaps=${stats.swapsSeen} pools=${stats.poolsSeen.size} arbs=${stats.arbsSeen}`,
+      `swaps=${stats.swapsSeen} pools=${stats.poolsSeen.size} arbs=${stats.arbsSeen} v4new=${stats.v4PoolsSeen}`,
   );
   if (stats.arbsSeen > 0) {
     console.log(`[summary] top arb profit (wei by token): ${profit}`);
@@ -144,6 +146,14 @@ async function processBlock(n: number): Promise<void> {
     store.insertTrades(extractTrades(n, timestamp, receipts as any[]));
   } catch {
     /* charts must never stall the indexer */
+  }
+  // V4 pools announce their key once, at creation. Missing it means the
+  // pool's candles can never be read back as a pair, so this is not
+  // best-effort: a failure here fails the block and it is retried.
+  const created = extractV4Initializes(n, timestamp, receipts as any[]);
+  if (created.length > 0) {
+    store.upsertV4Pools(created);
+    stats.v4PoolsSeen += created.length;
   }
   stats.swapsSeen += swaps.length;
   stats.arbsSeen += arbs.length;
@@ -207,6 +217,22 @@ async function main() {
   let lastSaved = next;
   let lastSummary = next;
 
+  // V4 pool keys for every block before this run's start, walked in the
+  // background. Once the walk has met the live loop, the live checkpoint
+  // carries the V4 one forward too, so a restart that jumps ahead (checkpoint
+  // too far behind head) still knows exactly where the walk must resume.
+  const liveStart = next;
+  let v4Caught = Number(store.getMeta(V4_SCANNED_KEY) ?? -1) >= liveStart - 1;
+  if (!v4Caught) {
+    backfillV4Pools(store, { toBlock: liveStart - 1, log: (m) => console.log(m) })
+      .then((reached) => { v4Caught = reached >= liveStart - 1; })
+      .catch((e) => console.error(`[v4] Initialize walk failed: ${(e as Error).message}`));
+  }
+  const commit = (block: number) => {
+    saveCheckpoint(block);
+    if (v4Caught) store.setMeta(V4_SCANNED_KEY, String(block - 1));
+  };
+
   for (;;) {
     try {
       const head = parseInt(await rpc<string>("eth_blockNumber"), 16);
@@ -226,7 +252,7 @@ async function main() {
         next += chunk.length;
 
         if (next - lastSaved >= 25) {
-          saveCheckpoint(next);
+          commit(next);
           lastSaved = next;
         }
         if (next - lastSummary >= SUMMARY_EVERY_BLOCKS) {
@@ -250,7 +276,7 @@ async function main() {
         if (BLOCK_DELAY_MS > 0) await sleep(BLOCK_DELAY_MS);
       }
 
-      saveCheckpoint(next);
+      commit(next);
       lastSaved = next;
       consecutiveFailures = 0;
     } catch (err) {

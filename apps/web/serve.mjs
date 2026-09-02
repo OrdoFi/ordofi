@@ -546,7 +546,12 @@ async function handle(req, res) {
 
   if (path === "/api/trade/markets") {
     try {
-      sendJson(req, res, 200, await tradeMarkets(store), { "cache-control": "public, max-age=15" });
+      // The terminal quotes and routes through Uniswap V3 only; a V4 market
+      // it cannot trade would be a row that quotes nothing. ?venue=all for
+      // readers that want every venue.
+      const all = await tradeMarkets(store);
+      const body = url.searchParams.get("venue") === "all" ? all : { ...all, markets: all.markets.filter((m) => m.kind !== "v4") };
+      sendJson(req, res, 200, body, { "cache-control": "public, max-age=15" });
     } catch (e) {
       sendJson(req, res, 502, { error: e.message });
     }

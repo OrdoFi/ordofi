@@ -237,11 +237,43 @@ export const SWAP_TOPICS: Record<string, string> = {
 export const TRANSFER_TOPIC =
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
+/**
+ * Uniswap V4 on Robinhood Chain. V4 is a singleton: every pool lives inside
+ * the PoolManager and is identified by a bytes32 PoolId (the hash of its
+ * PoolKey) rather than by an address of its own. Positions are ERC-721s
+ * minted by the PositionManager; StateView is the read lens for slot0 and
+ * liquidity; Permit2 is how the PositionManager pulls ERC-20s.
+ */
+export const V4 = {
+  poolManager: "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+  positionManager: "0x58daec3116aae6d93017baaea7749052e8a04fa7",
+  stateView: "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b",
+  permit2: "0x000000000022d473030f116ddee9f6b43ac78ba3",
+  /** First block with PoolManager code; nothing V4 exists before it. */
+  deployBlock: 9070,
+  /** Native ETH as a V4 currency is address zero, never WETH. */
+  nativeCurrency: "0x0000000000000000000000000000000000000000",
+  // Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1,
+  //            uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick)
+  initializeTopic: "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438",
+  // Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1,
+  //      uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)
+  swapTopic: "0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f",
+  /** LP fee value that marks a hook-controlled, dynamic fee. */
+  dynamicFeeFlag: 0x800000,
+} as const;
+
+/** A V4 PoolId is 32 bytes; a V2/V3 pool key is a 20-byte address. */
+export function isV4PoolId(key: string): boolean {
+  return /^0x[0-9a-fA-F]{64}$/.test(key);
+}
+
 export interface SwapObservation {
   block: number;
   timestamp: number;
   txHash: string;
   txIndex: number;
+  /** The pool's address for V2/V3; for V4 the PoolId, since the emitter is always the PoolManager. */
   pool: string;
   kind: string; // univ2 | univ3 | univ4
 }

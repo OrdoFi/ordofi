@@ -72,7 +72,11 @@ export function analyzeBlock(
     for (const log of r.logs) {
       const kind = SWAP_TOPICS[log.topics[0]?.toLowerCase() ?? ""];
       if (!kind) continue;
-      const pool = log.address.toLowerCase();
+      // V4 pools all emit from the one PoolManager; the PoolId in the first
+      // topic is the pool. Keying by the emitter made every V4 pool one pool,
+      // so an arb across two of them looked like a single-pool transaction.
+      const pool =
+        kind === "univ4" && log.topics[1]?.length === 66 ? log.topics[1].toLowerCase() : log.address.toLowerCase();
       pools.add(pool);
       swaps.push({
         block: blockNumber,

@@ -282,8 +282,10 @@ export async function poolsList(store) {
     for (const m of markets.markets ?? []) {
       const baseAddr = m.base.address === NATIVE ? WETH : m.base.address;
       if (isMoney(baseAddr)) continue;
-      const info = poolCache.get(m.pool);
-      const feeBps = info?.fee ? info.fee / 1e4 : 0.3; // fee tier in percent
+      // Fee tier in percent. A V4 hook that sets its own fee reports none;
+      // its LP take is unknown here and counted as nothing rather than guessed.
+      const feePct = m.fee != null ? m.fee / 1e4 : m.kind === "v4" ? 0 : 0.3;
+      const kind = m.kind ?? "v3";
       const cur = byToken.get(baseAddr);
       const row = {
         token: baseAddr,
@@ -294,18 +296,21 @@ export async function poolsList(store) {
         priceUsd: m.base.usdPerToken ?? (m.quote.usdPerToken ? m.price * m.quote.usdPerToken : null),
         change24: m.change24,
         volume24Usd: m.volumeUsd ?? 0,
-        fees24Usd: (m.volumeUsd ?? 0) * (feeBps / 100),
+        fees24Usd: (m.volumeUsd ?? 0) * (feePct / 100),
         trades24: m.swaps,
         pool: m.pool,
+        kind,
         quote: m.quote.symbol,
         quotes: [m.quote.symbol],
+        venues: [kind],
         pools: 1,
       };
       if (!cur) byToken.set(baseAddr, row);
       else {
         cur.volume24Usd += row.volume24Usd; cur.fees24Usd += row.fees24Usd; cur.trades24 += row.trades24; cur.pools++;
         if (!cur.quotes.includes(row.quote)) cur.quotes.push(row.quote);
-        if (row.volume24Usd > (cur.mainVol ?? 0)) { cur.pool = row.pool; cur.quote = row.quote; cur.mainVol = row.volume24Usd; }
+        if (!cur.venues.includes(kind)) cur.venues.push(kind);
+        if (row.volume24Usd > (cur.mainVol ?? 0)) { cur.pool = row.pool; cur.kind = kind; cur.quote = row.quote; cur.mainVol = row.volume24Usd; }
       }
     }
 

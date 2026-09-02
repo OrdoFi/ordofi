@@ -59,6 +59,22 @@ export interface ApiKeyRow {
   createdAt: number;
 }
 
+/** A Uniswap V4 pool as its Initialize event described it. */
+export interface V4PoolRow {
+  poolId: string;
+  currency0: string;
+  currency1: string;
+  fee: number;
+  tickSpacing: number;
+  hooks: string;
+  /** Opening sqrtPriceX96 and tick, as decimal text / number. */
+  sqrtPrice: string;
+  tick: number;
+  block: number;
+  txHash?: string;
+  ts?: number;
+}
+
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
 export class OrdoStore {
@@ -183,6 +199,31 @@ export class OrdoStore {
         PRIMARY KEY (pool, block, log_index)
       );
       CREATE INDEX IF NOT EXISTS trades_pool_block ON trades (pool, block DESC);
+      -- The tape is pruned by time every few seconds; with V4 doubling its
+      -- size, a full scan per prune is what the watcher's CPU went on.
+      CREATE INDEX IF NOT EXISTS trades_ts ON trades (ts);
+
+      -- Uniswap V4 pool keys. V4 keeps every pool inside one PoolManager, so
+      -- a Swap log names its pool by PoolId (bytes32) and nothing about the
+      -- pair can be read off an address. Each pool announces its key exactly
+      -- once, in the Initialize event, and this table is that announcement:
+      -- the only way to turn a PoolId in the candles back into two tokens.
+      -- Native ETH is currency 0x000…0. fee 0x800000 means a hook sets it.
+      CREATE TABLE IF NOT EXISTS v4_pools (
+        pool_id TEXT PRIMARY KEY,
+        currency0 TEXT NOT NULL,
+        currency1 TEXT NOT NULL,
+        fee INTEGER NOT NULL,
+        tick_spacing INTEGER NOT NULL,
+        hooks TEXT NOT NULL,
+        sqrt_price TEXT NOT NULL,
+        tick INTEGER NOT NULL,
+        block INTEGER NOT NULL,
+        tx_hash TEXT,
+        ts INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS v4_pools_c0 ON v4_pools (currency0);
+      CREATE INDEX IF NOT EXISTS v4_pools_c1 ON v4_pools (currency1);
 
       -- Self-serve gateway credentials. Only a hash is stored: the database
       -- leaking must not leak the keys themselves.
@@ -730,6 +771,87 @@ export class OrdoStore {
   pruneTrades(olderThanTs: number): number {
     const r = this.db.prepare(`DELETE FROM trades WHERE ts < ?`).run(olderThanTs);
     return Number(r.changes ?? 0);
+  }
+
+  // ---------- Uniswap V4 pool keys ----------
+
+  /**
+   * Record pools from their Initialize events. Idempotent: a pool is
+   * initialised once and the watcher may replay the block that did it.
+   */
+  upsertV4Pools(rows: V4PoolRow[]): void {
+    if (rows.length === 0) return;
+    const stmt = this.db.prepare(
+      `INSERT OR IGNORE INTO v4_pools
+       (pool_id, currency0, currency1, fee, tick_spacing, hooks, sqrt_price, tick, block, tx_hash, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.db.exec("BEGIN");
+    try {
+      for (const r of rows) {
+        stmt.run(
+          r.poolId.toLowerCase(), r.currency0.toLowerCase(), r.currency1.toLowerCase(), r.fee, r.tickSpacing,
+          r.hooks.toLowerCase(), r.sqrtPrice, r.tick, r.block, r.txHash ?? null, r.ts ?? null,
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  private static v4Row(r: any): V4PoolRow {
+    return {
+      poolId: r.pool_id, currency0: r.currency0, currency1: r.currency1, fee: Number(r.fee), tickSpacing: Number(r.tick_spacing),
+      hooks: r.hooks, sqrtPrice: r.sqrt_price, tick: Number(r.tick), block: Number(r.block),
+      txHash: r.tx_hash ?? undefined, ts: r.ts == null ? undefined : Number(r.ts),
+    };
+  }
+
+  v4Pool(poolId: string): V4PoolRow | null {
+    const r = this.db.prepare(`SELECT * FROM v4_pools WHERE pool_id = ?`).get(poolId.toLowerCase());
+    return r ? OrdoStore.v4Row(r) : null;
+  }
+
+  /** Many keys at once, for the market list; unknown ids are simply absent. */
+  v4PoolsByIds(poolIds: string[]): Map<string, V4PoolRow> {
+    const out = new Map<string, V4PoolRow>();
+    const ids = [...new Set(poolIds.map((p) => p.toLowerCase()))];
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const rows = this.db
+        .prepare(`SELECT * FROM v4_pools WHERE pool_id IN (${chunk.map(() => "?").join(",")})`)
+        .all(...chunk) as any[];
+      for (const r of rows) out.set(r.pool_id, OrdoStore.v4Row(r));
+    }
+    return out;
+  }
+
+  /** Every pool with `currency` on either side — a token's V4 markets. */
+  v4PoolsFor(currency: string): V4PoolRow[] {
+    const c = currency.toLowerCase();
+    return (
+      this.db
+        .prepare(`SELECT * FROM v4_pools WHERE currency0 = ? OR currency1 = ? ORDER BY block ASC`)
+        .all(c, c) as any[]
+    ).map(OrdoStore.v4Row);
+  }
+
+  /** Both currencies given, either order: the fee tiers that exist for the pair. */
+  v4PoolsForPair(a: string, b: string): V4PoolRow[] {
+    const x = a.toLowerCase(), y = b.toLowerCase();
+    return (
+      this.db
+        .prepare(
+          `SELECT * FROM v4_pools WHERE (currency0 = ? AND currency1 = ?) OR (currency0 = ? AND currency1 = ?) ORDER BY block ASC`,
+        )
+        .all(x, y, y, x) as any[]
+    ).map(OrdoStore.v4Row);
+  }
+
+  v4PoolCount(): number {
+    return Number((this.db.prepare(`SELECT COUNT(*) n FROM v4_pools`).get() as any)?.n ?? 0);
   }
 
   /** The tape is a rolling window, not an archive; old buckets cost disk. */

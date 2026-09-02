@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { encodeFunctionData, decodeFunctionResult, encodePacked, toEventSelector } from "viem";
-import { rpcFetch } from "@ordofi/core";
+import { rpcFetch, V4, isV4PoolId } from "@ordofi/core";
 import { getTokenInfo, toWhole } from "@ordofi/core/pricing";
 import { ROUTER as SWAP_ROUTER, encodeExactInputSwap } from "@ordofi/core/router";
 import { proveDelivery, proofToJson } from "@ordofi/core/guard";
@@ -201,6 +201,47 @@ const pools = new Resolver(join(DATA_DIR, "pools.json"), async (pool) => {
   return { pool, token0: t0.toLowerCase(), token1: t1.toLowerCase(), fee: Number(fee), v3: (factory ?? "").toLowerCase() === V3_FACTORY };
 }, { concurrency: 4, retryMissMs: 7 * 86_400_000 });
 
+/**
+ * One shape for every pool the tape knows, whichever Uniswap it lives in.
+ *
+ * V3 pools are addresses, described by the resolver above (unknown ones are
+ * queued and join the next build). V4 pools are PoolIds inside the singleton;
+ * their keys come from the Initialize events the watcher records, never from
+ * an eth_call — a PoolId is not an address and asking one for token0() would
+ * only fill pools.json with misses. Native ETH in a V4 key is reported as
+ * WETH here so every reader prices and names it the way it already does.
+ */
+export function describePools(store, keys) {
+  const out = new Map();
+  const v4Ids = [];
+  for (const k of keys) {
+    const key = k.toLowerCase();
+    if (isV4PoolId(key)) { v4Ids.push(key); continue; }
+    const p = pools.get(key);
+    if (!p) { pools.enqueue(key); continue; }
+    if (p.miss || !p.v3) { out.set(key, null); continue; }
+    out.set(key, { pool: key, kind: "v3", token0: p.token0, token1: p.token1, fee: p.fee, tickSpacing: null, hooks: null, native0: false });
+  }
+  if (v4Ids.length && store?.v4PoolsByIds) {
+    for (const [id, p] of store.v4PoolsByIds(v4Ids)) out.set(id, v4Shape(p));
+    for (const id of v4Ids) if (!out.has(id)) out.set(id, undefined); // not announced yet: the Initialize walk is still running
+  }
+  return out;
+}
+
+export function v4Shape(p) {
+  if (!p) return null;
+  const native0 = p.currency0 === V4.nativeCurrency;
+  return {
+    pool: p.poolId, kind: "v4",
+    token0: native0 ? WETH : p.currency0, token1: p.currency1,
+    // A hook-set fee is not a tier; readers that multiply volume by it get null.
+    fee: p.fee === V4.dynamicFeeFlag ? null : p.fee,
+    dynamicFee: p.fee === V4.dynamicFeeFlag,
+    tickSpacing: p.tickSpacing, hooks: p.hooks === V4.nativeCurrency ? null : p.hooks, native0,
+  };
+}
+
 function normalizeExplorerToken(t) {
   const address = (t.address_hash ?? t.address ?? "").toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(address)) return null;
@@ -346,10 +387,11 @@ async function buildTokenList(store) {
 
   // 1. Pools that demonstrably traded today. Composition comes from the pool
   //    cache; unknown pools are queued busiest-first and join the next build.
-  for (const { pool, swaps } of activePoolList(store)) {
-    const info = pools.get(pool);
-    if (!info) { pools.enqueue(pool); continue; }
-    if (info.miss || !info.v3) continue;
+  const active0 = activePoolList(store);
+  const described = describePools(store, active0.map((a) => a.pool));
+  for (const { pool, swaps } of active0) {
+    const info = described.get(pool);
+    if (!info) continue;
     for (const [tok, other] of [[info.token0, info.token1], [info.token1, info.token0]]) {
       activity.set(tok, (activity.get(tok) ?? 0) + swaps);
       if (money.has(other)) moneyPaired.add(tok);
@@ -492,10 +534,11 @@ export async function tradeMarkets(store) {
 
   const rows = [];
   let unknownPools = 0;
+  const described = describePools(store, day.map((r) => r.pool));
   for (const r of day) {
-    const p = pools.get(r.pool.toLowerCase());
-    if (!p) { pools.enqueue(r.pool.toLowerCase()); unknownPools++; continue; }
-    if (p.miss || !p.v3) continue; // not a factory pool → the router cannot reach it
+    const p = described.get(r.pool.toLowerCase());
+    if (p === undefined) { unknownPools++; continue; } // still being resolved
+    if (p === null) continue; // not a factory pool → the router cannot reach it
     const base0 = moneyRank(p.token0) <= moneyRank(p.token1);
     const baseA = base0 ? p.token0 : p.token1;
     const quoteA = base0 ? p.token1 : p.token0;
@@ -513,7 +556,9 @@ export async function tradeMarkets(store) {
     const quoteUsd = quote.usdPerToken ?? (quoteA === USDG ? 1 : null);
     rows.push({
       pool: p.pool,
+      kind: p.kind,
       fee: p.fee,
+      ...(p.kind === "v4" ? { tickSpacing: p.tickSpacing, hooks: p.hooks, dynamicFee: p.dynamicFee, native0: p.native0 } : {}),
       base: { address: baseA === WETH ? NATIVE : baseA, symbol: baseA === WETH ? "ETH" : base.symbol, icon: base.icon ?? null, decimals: base.decimals, usdPerToken: base.usdPerToken ?? null },
       quote: { address: quoteA === WETH ? NATIVE : quoteA, symbol: quoteA === WETH ? "ETH" : quote.symbol, decimals: quote.decimals, usdPerToken: quoteUsd },
       price,
@@ -528,19 +573,22 @@ export async function tradeMarkets(store) {
     });
   }
 
-  // One row per pair: the busiest fee tier speaks for it.
+  // One row per pair and venue: the busiest fee tier speaks for it. V3 and V4
+  // stay separate rows — the terminal routes V3 only, and the pools page
+  // shows a token's V4 market beside its V3 one rather than instead of it.
   const byPair = new Map();
   for (const m of rows) {
-    const k = `${m.base.address}:${m.quote.address}`;
+    const k = `${m.kind}:${m.base.address}:${m.quote.address}`;
     const cur = byPair.get(k);
     if (!cur || m.swaps > cur.swaps) byPair.set(k, m);
   }
   const markets = [...byPair.values()]
     .sort((a, b) => (b.volumeUsd ?? 0) - (a.volumeUsd ?? 0) || b.swaps - a.swaps)
-    .slice(0, 800);
+    .slice(0, 1600);
   const data = {
     markets,
     pairsTotal: byPair.size,
+    v4Pools: store?.v4PoolCount?.() ?? 0,
     coverage: { poolsTraded: day.length, poolsUnknown: unknownPools, tapeSince: day.length ? Math.min(...day.map((r) => r.firstBucket)) : null },
     resolvers: resolverStats(),
     at: new Date().toISOString(),
@@ -554,7 +602,7 @@ export async function tradeMarkets(store) {
 export const poolCache = pools;
 
 export function warmTradeCaches(store) {
-  for (const { pool } of activePoolList(store).slice(0, 600)) pools.enqueue(pool);
+  for (const { pool } of activePoolList(store).slice(0, 600)) if (!isV4PoolId(pool)) pools.enqueue(pool);
   return tradeTokens(store);
 }
 
