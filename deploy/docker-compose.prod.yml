@@ -64,6 +64,11 @@ services:
 
   web:
     build: { context: .., dockerfile: deploy/Dockerfile }
+    # Started directly (not through npm) so the inspector belongs to the server
+    # process: `docker exec deploy-web-1 node /tmp/prof.mjs 15` profiles it live.
+    # 9229 is bound inside the container only.
+    working_dir: /app/apps/web
+    command: ["node", "--inspect=127.0.0.1:9229", "serve.mjs"]
     environment:
       SERVICE: web
       ORDO_WEB_PORT: 3000
