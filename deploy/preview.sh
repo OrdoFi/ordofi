@@ -31,8 +31,8 @@ docker run -d --name web-preview --restart unless-stopped --network deploy_defau
   -e ORDO_AUCTION_URL=http://auction:8548 -e ORDO_ARB_URL=http://arb:8549 \
   -e ORDO_SETTLEMENT_ADDRESS="${ORDO_SETTLEMENT_ADDRESS:-}" \
   -e ORDO_STEALTH_SEND_ADDRESS="${ORDO_STEALTH_SEND_ADDRESS:-}" \
-  -e ORDO_LADDER_ADDRESS="${ORDO_LADDER_ADDRESS:-}" \
-  -e ORDO_STAKE_FACTORY="${ORDO_STAKE_FACTORY:-}" \
+  -e ORDO_LADDER_ADDRESS="${ORDO_LADDER_ADDRESS:-}" -e ORDO_LADDER_BLOCK="${ORDO_LADDER_BLOCK:-}" \
+  -e ORDO_STAKE_FACTORY="${ORDO_STAKE_FACTORY:-}" -e ORDO_STAKE_ZAP="${ORDO_STAKE_ZAP:-}" \
   -w /app/apps/web \
   deploy-web node --inspect=127.0.0.1:9229 serve.mjs >/dev/null
 sleep 4

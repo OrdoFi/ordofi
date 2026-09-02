@@ -81,6 +81,10 @@ services:
       ORDO_ARB_URL: http://arb:8549
       ORDO_STEALTH_SEND_ADDRESS: ${ORDO_STEALTH_SEND_ADDRESS:-}
       ORDO_LADDER_ADDRESS: ${ORDO_LADDER_ADDRESS:-}
+      ORDO_LADDER_BLOCK: ${ORDO_LADDER_BLOCK:-}
+      ORDO_STAKE_FACTORY: ${ORDO_STAKE_FACTORY:-}
+      ORDO_STAKE_ZAP: ${ORDO_STAKE_ZAP:-}
+      ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-}
     depends_on: [auction]
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
