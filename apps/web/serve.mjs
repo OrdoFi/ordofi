@@ -112,9 +112,22 @@ export function perDayArbs(arbs, spanHours) {
   return (arbs / spanHours) * 24;
 }
 
-/** Headline figures straight from the index, when it has data. */
+/**
+ * Headline figures straight from the index, when it has data. The queries
+ * behind them (totals, top searchers, top pools) walk the whole arb table
+ * synchronously; the marketing site polls /api/stats from every visitor's
+ * browser, so without this memo the server spent most of a core recounting
+ * the same numbers. Sixty seconds is well inside how often they change.
+ */
+let reportMemo = null;
 function indexedReport() {
   if (!store) return null;
+  if (reportMemo && Date.now() - reportMemo.at < 60_000) return reportMemo.v;
+  const v = computeIndexedReport();
+  reportMemo = { at: Date.now(), v };
+  return v;
+}
+function computeIndexedReport() {
   try {
     const totals = store.totals();
     if (totals.arbs === 0) return null;
