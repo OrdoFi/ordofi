@@ -20,7 +20,10 @@ import {
   ANNOUNCER_ABI,
   ERC5564_ANNOUNCER,
   NATIVE_TOKEN,
+  ORDO_STEALTH_SEND,
+  STEALTH_SEND_ABI,
   SCHEME_ID,
+  stealthSplit,
   UNLOCK_MESSAGE,
   checkAnnouncement,
   computeStealthPrivateKey,
@@ -110,21 +113,27 @@ if ((await rpcFetch("eth_getBalance", [payment.stealthAddress, "latest"])) !== "
 }
 ok("address has never been used");
 
-step(3, "Announce it on the canonical ERC-5564 announcer");
-const metadata = encodeMetadata({ viewTag: payment.viewTag, token: NATIVE_TOKEN, amount: AMOUNT });
+step(3, "Announce and deliver in one transaction through OrdoStealthSend");
+const { fee, net } = stealthSplit(AMOUNT);
+const treasury = (await rpcFetch("eth_call", [{ to: ORDO_STEALTH_SEND, data: "0x61d027b3" }, "latest"])).replace(/^0x0{24}/, "0x");
+const treasuryBefore = BigInt(await rpcFetch("eth_getBalance", [treasury, "latest"]));
+const metadata = encodeMetadata({ viewTag: payment.viewTag, token: NATIVE_TOKEN, amount: net });
 const ann = await send(payer, {
-  to: ERC5564_ANNOUNCER,
-  data: encodeFunctionData({
-    abi: ANNOUNCER_ABI,
-    functionName: "announce",
-    args: [SCHEME_ID, payment.stealthAddress, payment.ephemeralPublicKey, metadata],
-  }),
+  to: ORDO_STEALTH_SEND,
+  value: AMOUNT,
+  data: encodeFunctionData({ abi: STEALTH_SEND_ABI, functionName: "sendETH", args: [payment.stealthAddress, payment.ephemeralPublicKey, metadata] }),
 });
-ok(`announced in block ${ann.block} — ${ann.hash}`);
+const sent = ann;
+ok(`one transaction, block ${ann.block} — ${ann.hash}`);
+const delivered = BigInt(await rpcFetch("eth_getBalance", [payment.stealthAddress, "latest"]));
+if (delivered !== net) throw new Error(`delivered ${formatEther(delivered)} ETH, expected ${formatEther(net)}`);
+ok(`${formatEther(net)} ETH delivered to the stealth address`);
+const treasuryAfter = BigInt(await rpcFetch("eth_getBalance", [treasury, "latest"]));
+if (treasuryAfter - treasuryBefore !== fee) throw new Error(`treasury received ${formatEther(treasuryAfter - treasuryBefore)} ETH, expected ${formatEther(fee)}`);
+ok(`${formatEther(fee)} ETH fee (0.25%) to treasury ${treasury}`);
 
-step(4, "Send the ETH");
-const sent = await send(payer, { to: payment.stealthAddress, value: AMOUNT, gas: 21000n });
-ok(`sent — ${sent.hash}`);
+step(4, "The announcement came from the contract, not a second transaction");
+ok("same hash for announce and delivery");
 
 if (args.to) {
   console.log(`\nDELIVERED to ${payment.stealthAddress} — the recipient can now find and sweep it.`);
@@ -157,7 +166,7 @@ if (!found.some((f) => f.address.toLowerCase() === payment.stealthAddress.toLowe
   throw new Error("the viewing key did not recognise our own payment");
 }
 ok(`${found.length} payment(s) recognised out of ${logs.length} announcement(s) scanned`);
-ok(`metadata says ${formatEther(found.at(-1).decoded.amount)} ETH, which matches what was sent`);
+ok(`metadata says ${formatEther(found.at(-1).decoded.amount)} ETH, which matches what was delivered`);
 
 step(6, "Sweep every one of them with keys derived on the spot");
 let sweptTotal = 0n;
