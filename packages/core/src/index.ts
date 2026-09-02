@@ -57,6 +57,14 @@ export function rpcUrls(): string[] {
 
 let rpcId = 0;
 let cursor = 0; // sticky: keep using whichever upstream last answered
+let cursorLeftPrimaryAt = 0;
+/**
+ * How long a fallback stays sticky before the primary is tried again. The
+ * list is ordered fastest-first; without an expiry one throttled minute on the
+ * primary parked every read on the slow public node for the life of the
+ * process (two seconds a call, twenty calls a quote).
+ */
+const FALLBACK_STICKY_MS = 30_000;
 
 // No parameter properties here: apps/web runs under plain Node, whose native
 // type-stripping only accepts erasable TypeScript syntax.
@@ -104,6 +112,7 @@ export async function rpcFetch(
 ): Promise<unknown> {
   const urls = rpcUrls();
   let lastErr: Error | null = null;
+  if (cursor !== 0 && Date.now() - cursorLeftPrimaryAt > FALLBACK_STICKY_MS) cursor = 0;
   for (let i = 0; i < urls.length; i++) {
     const idx = (cursor + i) % urls.length;
     const url = urls[idx];
@@ -112,6 +121,7 @@ export async function rpcFetch(
       // Only a genuine answer makes an upstream sticky. Setting this before
       // checking body.error pinned the cursor to whichever endpoint was busy
       // throttling us.
+      if (idx !== 0 && cursor === 0) cursorLeftPrimaryAt = Date.now();
       cursor = idx;
       return result;
     } catch (e) {
