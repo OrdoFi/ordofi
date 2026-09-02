@@ -282,3 +282,34 @@ test("candlesAgg rolls minutes up into coarser buckets with correct open/close",
   assert.equal(s.candleCoverage("0xnone"), null);
   s.close();
 });
+
+test("a routing excursion cannot rescale the chart", () => {
+  const store = new OrdoStore(":memory:");
+  const POOL = "0xpool";
+  // Three ordinary minutes, and one where a routed trade briefly drove the
+  // pool 140x below the price either side of it.
+  const pts: { pool: string; bucket: number; price: number; vol0: number; vol1: number; block: number }[] = [];
+  for (let m = 0; m < 4; m++) {
+    const b = 1_700_000_000 + m * 60;
+    pts.push({ pool: POOL, bucket: b, price: 2400, vol0: 1, vol1: 1, block: m * 600 });
+    pts.push({ pool: POOL, bucket: b, price: 2410, vol0: 1, vol1: 1, block: m * 600 + 599 });
+    if (m === 2) pts.push({ pool: POOL, bucket: b, price: 17, vol0: 1, vol1: 1, block: m * 600 + 300 });
+  }
+  store.upsertCandles(pts);
+
+  const minutes = store.candlesFor(POOL, 0);
+  assert.equal(minutes.length, 4);
+  const spiked = minutes[2];
+  assert.equal(spiked.open, 2400);
+  assert.equal(spiked.close, 2410);
+  assert.equal(spiked.low, 600); // 2400 / MAX_WICK, not 17
+  assert.equal(spiked.swaps, 3); // the swap still counts, only the wick is bounded
+
+  // And the excursion must not leak through the SQL roll-up either.
+  const hourly = store.candlesAgg(POOL, 0, 1_700_009_999, 3600);
+  assert.equal(hourly.length, 1);
+  assert.equal(hourly[0].low, 600);
+  assert.equal(hourly[0].open, 2400);
+  assert.equal(hourly[0].close, 2410);
+  store.close();
+});

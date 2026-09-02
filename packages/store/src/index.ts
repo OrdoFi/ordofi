@@ -498,6 +498,18 @@ export class OrdoStore {
     }
   }
 
+  /**
+   * Widest wick a minute candle may show, as a multiple of its own body.
+   *
+   * A router that drains a pool and refills it inside one trade emits a Swap
+   * event at every step, so the pool's price genuinely touches an extreme for a
+   * few blocks before snapping back. That is real chain state but it is not a
+   * price anyone could have traded, and one such minute rescales two months of
+   * chart to nothing. The body — first and last swap of the minute — is left
+   * exactly as recorded; only the excursion is bounded.
+   */
+  static readonly MAX_WICK = 4;
+
   candlesFor(pool: string, fromBucket: number): {
     bucket: number; open: number; high: number; low: number; close: number;
     vol0: number; vol1: number; swaps: number;
@@ -510,7 +522,9 @@ export class OrdoStore {
         )
         .all(pool.toLowerCase(), fromBucket) as any[]
     ).map((r) => ({
-      bucket: Number(r.bucket), open: r.open, high: r.high, low: r.low, close: r.close,
+      bucket: Number(r.bucket), open: r.open, close: r.close,
+      high: Math.min(r.high, Math.max(r.open, r.close) * OrdoStore.MAX_WICK),
+      low: Math.max(r.low, Math.min(r.open, r.close) / OrdoStore.MAX_WICK),
       vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
     }));
   }
@@ -529,7 +543,9 @@ export class OrdoStore {
       this.db
         .prepare(
           `WITH w AS (
-             SELECT (bucket / CAST(? AS INTEGER)) * CAST(? AS INTEGER) AS b, MIN(bucket) fb, MAX(bucket) lb, MAX(high) high, MIN(low) low,
+             SELECT (bucket / CAST(? AS INTEGER)) * CAST(? AS INTEGER) AS b, MIN(bucket) fb, MAX(bucket) lb,
+                    MAX(MIN(high, MAX(open, close) * ${OrdoStore.MAX_WICK})) high,
+                    MIN(MAX(low, MIN(open, close) / ${OrdoStore.MAX_WICK}.0)) low,
                     SUM(vol0) vol0, SUM(vol1) vol1, SUM(swaps) swaps
              FROM candles WHERE pool = ? AND bucket >= ? AND bucket <= ? GROUP BY b)
            SELECT w.b, f.open, w.high, w.low, l.close, w.vol0, w.vol1, w.swaps
@@ -540,7 +556,9 @@ export class OrdoStore {
         )
         .all(bs, bs, pool.toLowerCase(), fromBucket, toBucket, pool.toLowerCase(), pool.toLowerCase()) as any[]
     ).map((r) => ({
-      bucket: Number(r.b), open: r.open, high: r.high, low: r.low, close: r.close,
+      bucket: Number(r.b), open: r.open, close: r.close,
+      high: Math.min(r.high, Math.max(r.open, r.close) * OrdoStore.MAX_WICK),
+      low: Math.max(r.low, Math.min(r.open, r.close) / OrdoStore.MAX_WICK),
       vol0: r.vol0, vol1: r.vol1, swaps: Number(r.swaps),
     }));
   }
