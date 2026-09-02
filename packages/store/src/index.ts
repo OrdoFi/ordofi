@@ -508,7 +508,7 @@ export class OrdoStore {
    * chart to nothing. The body — first and last swap of the minute — is left
    * exactly as recorded; only the excursion is bounded.
    */
-  static readonly MAX_WICK = 4;
+  static readonly MAX_WICK = 2;
 
   candlesFor(pool: string, fromBucket: number): {
     bucket: number; open: number; high: number; low: number; close: number;

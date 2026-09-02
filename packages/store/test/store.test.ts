@@ -302,13 +302,13 @@ test("a routing excursion cannot rescale the chart", () => {
   const spiked = minutes[2];
   assert.equal(spiked.open, 2400);
   assert.equal(spiked.close, 2410);
-  assert.equal(spiked.low, 600); // 2400 / MAX_WICK, not 17
+  assert.equal(spiked.low, 1200); // 2400 / MAX_WICK, not 17
   assert.equal(spiked.swaps, 3); // the swap still counts, only the wick is bounded
 
   // And the excursion must not leak through the SQL roll-up either.
   const hourly = store.candlesAgg(POOL, 0, 1_700_009_999, 3600);
   assert.equal(hourly.length, 1);
-  assert.equal(hourly[0].low, 600);
+  assert.equal(hourly[0].low, 1200);
   assert.equal(hourly[0].open, 2400);
   assert.equal(hourly[0].close, 2410);
   store.close();
