@@ -34,9 +34,9 @@
     .unreal .v { font-family: var(--mono); font-size: 20px; margin-top: 6px; }
     .up { color: #1e9e6a; } .dn { color: var(--danger); }
     .cal { padding: 16px; }
-    .dow { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 6px; }
-    .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
-    .day { aspect-ratio: 1.15; border: 1px solid var(--border); background: #fff; padding: 6px 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; flex-direction: column; justify-content: space-between; position: relative; }
+    .dow { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); text-align: center; margin-bottom: 6px; }
+    .days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+    .day { min-height: 68px; border: 1px solid var(--border); overflow: hidden; background: #fff; padding: 6px 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; flex-direction: column; justify-content: space-between; position: relative; }
     .day.blank { border-color: transparent; background: transparent; }
     .day.win { background: rgba(30,158,106,.10); border-color: rgba(30,158,106,.5); }
     .day.loss { background: rgba(192,57,43,.08); border-color: rgba(192,57,43,.45); }
@@ -93,7 +93,7 @@
     import { wallet } from "/wallet.js";
     import { renderLadders, usd, num } from "/ladders.js";
     const $ = (id) => document.getElementById(id);
-    async function api(path) { const r = await fetch(path, { cache: "no-store" }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
+    async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
     let portfolio = null, lastSig = null, unit = "usd", cur = new Date(); cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
     const fmt = (v) => unit === "usd" ? (v < 0 ? "-" : "") + usd(Math.abs(v)) : (v < 0 ? "-" : "") + num(Math.abs(v), 5) + " Ξ";
     const pick = (d) => unit === "usd" ? d.pnlUsd : d.pnlEth;
