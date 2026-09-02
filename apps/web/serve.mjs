@@ -9,7 +9,7 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
-import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, LADDER_MANAGER } from "./pools.mjs";
+import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, LADDER_MANAGER } from "./pools.mjs";
 import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawCalldata, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
@@ -665,12 +665,30 @@ async function handle(req, res) {
 
   if (path.startsWith("/api/pools")) {
     if (process.env.ORDO_POOLS_ENABLED !== "1") { sendJson(req, res, 404, { error: "not found" }, { "cache-control": "no-store" }); return; }
+    /** "Search tokens & stakes": every token with a market, and every stake, by symbol, name or address. */
+    const searchAll = async (store, raw) => {
+      const needle = raw.trim().toLowerCase();
+      if (!needle) return { tokens: [], stakes: [] };
+      const [list, s] = await Promise.all([poolsList(store), stakesList(null).catch(() => null)]);
+      const hit = (x) => (x.symbol ?? "").toLowerCase().includes(needle) || (x.name ?? "").toLowerCase().includes(needle) || (x.token ?? "").includes(needle);
+      const tokens = (list.all ?? [...list.trending, ...list.established]).filter(hit).slice(0, 8)
+        .map((t) => ({ token: t.token, symbol: t.symbol, name: t.name, icon: t.icon, marketCapUsd: t.marketCapUsd, volume24Usd: t.volume24Usd }));
+      const stakes = (s?.stakes ?? []).filter((x) => hit(x) || x.vault.toLowerCase().includes(needle)).slice(0, 5)
+        .map((x) => ({ vault: x.vault, token: x.token, symbol: x.symbol, name: x.name, icon: x.icon, tvlUsd: x.tvlUsd, rate7d: x.rate7d }));
+      return { tokens, stakes };
+    };
     try {
       const q = url.searchParams;
       const addr = (k) => { const v = q.get(k) ?? ""; if (!/^0x[0-9a-fA-F]{40}$/.test(v)) throw new Error(`bad ${k}`); return v; };
       const big = (k) => { const v = q.get(k); if (v == null || v === "") return 0n; if (!/^\d+$/.test(v)) throw new Error(`bad ${k}`); return BigInt(v); };
       let body;
       if (path === "/api/pools") body = await poolsList(store);
+      else if (path === "/api/pools/platform") {
+        const s = await stakesList(null).catch(() => null);
+        const eth = s?.ethUsd ?? 0;
+        body = await platformStats({ stakes: s?.stakes?.length ?? 0, stakesTvlUsd: (s?.totals?.tvlWeth ?? 0) * eth, stakesFeesUsd: (s?.totals?.rewardsWeth ?? 0) * eth });
+      }
+      else if (path === "/api/pools/search") body = await searchAll(store, q.get("q") ?? "");
       else if (path === "/api/pools/token") body = { token: q.get("token"), pools: await poolsForToken(addr("token")) };
       else if (path === "/api/pools/state") body = await poolState(addr("pool"), q.get("base") ?? undefined);
       else if (path === "/api/pools/depth") body = await poolDepth(addr("pool"), { spanTicks: Math.max(200, Math.min(20_000, Number(q.get("span") ?? 3000))), buckets: Math.max(10, Math.min(120, Number(q.get("buckets") ?? 60))) });

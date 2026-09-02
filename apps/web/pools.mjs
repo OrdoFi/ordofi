@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionResult, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
-import { rpcFetch, rpcUrls, RPC_HEADERS } from "@ordofi/core";
+import { rpcFetch, rpcOnce, rpcUrls, RPC_HEADERS } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
 import {
   alignTick,
@@ -63,6 +63,7 @@ export const LADDER_ABI = [
   { type: "function", name: "close", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
   { type: "function", name: "closeMany", stateMutability: "nonpayable", inputs: [{ type: "uint256[]" }], outputs: [] },
   { type: "function", name: "laddersOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256[]" }] },
+  { type: "function", name: "ladderCount", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   {
     type: "function", name: "ladder", stateMutability: "view", inputs: [{ type: "uint256" }],
     outputs: [{ type: "tuple", components: [
@@ -192,11 +193,13 @@ export async function poolsList(store) {
         trades24: m.swaps,
         pool: m.pool,
         quote: m.quote.symbol,
+        quotes: [m.quote.symbol],
         pools: 1,
       };
       if (!cur) byToken.set(baseAddr, row);
       else {
         cur.volume24Usd += row.volume24Usd; cur.fees24Usd += row.fees24Usd; cur.trades24 += row.trades24; cur.pools++;
+        if (!cur.quotes.includes(row.quote)) cur.quotes.push(row.quote);
         if (row.volume24Usd > (cur.mainVol ?? 0)) { cur.pool = row.pool; cur.quote = row.quote; cur.mainVol = row.volume24Usd; }
       }
     }
@@ -210,10 +213,14 @@ export async function poolsList(store) {
       const cov = store?.candleCoverage?.(r.pool);
       r.ageDays = cov ? Math.max(0, Math.floor((Date.now() / 1000 - cov.from) / 86_400)) : null;
     }
-    const trending = rows.slice().sort((a, b) => b.volume24Usd - a.volume24Usd).slice(0, 40);
+    const all = rows.slice().sort((a, b) => b.volume24Usd - a.volume24Usd);
+    const trending = all.slice(0, 40);
     const established = rows.filter((r) => r.marketCapUsd).sort((a, b) => b.marketCapUsd - a.marketCapUsd).slice(0, 40);
     const totals = { volume24Usd: rows.reduce((n, r) => n + r.volume24Usd, 0), fees24Usd: rows.reduce((n, r) => n + r.fees24Usd, 0), tokens: rows.length };
-    return { trending, established, totals, manager: LADDER_MANAGER, at: new Date().toISOString() };
+    // The header cards: busiest by trades and by volume.
+    const mostTraded = rows.slice().sort((a, b) => b.trades24 - a.trades24)[0] ?? null;
+    const highestVolume = all[0] ?? null;
+    return { trending, established, all, featured: { mostTraded, highestVolume }, totals, manager: LADDER_MANAGER, at: new Date().toISOString() };
   });
 }
 
@@ -231,17 +238,29 @@ export async function poolState(pool, baseToken) {
   ]);
   const base = lower(baseToken) === info.token1 ? info.token1 : info.token0;
   const quote = base === info.token0 ? info.token1 : info.token0;
-  const [bInfo, qInfo, usd] = await Promise.all([tokenInfo(base), tokenInfo(quote), ethUsd().catch(() => null)]);
+  const [bInfo, qInfo, usd, supply, held] = await Promise.all([
+    tokenInfo(base), tokenInfo(quote), ethUsd().catch(() => null),
+    // Market cap needs the supply; a null answer is not cached so a throttled
+    // upstream cannot blank the MC toggle for an hour.
+    cached(`supply:${base}`, 3_600_000, async () => { const s = await call(base, ERC20_ABI, "totalSupply").catch(() => null); if (s == null) cache.delete(`supply:${base}`); return s; }),
+    batchCall([{ to: info.token0, abi: ERC20_ABI, fn: "balanceOf", args: [getAddress(pool)] }, { to: info.token1, abi: ERC20_ABI, fn: "balanceOf", args: [getAddress(pool)] }]),
+  ]);
   const tick = Number(slot0[1]);
   const raw = tickToPrice(tick); // token1 per token0, raw units
   const scale = 10 ** (bInfo.decimals - qInfo.decimals);
   const price = base === info.token0 ? raw * scale : 1 / (raw * scale); // quote per base, whole units
   const quoteUsd = quote === WETH ? usd : quote === USDG ? 1 : qInfo.usdPerToken;
+  const priceUsd = quoteUsd ? price * quoteUsd : null;
+  const supplyWhole = supply != null ? Number(supply) / 10 ** bInfo.decimals : null;
+  // What the pool holds, in dollars: Delta's "Liquidity" figure.
+  const heldBase = held[base === info.token0 ? 0 : 1], heldQuote = held[base === info.token0 ? 1 : 0];
+  const tvlUsd = heldBase != null && heldQuote != null && priceUsd != null && quoteUsd != null
+    ? (Number(heldBase) / 10 ** bInfo.decimals) * priceUsd + (Number(heldQuote) / 10 ** qInfo.decimals) * quoteUsd : null;
   return {
     pool, fee: info.fee, tickSpacing: Number(spacing), tick, sqrtPriceX96: slot0[0].toString(), liquidity: liquidity.toString(),
     token0: info.token0, token1: info.token1,
-    base: { ...bInfo, isToken0: base === info.token0 }, quote: { ...qInfo, usdPerToken: quoteUsd },
-    price, priceUsd: quoteUsd ? price * quoteUsd : null,
+    base: { ...bInfo, isToken0: base === info.token0, totalSupply: supplyWhole }, quote: { ...qInfo, usdPerToken: quoteUsd },
+    price, priceUsd, marketCapUsd: supplyWhole != null && priceUsd != null ? supplyWhole * priceUsd : null, tvlUsd,
   };
 }
 
@@ -486,6 +505,22 @@ const receiptCache = new Map(); // hash → receipt
 const blockTsCache = new Map(); // blockNumber → unix seconds
 const pad32 = (a) => "0x" + a.slice(2).toLowerCase().padStart(64, "0");
 
+/**
+ * Reads that need history — eth_getLogs over the manager's whole life, old
+ * receipts, old blocks — go to an archive-capable upstream first. The free
+ * public nodes refuse historical getLogs outright ("archive requests require
+ * a personal token"), and the failure used to be swallowed further up, which
+ * left the PnL calendar empty without a word. Falls back to the general list.
+ */
+const ARCHIVE_URLS = (process.env.ORDO_ARCHIVE_RPC ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+async function archiveFetch(method, params) {
+  let lastErr = null;
+  for (const url of ARCHIVE_URLS) {
+    try { return await rpcOnce(url, method, params, 20_000); } catch (e) { lastErr = e; }
+  }
+  try { return await rpcFetch(method, params); } catch (e) { throw lastErr ?? e; }
+}
+
 async function ownerLogs(owner) {
   const cur = logCache.get(owner) ?? { toBlock: LADDER_DEPLOY_BLOCK - 1, logs: [] };
   const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
@@ -494,11 +529,11 @@ async function ownerLogs(owner) {
   while (from <= head) {
     const to = Math.min(head, from + span - 1);
     try {
-      const part = await rpcFetch("eth_getLogs", [{ address: LADDER_MANAGER, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [MANAGER_TOPICS, null, pad32(owner)] }]);
+      const part = await archiveFetch("eth_getLogs", [{ address: LADDER_MANAGER, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [MANAGER_TOPICS, null, pad32(owner)] }]);
       cur.logs.push(...part);
       from = to + 1;
     } catch (e) {
-      if (span <= 5_000) throw e;
+      if (span <= 2_000) throw e;
       span = Math.floor(span / 4);
     }
   }
@@ -509,14 +544,14 @@ async function ownerLogs(owner) {
 
 async function receiptOf(hash) {
   if (receiptCache.has(hash)) return receiptCache.get(hash);
-  const r = await rpcFetch("eth_getTransactionReceipt", [hash]);
+  const r = await archiveFetch("eth_getTransactionReceipt", [hash]);
   if (r) receiptCache.set(hash, r);
   return r;
 }
 async function blockTs(bn) {
   const n = Number(bn);
   if (blockTsCache.has(n)) return blockTsCache.get(n);
-  const b = await rpcFetch("eth_getBlockByNumber", ["0x" + n.toString(16), false]);
+  const b = await archiveFetch("eth_getBlockByNumber", ["0x" + n.toString(16), false]);
   const ts = parseInt(b.timestamp, 16);
   blockTsCache.set(n, ts);
   return ts;
@@ -580,9 +615,10 @@ async function buildPortfolio(owner) {
   const usd = await ethUsd().catch(() => null);
   const empty = { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: [], days: {}, totals: { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, open: 0, closed: 0 } };
   if (!ids.length) return empty;
+  let historyError = null;
   const [ladders, hist] = await Promise.all([
     batchCall(ids.map((id) => ({ to: LADDER_MANAGER, abi: LADDER_ABI, fn: "ladder", args: [id] }))),
-    historyOf(owner).catch(() => ({ byLadder: new Map(), txs: new Map() })),
+    historyOf(owner).catch((e) => { historyError = e?.message ?? String(e); console.warn(`pools | history for ${owner} unavailable: ${historyError}`); return { byLadder: new Map(), txs: new Map() }; }),
   ]);
   const out = [];
   const days = {};
@@ -596,12 +632,16 @@ async function buildPortfolio(owner) {
     if (kind === "close") row.closes++; else row.collects++;
   };
 
-  for (let i = 0; i < ids.length; i++) {
+  // Each ladder is a dozen dependent reads; a wallet with many of them should
+  // not wait for them one after another. A handful in flight keeps within the
+  // upstream's per-second allowance.
+  const CONCURRENCY = 4;
+  const buildLadder = async (i) => {
     const l = ladders[i];
-    if (!l) continue;
+    if (!l) return;
     const id = ids[i].toString();
     const st = await poolState(l.pool, await baseOf(l.pool)).catch(() => null);
-    if (!st) continue;
+    if (!st) return;
     const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals);
     const d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
     const p0 = st.base.isToken0 ? st.priceUsd : st.quote.usdPerToken;
@@ -711,13 +751,97 @@ async function buildPortfolio(owner) {
       minPrice: Math.min(...bins.map((b) => b.priceLower)), maxPrice: Math.max(...bins.map((b) => b.priceUpper)),
       bins, events,
     });
-  }
+  };
+  let next = 0;
+  const worker = async () => { while (next < ids.length) { const i = next++; await buildLadder(i); } };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
   const totals = out.reduce((t, l) => ({
     valueUsd: t.valueUsd + l.valueUsd, unclaimedUsd: t.unclaimedUsd + l.unclaimedUsd, claimedUsd: t.claimedUsd + l.claimedUsd,
     depositedUsd: t.depositedUsd + (l.closed ? 0 : l.depositedUsd), pnlUsd: t.pnlUsd + l.pnlUsd, gasUsd: t.gasUsd + l.gasUsd,
     open: t.open + (l.closed ? 0 : 1), closed: t.closed + (l.closed ? 1 : 0),
   }), { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, gasUsd: 0, open: 0, closed: 0 });
-  return { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: out.sort((a, b) => b.openedAt - a.openedAt), days, totals };
+  return { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: out.sort((a, b) => b.openedAt - a.openedAt), days, totals, historyError };
+}
+
+// ------------------------------------------------------------ platform
+
+const FEES_TOPIC = toEventSelector(LADDER_ABI.find((x) => x.type === "event" && x.name === "FeesCollected"));
+const feeLogCache = { toBlock: LADDER_DEPLOY_BLOCK - 1, logs: [] };
+/** Every FeesCollected the manager ever emitted, for every owner, read incrementally. */
+async function allFeeLogs() {
+  const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
+  let from = feeLogCache.toBlock + 1, span = 400_000;
+  while (from <= head) {
+    const to = Math.min(head, from + span - 1);
+    try {
+      const part = await archiveFetch("eth_getLogs", [{ address: LADDER_MANAGER, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [FEES_TOPIC] }]);
+      feeLogCache.logs.push(...part);
+      from = to + 1;
+    } catch (e) {
+      if (span <= 2_000) throw e;
+      span = Math.floor(span / 4);
+    }
+  }
+  feeLogCache.toBlock = head;
+  return feeLogCache.logs;
+}
+
+/**
+ * The numbers in the header of every liquidity page — the same four Delta
+ * shows: positions ever built, fees earned by LPs (owner share plus the 1%,
+ * each valued the day it was collected), what is in open positions now, and
+ * the ETH price. Stakes are folded in by the caller, which knows them.
+ */
+export async function platformStats({ stakesTvlUsd = 0, stakesFeesUsd = 0, stakes = 0 } = {}) {
+  return cached("platform", 60_000, async () => {
+    const [countRaw, usd] = await Promise.all([call(LADDER_MANAGER, LADDER_ABI, "ladderCount").catch(() => 0n), ethUsd().catch(() => null)]);
+    const count = Number(countRaw);
+    const ids = Array.from({ length: count }, (_, i) => BigInt(i));
+    const ladders = count ? await batchCall(ids.map((id) => ({ to: LADDER_MANAGER, abi: LADDER_ABI, fn: "ladder", args: [id] }))) : [];
+    const byId = new Map(ladders.map((l, i) => [String(i), l]).filter(([, l]) => l));
+
+    // Open value: every live bin, priced at the pool's current tick.
+    const openBins = [];
+    for (const l of ladders) { if (!l || l.closedAt !== 0n) continue; for (const b of l.bins) if (b.open) openBins.push({ tokenId: b.tokenId, pool: lower(l.pool) }); }
+    const states = new Map();
+    for (const p of new Set(openBins.map((b) => b.pool))) states.set(p, await poolState(p, await baseOf(p)).catch(() => null));
+    const valNow = (st, a0, a1) => {
+      const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals), d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
+      const p0 = st.base.isToken0 ? st.priceUsd : st.quote.usdPerToken, p1 = st.base.isToken0 ? st.quote.usdPerToken : st.priceUsd;
+      return (Number(a0) / d0) * (p0 ?? 0) + (Number(a1) / d1) * (p1 ?? 0);
+    };
+    let ladderTvlUsd = 0;
+    const pos = openBins.length ? await batchCall(openBins.map((b) => ({ to: NPM, abi: NPM_ABI, fn: "positions", args: [b.tokenId] }))) : [];
+    pos.forEach((p, i) => {
+      const st = states.get(openBins[i].pool); if (!p || !st) return;
+      const a = amountsForLiquidity(tickToSqrtPriceX96(st.tick), tickToSqrtPriceX96(Number(p[5])), tickToSqrtPriceX96(Number(p[6])), BigInt(p[7]));
+      ladderTvlUsd += valNow(st, a.amount0, a.amount1);
+    });
+
+    // Fees ever collected, owner share plus treasury, at the price of the day.
+    let ladderFeesUsd = 0;
+    try {
+      const logs = await allFeeLogs();
+      for (const lg of logs) {
+        let ev; try { ev = decodeEventLog({ abi: LADDER_ABI, data: lg.data, topics: lg.topics }); } catch { continue; }
+        const l = byId.get(ev.args.ladderId.toString()); if (!l) continue;
+        const pool = lower(l.pool);
+        if (!states.has(pool)) states.set(pool, await poolState(pool, await baseOf(pool)).catch(() => null));
+        const st = states.get(pool); if (!st) continue;
+        const ts = await blockTs(lg.blockNumber);
+        const [u0, u1] = await Promise.all([usdAt(st.token0, ts), usdAt(st.token1, ts)]);
+        const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals), d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
+        ladderFeesUsd += (Number(ev.args.toOwner0 + ev.args.toTreasury0) / d0) * (u0 ?? 0) + (Number(ev.args.toOwner1 + ev.args.toTreasury1) / d1) * (u1 ?? 0);
+      }
+    } catch (e) { console.warn(`pools | platform fees unavailable: ${e?.message ?? e}`); }
+
+    return {
+      totalPositions: count, openPositions: ladders.filter((l) => l && l.closedAt === 0n).length, stakes,
+      totalFeesUsd: ladderFeesUsd + stakesFeesUsd, ladderFeesUsd, stakesFeesUsd,
+      tvlUsd: ladderTvlUsd + stakesTvlUsd, ladderTvlUsd, stakesTvlUsd,
+      ethUsd: usd, at: new Date().toISOString(),
+    };
+  });
 }
 
 const mgr = () => getAddress(LADDER_MANAGER);

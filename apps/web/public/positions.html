@@ -64,6 +64,7 @@
   </nav>
 
   <div class="wrap pg">
+    <div id="lq-shell"></div>
     <h1>Positions</h1>
     <div class="panel" style="margin-top:18px" id="pnl">
       <div class="ph"><div class="t"><button id="cal-toggle" title="Collapse">▾</button> PnL</div>
@@ -92,7 +93,9 @@
   <script type="module">
     import { wallet } from "/wallet.js";
     import { renderLadders, usd, num } from "/ladders.js";
+    import { mountShell } from "/liquidity.js";
     const $ = (id) => document.getElementById(id);
+    mountShell($("lq-shell"), { page: "positions" });
     async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
     let portfolio = null, lastSig = null, unit = "usd", cur = new Date(); cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
     const fmt = (raw) => { const v = Math.abs(raw) < (unit === "usd" ? 0.005 : 0.000005) ? 0 : raw; return unit === "usd" ? (v < 0 ? "-" : "") + usd(Math.abs(v)) : (v < 0 ? "-" : "") + num(Math.abs(v), 5) + " Ξ"; };

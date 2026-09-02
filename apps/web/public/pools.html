@@ -50,6 +50,27 @@
     .up { color: #1e9e6a; } .dn { color: var(--danger); }
     canvas.spark { width: 110px; height: 28px; display: inline-block; vertical-align: middle; }
 
+    /* featured cards, like Delta's header trio */
+    .feat { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-bottom: 22px; }
+    .fside { display: grid; grid-template-rows: 1fr 1fr; gap: 14px; }
+    .fcard { position: relative; display: block; border: 1px solid var(--border); background: var(--card); padding: 18px 20px; text-decoration: none; color: var(--text); overflow: hidden; min-height: 96px; }
+    .fcard:hover { border-color: var(--accent); }
+    .fcard .k { font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .fcard .v { font-family: var(--mono); font-size: 15px; margin-top: 3px; }
+    .fcard .fhead { margin: 8px 0 12px; }
+    .fcard .fhead .tok .ic { width: 40px; height: 40px; font-size: 13px; }
+    .fcard .fhead .tok b { font-size: 22px; font-family: var(--sans); letter-spacing: -0.01em; }
+    .fcard.hero .fhead .tok b { font-size: 28px; }
+    .fgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; max-width: 60%; position: relative; z-index: 1; }
+    .fline { font-family: var(--mono); font-size: 15px; position: relative; z-index: 1; }
+    .fline b { color: #1e9e6a; font-weight: 500; } .fline small { color: var(--muted); font-size: 11.5px; margin-left: 8px; }
+    .fspark { position: absolute; right: 0; bottom: 0; width: 55%; height: 62%; opacity: .9; pointer-events: none; }
+    .fcard.hero .fspark { height: 55%; }
+    .sec { margin-bottom: 22px; }
+    .sec .ph h3 { text-transform: uppercase; }
+    .sec table.list { border: none; }
+    .seg.qf button { padding: 5px 10px; }
+
     /* detail */
     .head { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
     .head .ic { width: 56px; height: 56px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); font-family: var(--mono); font-size: 16px; display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
@@ -92,6 +113,8 @@
     #overlay { position: absolute; inset: 0; pointer-events: none; }
     .guide { position: absolute; left: 8px; font-family: var(--mono); font-size: 10.5px; padding: 3px 8px; border: 1px solid var(--accent); background: #fff; color: var(--accent); pointer-events: none; z-index: 3; white-space: nowrap; }
     .stats4 { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--border); }
+    .stats4.five { grid-template-columns: repeat(5, 1fr); }
+    .chartfoot { display: flex; justify-content: space-between; padding: 6px 16px 10px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
     .stats4 div { padding: 12px 16px; border-right: 1px solid var(--border); }
     .stats4 div:last-child { border-right: none; }
     .stats4 .k { font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
@@ -129,6 +152,7 @@
     .empty { padding: 26px 18px; color: var(--muted); font-size: 13px; }
 
     @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } .strip { grid-template-columns: 1fr 1fr; } .stats4 { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 820px) { .feat { grid-template-columns: 1fr; } .fgrid { max-width: 100%; } .fspark { display: none; } .stats4 { grid-template-columns: 1fr 1fr; } .list th:nth-child(5), .list td:nth-child(5), .list th:nth-child(7), .list td:nth-child(7) { display: none; } }
   </style>
 </head>
 <body>
@@ -145,6 +169,7 @@
   <script type="module">
     import { wallet, rejected } from "/wallet.js";
     import { renderLadders, esc, usd, num, fmtPx, fmtBig, formatUnits, parseUnits, SHAPE_DESC } from "/ladders.js";
+    import { mountShell } from "/liquidity.js";
     const $ = (id) => document.getElementById(id);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const pct = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
@@ -161,49 +186,91 @@
     let view = tokenParam ? "detail" : "list";
 
     // ================= LIST =================
-    let listData = null, tab = "trending", filter = "";
+    let listData = null;
+    const quoteFilter = { trending: "all", established: "all" };
+    const sparkCache = new Map(); // token → closes (24h, 30m buckets)
+    const tokenCell = (t) => `<div class="tok"><div class="ic">${t.icon ? `<img src="${esc(t.icon)}" alt="" loading="lazy" />` : esc(t.symbol.slice(0, 2))}</div><div><b>${esc(t.symbol)}</b><small>${esc(t.name ?? "")}</small></div></div>`;
     async function renderList() {
       $("root").innerHTML = `
-        <h1>Pools <span class="chip">Uniswap V3 · Robinhood Chain</span></h1>
-        <div class="sub">Provide liquidity to any token in one transaction. Set a range on the chart, choose a shape, and your deposit is spread across it as a ladder of positions only your wallet controls. Every swap through your range pays you. OrdoFi takes 1% of the fees you collect, never from your deposit.</div>
-        <div class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="q" placeholder="Search tokens" /></div>
-        <div class="strip" id="strip"><div><div class="k">24h volume · all tokens</div><div class="v">—</div></div><div><div class="k">24h fees to LPs</div><div class="v">—</div></div><div><div class="k">Tokens with markets</div><div class="v">—</div></div><div><div class="k">ETH price</div><div class="v">—</div></div></div>
-        <div class="tabs"><button class="on" data-t="trending">Trending</button><button data-t="established">Established</button></div>
-        <table class="list"><thead><tr><th>Token</th><th>MC</th><th>24h</th><th>Fees 24h</th><th>Trades</th><th>Vol 24h</th><th>Age</th><th>Last 24h</th></tr></thead><tbody id="rows"><tr><td colspan="8" class="empty">Loading markets…</td></tr></tbody></table>`;
-      document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => { tab = b.dataset.t; document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b)); renderRows(); }));
-      $("q").addEventListener("input", () => { filter = $("q").value.trim().toLowerCase(); renderRows(); });
+        <div id="lq-shell"></div>
+        <div class="feat" id="feat">
+          <a class="fcard hero" id="f-hero" href="#"><div class="empty">Loading markets…</div></a>
+          <div class="fside">
+            <a class="fcard" id="f-traded" href="#"><div class="k">Most traded · 24h</div></a>
+            <a class="fcard" id="f-volume" href="#"><div class="k">Highest volume · 24h</div></a>
+          </div>
+        </div>
+        ${["trending", "established"].map((sec) => `
+        <div class="panel sec" id="sec-${sec}">
+          <div class="ph"><h3>${sec}</h3>
+            <div style="display:flex;gap:8px;align-items:center">
+              <div class="seg qf" data-sec="${sec}"><button data-q="all" class="on">All</button><button data-q="ETH">ETH</button><button data-q="USDG">USDG</button></div>
+              <span class="chip" title="Volume, fees, trades and change over the last 24 hours">24h</span>
+            </div></div>
+          <table class="list"><thead><tr><th>Token</th><th>MC</th><th>24h</th><th>Fees 24h</th><th>Trades</th><th>Vol 24h</th><th>Age</th><th>Last 24h</th></tr></thead><tbody id="rows-${sec}"><tr><td colspan="8" class="empty">Loading markets…</td></tr></tbody></table>
+        </div>`).join("")}`;
+      mountShell($("lq-shell"), { page: "pools" });
+      document.querySelectorAll(".qf button").forEach((b) => b.addEventListener("click", () => {
+        const sec = b.parentElement.dataset.sec; quoteFilter[sec] = b.dataset.q;
+        b.parentElement.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); renderRows(sec);
+      }));
       listData = await api("/api/pools");
-      const eth = await api("/api/desk").then((d) => d.ethUsd).catch(() => null);
-      const s = $("strip").querySelectorAll(".v");
-      s[0].textContent = usd(listData.totals.volume24Usd); s[1].textContent = usd(listData.totals.fees24Usd); s[2].textContent = listData.totals.tokens; s[3].textContent = usd(eth, 2);
-      renderRows();
+      renderFeatured();
+      renderRows("trending"); renderRows("established");
     }
-    function renderRows() {
-      let rows = listData[tab] ?? [];
-      if (filter) rows = [...listData.trending, ...listData.established].filter((t, i, a) => a.findIndex((x) => x.token === t.token) === i).filter((t) => t.symbol.toLowerCase().includes(filter) || (t.name ?? "").toLowerCase().includes(filter) || t.token.includes(filter));
-      $("rows").innerHTML = rows.length ? rows.map((t, i) => `<tr class="row" data-t="${t.token}">
-        <td><div class="tok"><div class="ic">${t.icon ? `<img src="${esc(t.icon)}" alt="" />` : esc(t.symbol.slice(0, 2))}</div><div><b>${esc(t.symbol)}</b><small>${esc(t.name ?? "")}</small></div></div></td>
+    function renderFeatured() {
+      const hero = listData.trending[0], mt = listData.featured?.mostTraded, hv = listData.featured?.highestVolume;
+      if (hero) {
+        $("f-hero").href = `/pools/${hero.token}`;
+        $("f-hero").innerHTML = `<div class="fhead">${tokenCell(hero)}</div>
+          <div class="fgrid">
+            <div><div class="k">Market cap</div><div class="v">${usd(hero.marketCapUsd)}</div></div><div><div class="k">24h</div><div class="v ${cls(hero.change24)}">${pct(hero.change24)}</div></div>
+            <div><div class="k">Vol 24h</div><div class="v">${usd(hero.volume24Usd)}</div></div><div><div class="k">Fees 24h</div><div class="v">${usd(hero.fees24Usd)}</div></div>
+            <div><div class="k">Trades 24h</div><div class="v">${num(hero.trades24, 0)}</div></div><div><div class="k">Pool age</div><div class="v">${hero.ageDays == null ? "—" : hero.ageDays + "d"}</div></div>
+          </div><canvas class="fspark" width="600" height="160"></canvas>`;
+        sparkInto(hero, $("f-hero").querySelector("canvas"), 3.5);
+      }
+      for (const [el, t, line] of [[$("f-traded"), mt, mt ? `<b>${num(mt.trades24, 0)} trades</b><small>${usd(mt.marketCapUsd)} MC</small>` : ""], [$("f-volume"), hv, hv ? `<b>${usd(hv.volume24Usd)}</b><small>${usd(hv.marketCapUsd)} MC</small>` : ""]]) {
+        if (!t) continue;
+        el.href = `/pools/${t.token}`;
+        el.innerHTML = `${el.querySelector(".k").outerHTML}<div class="fhead">${tokenCell(t)}</div><div class="fline">${line}</div><canvas class="fspark" width="600" height="110"></canvas>`;
+        sparkInto(t, el.querySelector("canvas"), 3);
+      }
+    }
+    function renderRows(sec) {
+      const q = quoteFilter[sec];
+      const rows = (listData[sec] ?? []).filter((t) => q === "all" || (t.quotes ?? [t.quote]).includes(q));
+      const tb = $(`rows-${sec}`);
+      tb.innerHTML = rows.length ? rows.map((t, i) => `<tr class="row" data-t="${t.token}">
+        <td>${tokenCell(t)}</td>
         <td>${usd(t.marketCapUsd)}</td><td class="${cls(t.change24)}">${pct(t.change24)}</td><td>${usd(t.fees24Usd)}</td><td>${num(t.trades24, 0)}</td><td>${usd(t.volume24Usd)}</td><td>${t.ageDays == null ? "—" : t.ageDays + "d"}</td>
-        <td><canvas class="spark" data-i="${i}" width="220" height="56"></canvas></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No markets match.</td></tr>`;
-      $("rows").querySelectorAll("tr.row").forEach((r) => r.addEventListener("click", () => { location.href = `/pools/${r.dataset.t}`; }));
-      rows.forEach((t, i) => spark(t, $("rows").querySelector(`canvas[data-i="${i}"]`)));
+        <td><canvas class="spark" data-i="${i}" width="220" height="56"></canvas></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No ${q === "all" ? "" : q + " "}markets yet.</td></tr>`;
+      tb.querySelectorAll("tr.row").forEach((r) => r.addEventListener("click", () => { location.href = `/pools/${r.dataset.t}`; }));
+      rows.forEach((t, i) => sparkInto(t, tb.querySelector(`canvas[data-i="${i}"]`), 2.5));
     }
-    async function spark(t, cv) {
-      try {
-        const d = await api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24`);
-        const c = d.candles.map((x) => x.close); if (c.length < 2) return;
-        const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...c), hi = Math.max(...c);
-        ctx.strokeStyle = c.at(-1) >= c[0] ? "#1e9e6a" : "#c0392b"; ctx.lineWidth = 2.5; ctx.beginPath();
-        c.forEach((v, i) => { const x = (i / (c.length - 1)) * W, y = H - 4 - ((v - lo) / (hi - lo || 1)) * (H - 8); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-        ctx.stroke();
-      } catch { /* no tape */ }
+    async function closes24(t) {
+      if (sparkCache.has(t.token)) return sparkCache.get(t.token);
+      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
+      sparkCache.set(t.token, p);
+      return p;
+    }
+    async function sparkInto(t, cv, lw) {
+      if (!cv) return;
+      const c = await closes24(t); if (c.length < 2) return;
+      const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...c), hi = Math.max(...c);
+      const up = c.at(-1) >= c[0], col = up ? "#1e9e6a" : "#c0392b";
+      const pts = c.map((v, i) => [(i / (c.length - 1)) * W, H - 4 - ((v - lo) / (hi - lo || 1)) * (H - 8)]);
+      ctx.clearRect(0, 0, W, H);
+      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, up ? "rgba(30,158,106,.22)" : "rgba(192,57,43,.22)"); g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(pts[0][0], H); pts.forEach(([x, y]) => ctx.lineTo(x, y)); ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineJoin = "round"; ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
     }
 
     // ================= DETAIL =================
     const TFS = [[5, "5s"], [30, "30s"], [60, "1m"], [300, "5m"], [900, "15m"], [1800, "30m"], [3600, "1h"], [14400, "4h"], [43200, "12h"], [86400, "24h"]];
     const HOURS = { 5: 1, 30: 2, 60: 8, 300: 48, 900: 168, 1800: 336, 3600: 720, 14400: 2880, 43200: 6000, 86400: 9600 };
     let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfSec = 900, chart, series, minLine, maxLine;
-    let shape = "bidask", bins = 40, minPct = -30, maxPct = 40, balances = null, replanT = null, supply = null, mode = "price", candlesQ = [], portfolio = null;
+    let shape = "bidask", bins = 40, slippageBps = 100, minPct = -30, maxPct = 40, balances = null, replanT = null, supply = null, mode = "price", candlesQ = [], portfolio = null;
     // Everything on the chart is in display units: USD per token, or USD market cap.
     const factor = () => (state?.quote.usdPerToken ?? 0) * (mode === "mc" && supply ? supply : 1);
     const disp = (quotePrice) => quotePrice * factor();
@@ -227,6 +294,7 @@
       pool = pools.find((p) => p.pool === want)?.pool ?? pools[0].pool;
 
       $("root").innerHTML = `
+        <div id="lq-shell"></div>
         <div class="head"><div class="ic">${token.icon ? `<img src="${esc(token.icon)}" alt="" />` : esc(token.symbol.slice(0, 2))}</div>
           <div><h1>${esc(token.symbol)}</h1><div class="nm">${esc(token.name ?? "")} · Robinhood Chain</div><div class="meta"><span class="mono">${token.address}</span> <button id="copy-addr">copy</button> · <a href="${EXPLORER}/token/${token.address}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${token.address}">trade</a></div></div></div>
         <div class="grid">
@@ -237,7 +305,8 @@
               <div class="ph"><div class="tfs" id="tfs">${TFS.map(([s, l]) => `<button data-tf="${s}" class="${s === tfSec ? "on" : ""}">${l}</button>`).join("")}</div>
                 <div style="display:flex;gap:10px;align-items:center"><div class="seg" id="mode"><button data-m="price" class="on">Price</button><button data-m="mc">MC</button></div><span class="chartnote" id="chart-note"></span></div></div>
               <div class="chartwrap" id="chartwrap"><div id="candles"></div><canvas id="overlay"></canvas><div class="guide" id="g-max" style="display:none"></div><div class="guide" id="g-min" style="display:none"></div></div>
-              <div class="stats4"><div><div class="k">Market cap</div><div class="v" id="s-mc">—</div></div><div><div class="k">24h change</div><div class="v" id="s-chg">—</div></div><div><div class="k">24h volume</div><div class="v" id="s-vol">—</div></div><div><div class="k">24h fees</div><div class="v" id="s-fees">—</div></div></div>
+              <div class="chartfoot"><span>drag the guides to set your range</span><span id="axis-unit">price, USD</span></div>
+              <div class="stats4 five"><div><div class="k">Market cap</div><div class="v" id="s-mc">—</div></div><div><div class="k">24h change</div><div class="v" id="s-chg">—</div></div><div><div class="k">24h volume</div><div class="v" id="s-vol">—</div></div><div><div class="k">24h fees</div><div class="v" id="s-fees">—</div></div><div><div class="k">Liquidity</div><div class="v" id="s-liq">—</div></div></div>
             </div>
             <div class="panel" style="margin-top:22px"><div class="ph"><h3>Your positions</h3><span class="chartnote" id="pos-note">connect a wallet</span></div><div id="cards"><div class="empty">Connect a wallet to see your positions.</div></div></div>
           </div>
@@ -256,8 +325,10 @@
               <div class="hint"><span id="bal-base"></span></div>
               <div class="box" id="box-quote" style="margin-top:8px"><input id="amt-quote" placeholder="0.0" inputmode="decimal" /><span class="u" id="quote-sym">ETH</span><button class="max" id="max-quote">MAX</button></div>
               <div class="hint"><span id="bal-quote"></span></div>
-              <label class="f">Bins</label>
-              <div class="box"><input id="bins" inputmode="numeric" value="${bins}" /><span class="u">positions · max 40</span></div>
+              <div class="range2">
+                <div><label class="f">Bins</label><div class="box"><input id="bins" inputmode="numeric" value="${bins}" /><span class="u">max 40</span></div></div>
+                <div><label class="f">Slippage</label><div class="box"><input id="slip" inputmode="decimal" value="${(slippageBps / 100).toString()}" aria-label="Slippage tolerance, percent" /><span class="u">%</span></div></div>
+              </div>
               <div class="preview" id="preview">Set a range and an amount to see the ladder.</div>
               <button class="go" id="go">Connect wallet</button>
               <div class="result" id="result"></div>
@@ -275,12 +346,14 @@
       $("maxv").addEventListener("input", () => { const v = Number($("maxv").value.replace(/,/g, "")); if (v > 0 && state) { maxPct = (fromDisp(v) / state.price - 1) * 100; syncRange("val"); } });
       document.querySelectorAll(".hint button[data-r]").forEach((b) => b.addEventListener("click", () => { [minPct, maxPct] = b.dataset.r.split(",").map(Number); syncRange(); }));
       $("bins").addEventListener("input", () => { bins = Math.max(1, Math.min(40, Number($("bins").value) || 1)); replan(); });
+      $("slip").addEventListener("input", () => { const v = Number($("slip").value); if (isFinite(v) && v >= 0) { slippageBps = Math.round(Math.min(20, v) * 100); replan(); } });
       for (const ev of ["input", "change", "keyup"]) { $("amt-base").addEventListener(ev, replan); $("amt-quote").addEventListener(ev, replan); }
       $("max-base").addEventListener("click", () => { if (balances?.base != null) { $("amt-base").value = balances.base; replan(); } });
       $("max-quote").addEventListener("click", () => { if (balances?.quote != null) { $("amt-quote").value = Math.max(0, balances.quote - (state.quote.address === WETH ? 0.003 : 0)).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); replan(); } });
       $("go").addEventListener("click", build);
       document.querySelectorAll("#tfs button").forEach((b) => b.addEventListener("click", () => { tfSec = Number(b.dataset.tf); document.querySelectorAll("#tfs button").forEach((x) => x.classList.toggle("on", x === b)); loadCandles(); }));
       document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => { if (b.dataset.m === "mc" && !supply) return; mode = b.dataset.m; document.querySelectorAll("#mode button").forEach((x) => x.classList.toggle("on", x === b)); applyMode(); }));
+      mountShell($("lq-shell"), { page: "pools" });
       initChart();
       renderGroups();
       await selectPool(pool);
@@ -312,18 +385,22 @@
       renderGroups();
       $("quote-sym").textContent = state.quote.symbol;
       $("pool-note").textContent = `${(state.fee / 1e4).toFixed(2)}% fee · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
-      await loadStats();
+      // Supply comes with the pool state, so the MC toggle never depends on the list.
+      supply = state.base.totalSupply ?? supply;
+      $("s-mc").textContent = usd(state.marketCapUsd); $("s-liq").textContent = usd(state.tvlUsd);
+      $("mode").querySelector("[data-m=mc]").style.opacity = supply ? 1 : .35;
+      loadStats();
       syncRange();
       loadCandles(); loadDepth(); loadBalances(); replan();
     }
     async function loadStats() {
       try {
         const m = await api("/api/pools");
-        const row = [...m.trending, ...m.established].find((t) => t.token === token.address);
-        supply = row?.marketCapUsd && row?.priceUsd ? row.marketCapUsd / row.priceUsd : null;
-        $("s-mc").textContent = usd(row?.marketCapUsd); $("s-chg").textContent = pct(row?.change24); $("s-chg").className = "v " + cls(row?.change24);
+        const row = (m.all ?? [...m.trending, ...m.established]).find((t) => t.token === token.address);
+        if (!supply && row?.marketCapUsd && row?.priceUsd) { supply = row.marketCapUsd / row.priceUsd; $("mode").querySelector("[data-m=mc]").style.opacity = 1; }
+        if (!state?.marketCapUsd && row?.marketCapUsd) $("s-mc").textContent = usd(row.marketCapUsd);
+        $("s-chg").textContent = pct(row?.change24); $("s-chg").className = "v " + cls(row?.change24);
         $("s-vol").textContent = usd(row?.volume24Usd); $("s-fees").textContent = usd(row?.fees24Usd);
-        $("mode").querySelector("[data-m=mc]").style.opacity = supply ? 1 : .35;
       } catch { /* cosmetic */ }
     }
 
@@ -352,7 +429,9 @@
         timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: tfSec < 60, rightOffset: 4, barSpacing: 7 },
         crosshair: { mode: 0 }, autoSize: true,
       });
-      series = chart.addCandlestickSeries({ upColor: "#1e9e6a", downColor: "#c0392b", borderVisible: false, wickUpColor: "#1e9e6a", wickDownColor: "#c0392b" });
+      // A price line, as on Delta: one close per bucket. Candle wicks on thin
+      // pools are dominated by single stray prints and hide the shape of the tape.
+      series = chart.addAreaSeries({ lineColor: "#1d1616", lineWidth: 1.5, topColor: "rgba(255,100,20,.16)", bottomColor: "rgba(255,100,20,0)", priceLineVisible: true, priceLineColor: "#1e9e6a", lastValueVisible: true, crosshairMarkerVisible: true });
       // The range guides must always be on screen, whatever the candles span.
       series.applyOptions({ autoscaleInfoProvider: (orig) => { const r = orig(); if (!r || !state) return r; const lo = disp(rangeLo()), hi = disp(rangeHi()); return { priceRange: { minValue: Math.min(r.priceRange.minValue, lo), maxValue: Math.max(r.priceRange.maxValue, hi) }, margins: r.margins }; } });
       chart.timeScale().subscribeVisibleLogicalRangeChange(() => requestAnimationFrame(drawOverlay));
@@ -377,7 +456,8 @@
       const f = factor(); if (!f) return;
       const last = (candlesQ.at(-1)?.close ?? state.price) * f;
       series.applyOptions({ priceFormat: { type: "custom", minMove: mode === "mc" ? 1 : last >= 100 ? 0.01 : last >= 1 ? 0.0001 : 0.000001, formatter: (v) => fmtDisp(v) } });
-      series.setData(candlesQ.map((c) => ({ time: c.time, open: c.open * f, high: c.high * f, low: c.low * f, close: c.close * f })));
+      series.setData(candlesQ.map((c) => ({ time: c.time, value: c.close * f })));
+      $("axis-unit").textContent = mode === "mc" ? "market cap, USD" : "price, USD";
       updateLines();
     }
     function updateLines() {
@@ -459,7 +539,7 @@
       if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
       if ((baseAmt ?? 0n) === 0n && (quoteAmt ?? 0n) === 0n) { plan = null; $("preview").textContent = "Set a range and an amount to see the ladder."; if (wallet.account) { go.textContent = "Build position"; go.disabled = true; } return; }
       try {
-        const q = new URLSearchParams({ pool, base: token.address, minPrice: rangeLo(), maxPrice: rangeHi(), shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps: 100 });
+        const q = new URLSearchParams({ pool, base: token.address, minPrice: rangeLo(), maxPrice: rangeHi(), shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps });
         const p = await api(`/api/pools/plan?${q}`);
         if (seq !== planSeq) return;
         plan = p;

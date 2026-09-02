@@ -74,7 +74,27 @@
     .create p { color: var(--muted); font-size: 13.5px; line-height: 1.6; max-width: 720px; margin-bottom: 14px; }
     .create .grid3 { grid-template-columns: 1fr auto; }
     .empty { padding: 26px 18px; color: var(--muted); font-size: 13px; }
-    @media (max-width: 900px) { .dwrap { grid-template-columns: 1fr; } }
+    .grid3 > div { min-width: 0; }
+    .pool.with-ic { display: flex; align-items: center; gap: 10px; }
+    .ic { width: 30px; height: 30px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); font-family: var(--mono); font-size: 11px; display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
+    .ic img { width: 100%; height: 100%; object-fit: cover; }
+    canvas.trend { width: 80px; height: 20px; vertical-align: middle; margin-left: 10px; }
+    .viewtoggle { margin-left: auto; display: flex; border: 1px solid var(--border-light); background: #fff; border-radius: 999px; overflow: hidden; }
+    .viewtoggle button { border: none !important; border-radius: 0 !important; padding: 7px 12px !important; font-size: 13px !important; letter-spacing: 0 !important; }
+    .viewtoggle button.on { background: var(--text); color: #fff !important; }
+    .sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+    .scard { border: 1px solid var(--border); background: var(--card); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .scard.open { grid-column: 1 / -1; }
+    .sc-head { display: flex; align-items: center; gap: 10px; }
+    .sc-head canvas.trend { margin-left: auto; }
+    .sc-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .sc-stats .k { font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .sc-stats .v { font-family: var(--mono); font-size: 14px; margin-top: 3px; }
+    .sc-stats .v small { font-size: 10px; color: var(--muted); }
+    .sc-open { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; padding: 10px; border: 1px solid var(--text); background: #fff; color: var(--text); border-radius: 999px; cursor: pointer; }
+    .sc-open:hover { background: var(--text); color: #fff; }
+    .sc-detail { border-top: 1px solid var(--border); margin: 0 -16px -16px; }
+    @media (max-width: 900px) { .dwrap { grid-template-columns: 1fr; } .grid3 { grid-template-columns: 1fr; } .create .grid3 { grid-template-columns: 1fr; } canvas.trend { display: none; } }
   </style>
 </head>
 <body>
@@ -87,11 +107,14 @@
   </nav>
 
   <div class="wrap pg">
+    <div id="lq-shell"></div>
     <h1>Stakes</h1>
     <div class="sub">Put your tokens into a stake and a share of the pool's trading fees is yours, paid in ETH. Deposit one coin and OrdoFi swaps, pairs and stakes it for you in a single transaction. OrdoFi takes 1% of the fees a stake earns, never from your deposit.</div>
     <div class="strip"><div><span class="k">Total staked</span><div class="v" id="t-tvl">—<small>WETH</small></div></div><div><span class="k">Stakes</span><div class="v" id="t-n">—</div></div></div>
-    <div class="filters"><button class="on" data-f="all">All</button><button data-f="mine">My stakes</button><button data-f="fees">Highest fees</button><button data-f="new">Newest</button></div>
-    <table class="list"><thead><tr><th>Pool</th><th><button id="s-tvl" class="on">TVL ▾</button></th><th><button id="s-rate">7d rate</button></th><th></th></tr></thead><tbody id="rows"><tr><td colspan="4" class="empty">Loading stakes…</td></tr></tbody></table>
+    <div class="filters"><button class="on" data-f="all">All</button><button data-f="mine">My stakes</button><button data-f="fees">Highest fees</button><button data-f="new">Newest</button>
+      <span class="viewtoggle"><button id="v-table" class="on" title="Table view" aria-label="Table view">☰</button><button id="v-grid" title="Grid view" aria-label="Grid view">▦</button></span></div>
+    <table class="list" id="table"><thead><tr><th>Pool</th><th><button id="s-tvl" class="on">TVL ▾</button></th><th><button id="s-rate">7d rate</button></th><th>24h fees</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="5" class="empty">Loading stakes…</td></tr></tbody></table>
+    <div class="sgrid" id="grid" style="display:none"></div>
 
     <div class="create panel" style="padding:20px">
       <h2>Create a stake</h2>
@@ -105,6 +128,7 @@
   <script type="module">
     import { wallet, rejected } from "/wallet.js";
     import { esc, usd, num, formatUnits, parseUnits } from "/ladders.js";
+    import { mountShell } from "/liquidity.js";
     const $ = (id) => document.getElementById(id);
     const EXPLORER = "https://robinhoodchain.blockscout.com";
     const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
@@ -115,31 +139,66 @@
     const pct = (v) => v == null ? "—" : (v * 100).toFixed(2) + "%";
     const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
 
-    let data = null, filter = "all", sort = "tvl", openVault = new URLSearchParams(location.search).get("vault"), balances = null;
+    let data = null, filter = "all", sort = "tvl", view = localStorage.getItem("ordo.stakes.view") ?? "table", openVault = new URLSearchParams(location.search).get("vault"), balances = null;
+    let market = new Map(); // token → 24h row from the pools list (fees, volume, change)
+    const sparkCache = new Map();
 
     async function load() {
       try {
-        data = await api(`/api/pools/stakes${wallet.account ? `?owner=${wallet.account}` : ""}`);
+        const [d, list] = await Promise.all([api(`/api/pools/stakes${wallet.account ? `?owner=${wallet.account}` : ""}`), api("/api/pools").catch(() => null)]);
+        data = d;
+        if (list) market = new Map((list.all ?? [...list.trending, ...list.established]).map((t) => [t.token, t]));
         $("t-tvl").innerHTML = `${num(data.totals.tvlWeth, 2)}<small>WETH</small>`; $("t-n").textContent = data.totals.stakes;
         render();
-      } catch (e) { $("rows").innerHTML = `<tr><td colspan="4" class="empty">${esc(e.message)}</td></tr>`; }
+      } catch (e) { $("rows").innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`; }
     }
     function rows() {
       let r = data.stakes.slice();
       if (filter === "mine") r = r.filter((s) => s.me && (Number(s.me.staked) > 0 || Number(s.me.loose) > 0));
-      if (filter === "fees" || sort === "rate") r.sort((a, b) => b.rate7d - a.rate7d);
+      if (filter === "fees") r.sort((a, b) => (market.get(b.token)?.fees24Usd ?? 0) - (market.get(a.token)?.fees24Usd ?? 0));
       else if (filter === "new") r.sort((a, b) => b.createdAt - a.createdAt);
+      else if (sort === "rate") r.sort((a, b) => b.rate7d - a.rate7d);
       else r.sort((a, b) => b.tvlWeth - a.tvlWeth);
       return r;
     }
+    const icon = (s) => `<div class="ic">${s.icon ? `<img src="${esc(s.icon)}" alt="" loading="lazy" />` : esc(s.symbol.slice(0, 2))}</div>`;
+    const fees24 = (s) => usd(market.get(s.token)?.fees24Usd);
     function render() {
       const r = rows();
-      $("rows").innerHTML = r.length ? r.map((s) => `
-        <tr class="row ${openVault === s.vault ? "open" : ""}" data-v="${s.vault}"><td><div class="pool"><b>WETH / ${esc(s.symbol)}</b><small>fee share → WETH${s.me && Number(s.me.staked) > 0 ? " · you're in" : ""}</small></div></td>
-          <td>${fmtEth(s.tvlWeth)} <span style="color:var(--muted);font-size:11px">WETH</span></td><td class="rate">${pct(s.rate7d)}</td><td class="chev">${openVault === s.vault ? "▴" : "▾"}</td></tr>
-        ${openVault === s.vault ? `<tr class="detail"><td colspan="4">${detail(s)}</td></tr>` : ""}`).join("") : `<tr><td colspan="4" class="empty">${filter === "mine" ? "You are not in any stake yet." : "No stakes yet — create the first one below."}</td></tr>`;
-      $("rows").querySelectorAll("tr.row").forEach((tr) => tr.addEventListener("click", () => { openVault = openVault === tr.dataset.v ? null : tr.dataset.v; history.replaceState(null, "", openVault ? `/stakes?vault=${openVault}` : "/stakes"); render(); }));
+      document.body.classList.toggle("gridview", view === "grid");
+      $("v-table").classList.toggle("on", view === "table"); $("v-grid").classList.toggle("on", view === "grid");
+      const empty = filter === "mine" ? "You are not in any stake yet." : "No stakes yet — create the first one below.";
+      if (view === "grid") {
+        $("table").style.display = "none"; $("grid").style.display = "";
+        $("grid").innerHTML = r.length ? r.map((s) => `
+          <div class="scard ${openVault === s.vault ? "open" : ""}" data-v="${s.vault}">
+            <div class="sc-head">${icon(s)}<div class="pool"><b>WETH / ${esc(s.symbol)}</b><small>fee share → WETH${s.me && Number(s.me.staked) > 0 ? " · you're in" : ""}</small></div><canvas class="trend" width="160" height="40"></canvas></div>
+            <div class="sc-stats"><div><span class="k">TVL</span><div class="v">${fmtEth(s.tvlWeth)} <small>WETH</small></div></div><div><span class="k">7d rate</span><div class="v rate">${pct(s.rate7d)}</div></div><div><span class="k">24h fees</span><div class="v">${fees24(s)}</div></div></div>
+            <button class="sc-open">${openVault === s.vault ? "Close" : "Manage"}</button>
+            ${openVault === s.vault ? `<div class="sc-detail">${detail(s)}</div>` : ""}
+          </div>`).join("") : `<div class="empty">${empty}</div>`;
+        $("grid").querySelectorAll(".scard .sc-open").forEach((b) => b.addEventListener("click", () => toggle(b.closest(".scard").dataset.v)));
+        $("grid").querySelectorAll(".scard").forEach((c) => trend(r.find((s) => s.vault === c.dataset.v), c.querySelector("canvas.trend")));
+      } else {
+        $("table").style.display = ""; $("grid").style.display = "none";
+        $("rows").innerHTML = r.length ? r.map((s) => `
+          <tr class="row ${openVault === s.vault ? "open" : ""}" data-v="${s.vault}"><td><div class="pool with-ic">${icon(s)}<div><b>WETH / ${esc(s.symbol)}</b><small>fee share → WETH${s.me && Number(s.me.staked) > 0 ? " · you're in" : ""}</small></div></div></td>
+            <td>${fmtEth(s.tvlWeth)} <span style="color:var(--muted);font-size:11px">WETH</span></td><td class="rate">${pct(s.rate7d)}</td><td>${fees24(s)} <canvas class="trend" width="160" height="40"></canvas></td><td class="chev">${openVault === s.vault ? "▴" : "▾"}</td></tr>
+          ${openVault === s.vault ? `<tr class="detail"><td colspan="5">${detail(s)}</td></tr>` : ""}`).join("") : `<tr><td colspan="5" class="empty">${empty}</td></tr>`;
+        $("rows").querySelectorAll("tr.row").forEach((tr) => { tr.addEventListener("click", () => toggle(tr.dataset.v)); trend(r.find((s) => s.vault === tr.dataset.v), tr.querySelector("canvas.trend")); });
+      }
       if (openVault) bindDetail(data.stakes.find((s) => s.vault === openVault));
+    }
+    function toggle(v) { openVault = openVault === v ? null : v; history.replaceState(null, "", openVault ? `/stakes?vault=${openVault}` : "/stakes"); render(); }
+    /** 24h price trend of the staked token, the small line Delta puts on every stake row. */
+    async function trend(s, cv) {
+      if (!s || !cv) return;
+      if (!sparkCache.has(s.token)) sparkCache.set(s.token, api(`/api/trade/candles?base=${s.token}&quote=eth&bucketSec=1800&hours=24`).then((d) => d.candles.map((x) => x.close)).catch(() => []));
+      const c = await sparkCache.get(s.token); if (c.length < 2) return;
+      const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...c), hi = Math.max(...c);
+      ctx.strokeStyle = c.at(-1) >= c[0] ? "#1e9e6a" : "#c0392b"; ctx.lineWidth = 2; ctx.beginPath();
+      c.forEach((v, i) => { const x = (i / (c.length - 1)) * W, y = H - 3 - ((v - lo) / (hi - lo || 1)) * (H - 6); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke();
     }
 
     // ---- expanded stake
@@ -311,10 +370,13 @@
       } catch (e) { res("c-res", fail(e), true); $("c-go").disabled = false; }
     });
 
-    document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("click", () => { filter = b.dataset.f; document.querySelectorAll(".filters button").forEach((x) => x.classList.toggle("on", x === b)); render(); }));
+    document.querySelectorAll(".filters button[data-f]").forEach((b) => b.addEventListener("click", () => { filter = b.dataset.f; document.querySelectorAll(".filters button[data-f]").forEach((x) => x.classList.toggle("on", x === b)); render(); }));
     $("s-tvl").addEventListener("click", () => { sort = "tvl"; $("s-tvl").classList.add("on"); $("s-rate").classList.remove("on"); render(); });
     $("s-rate").addEventListener("click", () => { sort = "rate"; $("s-rate").classList.add("on"); $("s-tvl").classList.remove("on"); render(); });
+    $("v-table").addEventListener("click", () => { view = "table"; localStorage.setItem("ordo.stakes.view", view); render(); });
+    $("v-grid").addEventListener("click", () => { view = "grid"; localStorage.setItem("ordo.stakes.view", view); render(); });
 
+    mountShell($("lq-shell"), { page: "stakes" });
     api("/api/trade/chain").then(async (c) => { await wallet.init(c); wallet.bindButton($("nav-connect")); wallet.onChange(load); load(); });
   </script>
 
