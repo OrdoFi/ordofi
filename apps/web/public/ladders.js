@@ -229,13 +229,21 @@ async function addDialog(l, opts) {
   const side = l.price <= l.minPrice ? "base" : l.price >= l.maxPrice ? "quote" : null;
   if (side === "base") { $("ld-quote").disabled = true; $("ld-bal-q").textContent = "range is above the price · not needed"; }
   if (side === "quote") { $("ld-base").disabled = true; $("ld-bal-b").textContent = "range is below the price · not needed"; }
-  const bal = await balancesOf(l);
-  if (bal) { if (side !== "quote") $("ld-bal-b").textContent = `balance ${num(bal.base, 6)}`; if (side !== "base") $("ld-bal-q").textContent = `balance ${num(bal.quote, 6)}`; }
+  // Inputs are live before the balance lookup returns; typing during it used
+  // to go unnoticed and the dialog sat on "Enter an amount."
+  let bal = null;
   $("ld-max-b").addEventListener("click", () => { if (bal) { $("ld-base").value = bal.base; replan(); } });
   $("ld-max-q").addEventListener("click", () => { if (bal) { $("ld-quote").value = Math.max(0, bal.quote - (l.quote.symbol === "ETH" ? 0.002 : 0)).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); replan(); } });
   b.querySelectorAll(".shape").forEach((el) => el.addEventListener("click", () => { shape = el.dataset.s; b.querySelectorAll(".shape").forEach((x) => x.classList.toggle("on", x === el)); replan(); }));
   for (const ev of ["input", "change", "keyup"]) { $("ld-base").addEventListener(ev, replan); $("ld-quote").addEventListener(ev, replan); }
   $("ld-cancel").addEventListener("click", closeDialog);
+  balancesOf(l).then((x) => {
+    bal = x;
+    if (!b.isConnected || !bal) return;
+    if (side !== "quote") $("ld-bal-b").textContent = `balance ${num(bal.base, 6)}`;
+    if (side !== "base") $("ld-bal-q").textContent = `balance ${num(bal.quote, 6)}`;
+    if ($("ld-base").value || $("ld-quote").value) replan();
+  });
   async function replan() {
     const my = ++seq;
     const ba = parseUnits($("ld-base").value, l.base.decimals) ?? 0n, qa = parseUnits($("ld-quote").value, l.quote.decimals) ?? 0n;

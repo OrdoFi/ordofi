@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
@@ -834,8 +835,14 @@ async function handle(req, res) {
     res.writeHead(404).end("not found");
     return;
   }
-  res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
-  res.end(readFileSync(file));
+  // Static files revalidate on every load: the browser keeps its copy but asks
+  // whether it changed, so a deploy reaches open tabs on their next navigation
+  // instead of whenever the heuristic cache feels like it.
+  const body = readFileSync(file);
+  const etag = `"${createHash("sha1").update(body).digest("base64url").slice(0, 20)}"`;
+  if (req.headers["if-none-match"] === etag) { res.writeHead(304, { etag, "cache-control": "no-cache" }).end(); return; }
+  res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", etag, "cache-control": "no-cache", "content-length": body.length });
+  res.end(body);
 }
 
 createServer((req, res) => {
