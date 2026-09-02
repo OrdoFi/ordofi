@@ -48,7 +48,10 @@ async function send(account, tx) {
     rpcFetch("eth_getTransactionCount", [account.address, "pending"]),
     rpcFetch("eth_gasPrice", []),
   ]);
-  const maxFeePerGas = BigInt(gasPriceHex) * 2n;
+  // A sweep has to price the fee and the value from the same snapshot;
+  // re-reading the gas price between the two leaves the account a few thousand
+  // wei short and the transaction is rejected.
+  const maxFeePerGas = tx.maxFeePerGas ?? BigInt(gasPriceHex) * 2n;
   const gas =
     tx.gas ??
     (BigInt(
@@ -117,13 +120,16 @@ step(4, "Send the ETH");
 const sent = await send(payer, { to: payment.stealthAddress, value: AMOUNT, gas: 21000n });
 ok(`sent — ${sent.hash}`);
 
-step(5, "Find it again from the public feed, using only the viewing key");
+step(5, "Find it again from the announcement feed, using only the viewing key");
 const topic = "0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7";
+const feedFrom = Math.max(0, ann.block - 200_000);
 const logs = await rpcFetch("eth_getLogs", [
-  { address: ERC5564_ANNOUNCER, topics: [topic], fromBlock: "0x" + (ann.block - 2).toString(16), toBlock: "0x" + (ann.block + 2).toString(16) },
+  { address: ERC5564_ANNOUNCER, topics: [topic], fromBlock: "0x" + feedFrom.toString(16), toBlock: "0x" + (ann.block + 2).toString(16) },
 ]);
+// Only the viewing key and the spending *public* key: what a watch-only device
+// would have. It can see the payments and could not spend one if it tried.
 const watcher = { viewingPrivateKey: keys.viewingPrivateKey, spendingPublicKey: keys.spendingPublicKey };
-let found = null;
+const found = [];
 for (const l of logs) {
   const { args } = decodeEventLog({ abi: ANNOUNCER_ABI, eventName: "Announcement", topics: l.topics, data: l.data });
   const decoded = decodeMetadata(args.metadata);
@@ -132,25 +138,32 @@ for (const l of logs) {
     ephemeralPublicKey: args.ephemeralPubKey,
     viewTag: decoded?.viewTag,
   });
-  if (hit) found = { hit, decoded };
+  if (hit) found.push({ address: hit, ephemeralPublicKey: args.ephemeralPubKey, decoded });
 }
-if (!found || found.hit.toLowerCase() !== payment.stealthAddress.toLowerCase()) {
+if (!found.some((f) => f.address.toLowerCase() === payment.stealthAddress.toLowerCase())) {
   throw new Error("the viewing key did not recognise our own payment");
 }
-ok(`recognised ${found.hit} out of ${logs.length} announcement(s) in the window`);
-ok(`metadata says ${formatEther(found.decoded.amount)} ETH, which matches what was sent`);
+ok(`${found.length} payment(s) recognised out of ${logs.length} announcement(s) scanned`);
+ok(`metadata says ${formatEther(found.at(-1).decoded.amount)} ETH, which matches what was sent`);
 
-step(6, "Sweep it with a key derived on the spot");
-const stealthKey = computeStealthPrivateKey(keys, payment.ephemeralPublicKey);
-const stealth = privateKeyToAccount(stealthKey);
-if (stealth.address.toLowerCase() !== payment.stealthAddress.toLowerCase()) throw new Error("derived key controls a different address");
-const balance = BigInt(await rpcFetch("eth_getBalance", [stealth.address, "latest"]));
-ok(`stealth address holds ${formatEther(balance)} ETH`);
-const gasPrice = BigInt(await rpcFetch("eth_gasPrice", [])) * 2n;
-const cost = 21000n * gasPrice;
-if (balance <= cost) throw new Error("balance does not cover gas");
-const swept = await send(stealth, { to: payer.address, value: balance - cost, gas: 21000n });
-ok(`swept ${formatEther(balance - cost)} ETH back — ${swept.hash}`);
+step(6, "Sweep every one of them with keys derived on the spot");
+let sweptTotal = 0n;
+let swept = null;
+for (const f of found) {
+  const stealth = privateKeyToAccount(computeStealthPrivateKey(keys, f.ephemeralPublicKey));
+  if (stealth.address.toLowerCase() !== f.address.toLowerCase()) throw new Error("derived key controls a different address");
+  const balance = BigInt(await rpcFetch("eth_getBalance", [stealth.address, "latest"]));
+  if (balance === 0n) { ok(`${stealth.address} already empty`); continue; }
+  // One snapshot for both the fee and the amount, or the sweep is short.
+  const maxFeePerGas = BigInt(await rpcFetch("eth_gasPrice", [])) * 2n;
+  const cost = 21000n * maxFeePerGas;
+  if (balance <= cost) { ok(`${stealth.address} holds ${formatEther(balance)} ETH, less than gas`); continue; }
+  swept = await send(stealth, { to: payer.address, value: balance - cost, gas: 21000n, maxFeePerGas });
+  sweptTotal += balance - cost;
+  ok(`swept ${formatEther(balance - cost)} ETH from ${stealth.address} — ${swept.hash}`);
+}
+if (!swept) throw new Error("nothing could be swept");
+ok(`recovered ${formatEther(sweptTotal)} ETH in total`);
 
 console.log(`\nPASS — a payment was announced, delivered to a fresh address, found with the viewing key alone, and spent.`);
 console.log(`  announce  https://robinhoodchain.blockscout.com/tx/${ann.hash}`);
