@@ -609,7 +609,7 @@ function encodePath(tokens, fees) {
   return encodePacked(types, values);
 }
 
-async function quotePath(tokens, fees, amountIn) {
+export async function quotePath(tokens, fees, amountIn) {
   const path = encodePath(tokens, fees);
   try {
     const [amountOut, , , gasEstimate] = await call(QUOTER_V2, QUOTER_ABI, "quoteExactInput", [path, amountIn]);

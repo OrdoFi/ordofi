@@ -58,7 +58,7 @@
   <nav>
     <div class="wrap">
       <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
-      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/pools">Pools</a><a href="/positions" class="here">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/docs">Docs</a></div>
+      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/pools">Pools</a><a href="/stakes">Stakes</a><a href="/positions" class="here">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/docs">Docs</a></div>
       <div class="nav-side"><a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a></div>
     </div>
   </nav>
@@ -82,11 +82,11 @@
 
     <h2>Stake positions</h2>
     <div class="stakes3">
-      <div class="panel"><span class="k">Stakes you're in</span><div class="v">0</div></div>
-      <div class="panel"><span class="k">Staked value</span><div class="v">0<small>WETH</small></div></div>
-      <div class="panel"><span class="k">Claimable</span><div class="v">0<small>WETH</small></div></div>
+      <div class="panel"><span class="k">Stakes you're in</span><div class="v" id="st-n">0</div></div>
+      <div class="panel"><span class="k">Staked value</span><div class="v" id="st-v">0<small>WETH</small></div></div>
+      <div class="panel"><span class="k">Claimable</span><div class="v" id="st-c">0<small>WETH</small></div></div>
     </div>
-    <div class="panel" style="margin-top:14px"><div class="empty"><b>Nothing here yet</b>Deposit into a stake and your positions and rewards will show up here.</div></div>
+    <div class="panel" style="margin-top:14px" id="st-list"><div class="empty"><b>Nothing here yet</b>Deposit into a <a href="/stakes" style="color:var(--accent)">stake</a> and your positions and rewards will show up here.</div></div>
   </div>
 
   <script type="module">
@@ -95,7 +95,7 @@
     const $ = (id) => document.getElementById(id);
     async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
     let portfolio = null, lastSig = null, unit = "usd", cur = new Date(); cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
-    const fmt = (v) => unit === "usd" ? (v < 0 ? "-" : "") + usd(Math.abs(v)) : (v < 0 ? "-" : "") + num(Math.abs(v), 5) + " Ξ";
+    const fmt = (raw) => { const v = Math.abs(raw) < (unit === "usd" ? 0.005 : 0.000005) ? 0 : raw; return unit === "usd" ? (v < 0 ? "-" : "") + usd(Math.abs(v)) : (v < 0 ? "-" : "") + num(Math.abs(v), 5) + " Ξ"; };
     const pick = (d) => unit === "usd" ? d.pnlUsd : d.pnlEth;
 
     function renderCal() {
@@ -117,7 +117,7 @@
       }
       $("days").innerHTML = html;
       const closedThisMonth = (portfolio?.ladders ?? []).filter((l) => l.closed && new Date(l.closedAt * 1000).getUTCFullYear() === y && new Date(l.closedAt * 1000).getUTCMonth() === m);
-      const wins = closedThisMonth.filter((l) => l.realizedUsd > 0).length;
+      const wins = closedThisMonth.filter((l) => l.realizedUsd >= -0.005).length;
       $("m-total").textContent = fmt(total); $("m-total").className = "v " + (total >= 0 ? "up" : "dn");
       $("m-closed").textContent = closedThisMonth.length;
       $("m-win").textContent = closedThisMonth.length ? `${Math.round((wins / closedThisMonth.length) * 100)}%` : "—";
@@ -132,7 +132,20 @@
       $("calnote").textContent = !wallet.account ? "Connect a wallet to see your PnL." : Object.keys(days).length ? `Close a position and its PnL lands on the day it closed. Fees claimed land on the day claimed. Gas paid across all positions: ${usd(gas)} — shown on each card, kept out of PnL.` : "No closed positions yet. Close a position and its PnL lands on the day it closed.";
     }
 
+    async function loadStakes() {
+      if (!wallet.account) return;
+      try {
+        const d = await api(`/api/pools/stakes?owner=${wallet.account}`);
+        const mine = d.stakes.filter((s) => s.me && (Number(s.me.staked) > 0 || Number(s.me.loose) > 0 || s.me.earnedWeth > 0));
+        const v = mine.reduce((n, s) => n + s.me.valueWeth, 0), c = mine.reduce((n, s) => n + s.me.earnedWeth, 0);
+        $("st-n").textContent = mine.length;
+        $("st-v").innerHTML = `${num(v, 5)}<small>WETH</small>`; $("st-c").innerHTML = `${c > 0 && c < 0.0001 ? "<0.0001" : num(c, 5)}<small>WETH</small>`;
+        $("st-list").innerHTML = mine.length ? mine.map((s) => `<div class="empty" style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--border)"><span><b style="display:inline;font-family:var(--display);color:var(--text)">WETH / ${s.symbol}</b> · ${num(s.me.valueWeth, 5)} WETH staked${s.me.valueUsd ? ` (${usd(s.me.valueUsd)})` : ""} · claimable ${num(s.me.earnedWeth, 6)} WETH · 7d rate ${(s.rate7d * 100).toFixed(2)}%</span><a href="/stakes?vault=${s.vault}" style="color:var(--accent)">open stake →</a></div>`).join("")
+          : `<div class="empty"><b>Nothing here yet</b>Deposit into a <a href="/stakes" style="color:var(--accent)">stake</a> and your positions and rewards will show up here.</div>`;
+      } catch { /* the pools section still works without it */ }
+    }
     async function load() {
+      loadStakes();
       if (!wallet.account) { portfolio = null; renderCal(); $("cards").innerHTML = `<div class="panel"><div class="empty">Connect a wallet to see your positions.</div></div>`; return; }
       try {
         const fresh = await api(`/api/pools/positions?owner=${wallet.account}`);

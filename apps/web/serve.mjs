@@ -10,6 +10,7 @@ import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair,
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
 import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, LADDER_MANAGER } from "./pools.mjs";
+import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawCalldata, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
 function sendJson(req, res, status, body, headers = {}) {
@@ -691,6 +692,17 @@ async function handle(req, res) {
       else if (path === "/api/pools/close") body = closeCalldata(big("id"));
       else if (path === "/api/pools/close-bins") body = closeBinsCalldata(big("id"), (q.get("indices") ?? "").split(",").filter((x) => /^\d+$/.test(x)));
       else if (path === "/api/pools/close-many") body = closeManyCalldata((q.get("ids") ?? "").split(",").filter((x) => /^\d+$/.test(x)));
+      else if (path === "/api/pools/stakes") body = await stakesList(q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null);
+      else if (path === "/api/pools/stake") body = await stakeView(addr("vault"), q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null);
+      else if (path === "/api/pools/stake-quote") body = await stakeQuote({
+        vault: addr("vault"), mode: q.get("mode") === "both" ? "both" : "one", asset: ["eth", "weth", "token"].includes(q.get("asset")) ? q.get("asset") : "eth",
+        amount: big("amount"), tokenAmount: big("tokenAmount"), slippageBps: Math.max(10, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
+      });
+      else if (path === "/api/pools/stake-create") body = await stakeCreatePlan(addr("token"));
+      else if (path === "/api/pools/stake-unstake") body = farmWithdrawCalldata(addr("farm"), big("shares"));
+      else if (path === "/api/pools/stake-withdraw") body = vaultWithdrawCalldata(addr("vault"), big("shares"), addr("to"));
+      else if (path === "/api/pools/stake-claim") body = claimCalldata(addr("farm"));
+      else if (path === "/api/pools/stake-harvest") body = harvestCalldata(addr("vault"));
       else throw new Error("unknown pools endpoint");
       sendJson(req, res, 200, body, { "cache-control": path === "/api/pools" ? "public, max-age=15" : "no-store" });
     } catch (e) {
@@ -777,7 +789,8 @@ async function handle(req, res) {
   if (path === "/stealth") path = "/stealth.html";
   if ((path === "/pools" || path.startsWith("/pools/")) && process.env.ORDO_POOLS_ENABLED === "1") path = "/pools.html";
   if (path === "/positions" && process.env.ORDO_POOLS_ENABLED === "1") path = "/positions.html";
-  if (path === "/positions.html" && process.env.ORDO_POOLS_ENABLED !== "1") { res.writeHead(404).end("not found"); return; }
+  if (path === "/stakes" && process.env.ORDO_POOLS_ENABLED === "1") path = "/stakes.html";
+  if ((path === "/positions.html" || path === "/stakes.html") && process.env.ORDO_POOLS_ENABLED !== "1") { res.writeHead(404).end("not found"); return; }
   if (path === "/docs") path = "/docs.html";
   if (path === "/dashboard") path = "/dashboard.html";
   if (path === "/explorer") path = "/explorer.html";
@@ -810,6 +823,7 @@ process.on("uncaughtException", (e) => console.error(`web | uncaught exception: 
 // and the token list. Building them takes dozens of round-trips, and the first
 // page load should never be the one paying for that.
 setPoolsStore(store);
+setStakesStore(store);
 
 // Receipts for transactions the gateway forwarded, priced for the public counter.
 setInterval(() => resolveRouted(store).catch((e) => console.warn(`web | routed: ${e.message}`)), 10_000).unref?.();

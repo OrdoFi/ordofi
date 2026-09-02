@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <meta name="theme-color" content="#ff6414" />
+  <title>OrdoFi — Stakes</title>
+  <meta name="description" content="Put your tokens into a stake on Robinhood Chain and earn a share of the pool's trading fees, paid in ETH." />
+  <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .pg { padding-top: 34px; padding-bottom: 90px; }
+    .pg h1 { font-size: 36px; letter-spacing: -0.02em; }
+    .pg .sub { color: var(--muted); max-width: 760px; margin: 6px 0 22px; font-size: 14.5px; line-height: 1.65; }
+    .panel { border: 1px solid var(--border); background: var(--card); }
+    .strip { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--border); background: var(--card); margin-bottom: 22px; }
+    .strip div { padding: 16px 20px; border-right: 1px solid var(--border); }
+    .strip div:last-child { border-right: none; }
+    .strip .k { font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; border-bottom: 1px dotted var(--border-light); display: inline-block; padding-bottom: 6px; }
+    .strip .v { font-family: var(--mono); font-size: 22px; margin-top: 10px; }
+    .strip .v small { font-size: 11px; color: var(--muted); margin-left: 6px; }
+    .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+    .filters button { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; padding: 9px 16px; border: 1px solid var(--border-light); background: #fff; color: var(--text-dim); border-radius: 999px; cursor: pointer; }
+    .filters button.on { border-color: var(--accent); color: var(--accent); }
+    table.list { width: 100%; border-collapse: collapse; border: 1px solid var(--border); background: var(--card); }
+    .list th { text-align: right; font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
+    .list th:first-child { text-align: left; }
+    .list th button { font: inherit; background: none; border: none; cursor: pointer; color: inherit; border-bottom: 1px dotted var(--border-light); }
+    .list th button.on { color: var(--accent); }
+    .list td { padding: 14px 16px; border-bottom: 1px solid var(--border); text-align: right; font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+    .list td:first-child { text-align: left; }
+    .list tr.row { cursor: pointer; }
+    .list tr.row:hover td { background: var(--bg-elev); }
+    .list tr.row.open td { background: var(--bg-elev); }
+    .pool b { font-family: var(--display); font-size: 14px; letter-spacing: .02em; }
+    .pool small { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; margin-top: 3px; }
+    .rate { color: #1e9e6a; }
+    .chev { color: var(--muted); }
+    tr.detail td { padding: 0; background: var(--card); text-align: left; white-space: normal; }
+    .dwrap { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .box { border: 1px solid var(--border); background: #fff; }
+    .box .bh { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
+    .seg { display: flex; border: 1px solid var(--border); padding: 2px; background: var(--bg); }
+    .seg button { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; padding: 7px 12px; border: none; background: none; color: var(--muted); cursor: pointer; }
+    .seg button.on { background: var(--text); color: #fff; }
+    .bb { padding: 14px; }
+    label.f { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; margin: 0 0 6px; }
+    .grid3 { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: end; }
+    .inp { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); padding: 10px 12px; }
+    .inp input { flex: 1; min-width: 0; border: none; background: transparent; font-family: var(--mono); font-size: 15px; color: var(--text); outline: none; }
+    .inp .u { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .inp button { font-family: var(--mono); font-size: 10.5px; color: var(--accent); background: none; border: none; cursor: pointer; letter-spacing: .06em; }
+    select.sl { font-family: var(--mono); font-size: 13px; padding: 10px 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+    .kv { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11.5px; color: var(--muted); padding: 6px 0; border-bottom: 1px dotted var(--border); }
+    .kv b { color: var(--text); font-weight: 500; }
+    .go { width: 100%; margin-top: 12px; padding: 13px; font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; background: var(--text); color: #fff; border: 1px solid var(--text); cursor: pointer; border-radius: 999px; }
+    .go:hover { background: var(--accent); border-color: var(--accent); }
+    .go:disabled { opacity: .4; cursor: default; }
+    .go.ghost { background: #fff; color: var(--text); }
+    .note { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.7; margin-top: 10px; }
+    .res { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 8px; min-height: 14px; }
+    .res a { color: var(--accent); } .res.bad { color: var(--danger); }
+    .row2 { display: flex; gap: 8px; }
+    .row2 .go { margin-top: 12px; }
+    .addrs { display: flex; gap: 20px; flex-wrap: wrap; padding: 0 16px 16px; font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: .06em; }
+    .addrs a { color: var(--accent); text-decoration: none; }
+    .addrs button { font: inherit; background: none; border: none; color: var(--accent); cursor: pointer; }
+    .create { margin-top: 30px; }
+    .create h2 { font-family: var(--display); font-size: 22px; margin-bottom: 6px; }
+    .create p { color: var(--muted); font-size: 13.5px; line-height: 1.6; max-width: 720px; margin-bottom: 14px; }
+    .create .grid3 { grid-template-columns: 1fr auto; }
+    .empty { padding: 26px 18px; color: var(--muted); font-size: 13px; }
+    @media (max-width: 900px) { .dwrap { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="wrap">
+      <a class="logo" href="/">ordo<span class="logo-app">app</span></a>
+      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/pools">Pools</a><a href="/stakes" class="here">Stakes</a><a href="/positions">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/docs">Docs</a></div>
+      <div class="nav-side"><a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a></div>
+    </div>
+  </nav>
+
+  <div class="wrap pg">
+    <h1>Stakes</h1>
+    <div class="sub">Put your tokens into a stake and a share of the pool's trading fees is yours, paid in ETH. Deposit one coin and OrdoFi swaps, pairs and stakes it for you in a single transaction. OrdoFi takes 1% of the fees a stake earns, never from your deposit.</div>
+    <div class="strip"><div><span class="k">Total staked</span><div class="v" id="t-tvl">—<small>WETH</small></div></div><div><span class="k">Stakes</span><div class="v" id="t-n">—</div></div></div>
+    <div class="filters"><button class="on" data-f="all">All</button><button data-f="mine">My stakes</button><button data-f="fees">Highest fees</button><button data-f="new">Newest</button></div>
+    <table class="list"><thead><tr><th>Pool</th><th><button id="s-tvl" class="on">TVL ▾</button></th><th><button id="s-rate">7d rate</button></th><th></th></tr></thead><tbody id="rows"><tr><td colspan="4" class="empty">Loading stakes…</td></tr></tbody></table>
+
+    <div class="create panel" style="padding:20px">
+      <h2>Create a stake</h2>
+      <p>Attach a stake to your token's ETH pool so holders can deposit and earn a share of trading fees, paid in ETH. The pool must already exist on Uniswap V3. Anyone can create one, once per pool; there is no owner afterwards.</p>
+      <label class="f">Token address</label>
+      <div class="grid3"><div class="inp"><input id="c-token" placeholder="0x… (paired with WETH)" /></div><button class="go" id="c-go" style="margin:0;width:auto;padding:13px 22px" disabled>Create stake</button></div>
+      <div class="res" id="c-res"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { wallet, rejected } from "/wallet.js";
+    import { esc, usd, num, formatUnits, parseUnits } from "/ladders.js";
+    const $ = (id) => document.getElementById(id);
+    const EXPLORER = "https://robinhoodchain.blockscout.com";
+    const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
+    const txLink = (h) => `<a href="${EXPLORER}/tx/${h}" target="_blank" rel="noopener">${h.slice(0, 10)}…</a>`;
+    async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
+    const fail = (e) => rejected(e) ? "Rejected in the wallet — nothing happened." : esc(e?.message ?? e);
+    const fmtEth = (n, d = 4) => n == null ? "—" : n < 0.0001 && n > 0 ? "<0.0001" : num(n, d);
+    const pct = (v) => v == null ? "—" : (v * 100).toFixed(2) + "%";
+    const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+
+    let data = null, filter = "all", sort = "tvl", openVault = new URLSearchParams(location.search).get("vault"), balances = null;
+
+    async function load() {
+      try {
+        data = await api(`/api/pools/stakes${wallet.account ? `?owner=${wallet.account}` : ""}`);
+        $("t-tvl").innerHTML = `${num(data.totals.tvlWeth, 2)}<small>WETH</small>`; $("t-n").textContent = data.totals.stakes;
+        render();
+      } catch (e) { $("rows").innerHTML = `<tr><td colspan="4" class="empty">${esc(e.message)}</td></tr>`; }
+    }
+    function rows() {
+      let r = data.stakes.slice();
+      if (filter === "mine") r = r.filter((s) => s.me && (Number(s.me.staked) > 0 || Number(s.me.loose) > 0));
+      if (filter === "fees" || sort === "rate") r.sort((a, b) => b.rate7d - a.rate7d);
+      else if (filter === "new") r.sort((a, b) => b.createdAt - a.createdAt);
+      else r.sort((a, b) => b.tvlWeth - a.tvlWeth);
+      return r;
+    }
+    function render() {
+      const r = rows();
+      $("rows").innerHTML = r.length ? r.map((s) => `
+        <tr class="row ${openVault === s.vault ? "open" : ""}" data-v="${s.vault}"><td><div class="pool"><b>WETH / ${esc(s.symbol)}</b><small>fee share → WETH${s.me && Number(s.me.staked) > 0 ? " · you're in" : ""}</small></div></td>
+          <td>${fmtEth(s.tvlWeth)} <span style="color:var(--muted);font-size:11px">WETH</span></td><td class="rate">${pct(s.rate7d)}</td><td class="chev">${openVault === s.vault ? "▴" : "▾"}</td></tr>
+        ${openVault === s.vault ? `<tr class="detail"><td colspan="4">${detail(s)}</td></tr>` : ""}`).join("") : `<tr><td colspan="4" class="empty">${filter === "mine" ? "You are not in any stake yet." : "No stakes yet — create the first one below."}</td></tr>`;
+      $("rows").querySelectorAll("tr.row").forEach((tr) => tr.addEventListener("click", () => { openVault = openVault === tr.dataset.v ? null : tr.dataset.v; history.replaceState(null, "", openVault ? `/stakes?vault=${openVault}` : "/stakes"); render(); }));
+      if (openVault) bindDetail(data.stakes.find((s) => s.vault === openVault));
+    }
+
+    // ---- expanded stake
+    let mode = "one", asset = "eth", slippage = 100, quote = null, qSeq = 0;
+    function detail(s) {
+      const me = s.me ?? { staked: "0", loose: "0", earnedWeth: 0, valueWeth: 0 };
+      const finish = s.periodFinish ? new Date(s.periodFinish * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+      return `<div class="dwrap">
+        <div class="box"><div class="bh">Deposit<div class="seg" id="d-mode"><button data-m="one" class="${mode === "one" ? "on" : ""}">One coin</button><button data-m="both" class="${mode === "both" ? "on" : ""}">ETH &amp; token</button></div></div>
+          <div class="bb">
+            <div class="grid3" id="d-one" style="${mode === "one" ? "" : "display:none"}">
+              <div><label class="f">Asset</label><div class="seg" id="d-asset"><button data-a="eth" class="${asset === "eth" ? "on" : ""}">ETH</button><button data-a="token" class="${asset === "token" ? "on" : ""}">${esc(s.symbol)}</button></div></div>
+              <div><label class="f">Amount</label><div class="inp"><input id="d-amt" placeholder="0.0" inputmode="decimal" /><span class="u" id="d-unit">${asset === "eth" ? "ETH" : esc(s.symbol)}</span><button id="d-max">MAX</button></div></div>
+              <div><label class="f">Slippage</label><select class="sl" id="d-slip"><option value="50" ${slippage === 50 ? "selected" : ""}>0.5%</option><option value="100" ${slippage === 100 ? "selected" : ""}>1%</option><option value="300" ${slippage === 300 ? "selected" : ""}>3%</option></select></div>
+            </div>
+            <div id="d-both" style="${mode === "both" ? "" : "display:none"}">
+              <label class="f">ETH</label><div class="inp"><input id="d-eth" placeholder="0.0" inputmode="decimal" /><span class="u">ETH</span><button id="d-max-eth">MAX</button></div>
+              <label class="f" style="margin-top:10px">${esc(s.symbol)}</label><div class="inp"><input id="d-tok" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(s.symbol)}</span><button id="d-max-tok">MAX</button></div>
+            </div>
+            <div id="d-quote"></div>
+            <button class="go" id="d-go" disabled>Deposit &amp; stake</button>
+            <div class="res" id="d-res"></div>
+            <div class="note">${mode === "one" ? "Swapped, paired and staked for you in one transaction. Any leftover dust comes back to you." : "Paired and staked for you in one transaction. Whatever the position does not take comes back to you."}</div>
+          </div></div>
+        <div class="box"><div class="bh">Rewards &amp; withdraw<div class="seg" id="r-tab"><button data-t="rewards" class="on">Rewards</button><button data-t="withdraw">Withdraw</button></div></div>
+          <div class="bb" id="r-rewards">
+            <div class="kv"><span>Claimable</span><b>${fmtEth(me.earnedWeth, 6)} WETH</b></div>
+            <div class="kv"><span>Paying out until</span><b>${s.streaming ? finish : "no stream yet"}</b></div>
+            <div class="kv"><span>Your stake</span><b>${fmtEth(me.valueWeth, 5)} WETH${me.valueUsd ? ` · ${usd(me.valueUsd)}` : ""}</b></div>
+            <div class="row2"><button class="go" id="r-claim" ${me.earnedWeth > 0 ? "" : "disabled"}>Claim</button><button class="go ghost" id="r-compound" ${me.earnedWeth > 0 ? "" : "disabled"}>Compound</button></div>
+            <div class="res" id="r-res"></div>
+            <div class="note">Fees the pool earns are harvested on every deposit and withdrawal and streamed to stakers over 7 days as WETH. Compound claims and puts them straight back in.</div>
+          </div>
+          <div class="bb" id="r-withdraw" style="display:none">
+            <label class="f">Amount · shares</label><div class="inp"><input id="w-amt" placeholder="0.0" inputmode="decimal" /><span class="u">shares</span><button id="w-max">MAX</button></div>
+            <div class="kv" style="margin-top:8px"><span>You hold</span><b>${num(formatUnits(BigInt(me.staked) + BigInt(me.loose), 18, 6), 6)} shares</b></div>
+            <button class="go" id="w-go" disabled>Withdraw</button>
+            <div class="res" id="w-res"></div>
+            <div class="note">Your stake comes back as coins: ETH and ${esc(s.symbol)}, in the pool's current ratio. Two confirmations — one to unstake, one to withdraw. Rewards stay claimable in the Rewards tab.</div>
+          </div></div>
+      </div>
+      <div class="addrs"><span>Stake <a href="${EXPLORER}/address/${s.farm}" target="_blank" rel="noopener">${short(s.farm)}</a></span><span>Vault <a href="${EXPLORER}/address/${s.vault}" target="_blank" rel="noopener">${short(s.vault)}</a></span><span>Pool <a href="${EXPLORER}/address/${s.pool}" target="_blank" rel="noopener">${short(s.pool)}</a></span><span>Reward token <a href="${EXPLORER}/token/${WETH}" target="_blank" rel="noopener">WETH</a></span><span>Lifetime rewards ${fmtEth(s.totalRewardsWeth, 5)} WETH</span></div>`;
+    }
+    async function loadBalances(s) {
+      if (!wallet.account) { balances = null; return; }
+      try { const d = await api(`/api/trade/balances?address=${wallet.account}`); balances = { eth: d.tokens.find((t) => t.address === "eth")?.amount ?? 0, token: d.tokens.find((t) => t.address === s.token)?.amount ?? 0 }; } catch { balances = null; }
+    }
+    function bindDetail(s) {
+      if (!s) return;
+      loadBalances(s);
+      const rq = () => { clearTimeout(rq.t); rq.t = setTimeout(() => requote(s), 250); };
+      $("d-mode").querySelectorAll("button").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); mode = b.dataset.m; quote = null; render(); }));
+      $("d-asset")?.querySelectorAll("button").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); asset = b.dataset.a; quote = null; render(); }));
+      $("d-slip")?.addEventListener("change", () => { slippage = Number($("d-slip").value); rq(); });
+      for (const id of ["d-amt", "d-eth", "d-tok"]) for (const ev of ["input", "change", "keyup"]) $(id)?.addEventListener(ev, rq);
+      $("d-max")?.addEventListener("click", () => { if (balances) { $("d-amt").value = asset === "eth" ? Math.max(0, balances.eth - 0.003).toFixed(6) : String(balances.token); rq(); } });
+      $("d-max-eth")?.addEventListener("click", () => { if (balances) { $("d-eth").value = Math.max(0, balances.eth - 0.003).toFixed(6); rq(); } });
+      $("d-max-tok")?.addEventListener("click", () => { if (balances) { $("d-tok").value = String(balances.token); rq(); } });
+      $("d-go").addEventListener("click", () => deposit(s));
+      $("r-tab").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { $("r-tab").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); $("r-rewards").style.display = b.dataset.t === "rewards" ? "" : "none"; $("r-withdraw").style.display = b.dataset.t === "withdraw" ? "" : "none"; }));
+      $("r-claim").addEventListener("click", () => claim(s, false));
+      $("r-compound").addEventListener("click", () => claim(s, true));
+      const held = BigInt(s.me?.staked ?? 0) + BigInt(s.me?.loose ?? 0);
+      $("w-max").addEventListener("click", () => { $("w-amt").value = formatUnits(held, 18, 18); $("w-go").disabled = held === 0n; });
+      for (const ev of ["input", "change", "keyup"]) $("w-amt").addEventListener(ev, () => { const v = parseUnits($("w-amt").value, 18); $("w-go").disabled = !v || v === 0n || v > held; });
+      $("w-go").addEventListener("click", () => withdraw(s));
+      // Stop clicks inside the detail from toggling the row.
+      document.querySelectorAll("tr.detail").forEach((tr) => tr.addEventListener("click", (e) => e.stopPropagation()));
+    }
+    async function requote(s) {
+      const my = ++qSeq, q = $("d-quote"), go = $("d-go");
+      if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
+      let url;
+      if (mode === "one") {
+        const dec = asset === "eth" ? 18 : s.decimals;
+        const a = parseUnits($("d-amt").value, dec);
+        if (!a || a === 0n) { quote = null; q.innerHTML = ""; if (wallet.account) go.disabled = true; return; }
+        url = `/api/pools/stake-quote?vault=${s.vault}&mode=one&asset=${asset}&amount=${a}&slippageBps=${slippage}`;
+      } else {
+        const e = parseUnits($("d-eth").value, 18) ?? 0n, t = parseUnits($("d-tok").value, s.decimals) ?? 0n;
+        if (e === 0n && t === 0n) { quote = null; q.innerHTML = ""; if (wallet.account) go.disabled = true; return; }
+        url = `/api/pools/stake-quote?vault=${s.vault}&mode=both&amount=${e}&tokenAmount=${t}`;
+      }
+      try {
+        const p = await api(url);
+        if (my !== qSeq) return;
+        quote = p;
+        q.innerHTML = p.quote ? `<div class="kv"><span>Swapped</span><b>${num(formatUnits(p.quote.swapIn, asset === "eth" ? 18 : s.decimals, 6), 6)} ${asset === "eth" ? "ETH" : esc(s.symbol)} → ${num(formatUnits(p.quote.swapOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"}</b></div>
+          <div class="kv"><span>Price impact</span><b class="${p.quote.priceImpactBps > 100 ? "dn" : ""}">${p.quote.priceImpactBps == null ? "—" : (p.quote.priceImpactBps / 100).toFixed(2) + "%"}</b></div>
+          <div class="kv"><span>Protection</span><b>at least ${num(formatUnits(p.quote.minOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"} or it reverts · through rpc.ordofi.network</b></div>` : `<div class="kv"><span>Protection</span><b>no swap · deposited at the pool's ratio, the rest refunded</b></div>`;
+        if (wallet.account) { go.textContent = p.tx.approve ? `Approve & deposit` : "Deposit & stake"; go.disabled = false; }
+      } catch (e) { if (my === qSeq) { q.innerHTML = `<div class="kv"><span>Quote</span><b class="dn">${esc(e.message)}</b></div>`; if (wallet.account) go.disabled = true; } }
+    }
+    const res = (id, html, bad) => { const el = $(id); if (el) { el.innerHTML = html; el.className = "res" + (bad ? " bad" : ""); } };
+    async function deposit(s) {
+      if (!wallet.account) return wallet.openPicker();
+      if (!quote?.tx) return;
+      $("d-go").disabled = true;
+      try {
+        if (quote.tx.approve) { res("d-res", "Approve in your wallet…"); await wallet.ensureAllowance(quote.tx.approve.token, quote.tx.approve.spender, quote.tx.approve.amount, (h) => res("d-res", `Approving ${txLink(h)}…`)); }
+        await requote(s);
+        res("d-res", "Confirm the deposit in your wallet…");
+        const r = await wallet.send(quote.tx, (h) => res("d-res", `Depositing & staking ${txLink(h)}…`));
+        res("d-res", `Staked · ${txLink(r.hash)}`);
+        setTimeout(load, 1200);
+      } catch (e) { res("d-res", fail(e), true); $("d-go").disabled = false; }
+    }
+    async function claim(s, compound) {
+      try {
+        const c = await api(`/api/pools/stake-claim?farm=${s.farm}`);
+        res("r-res", "Confirm the claim in your wallet…");
+        const r = await wallet.send(c, (h) => res("r-res", `Claiming ${txLink(h)}…`));
+        if (!compound) { res("r-res", `Claimed · ${txLink(r.hash)}`); setTimeout(load, 1200); return; }
+        // Compound: the WETH just paid goes straight back through the zap.
+        const bal = BigInt(await wallet.rpc("eth_call", [{ to: WETH, data: "0x70a08231" + wallet.account.slice(2).padStart(64, "0") }, "latest"]));
+        if (bal === 0n) { res("r-res", `Claimed · ${txLink(r.hash)} — nothing to compound`); return; }
+        const p = await api(`/api/pools/stake-quote?vault=${s.vault}&mode=one&asset=weth&amount=${bal}&slippageBps=${slippage}`);
+        res("r-res", "Approve WETH for the zap…");
+        await wallet.ensureAllowance(p.tx.approve.token, p.tx.approve.spender, p.tx.approve.amount, (h) => res("r-res", `Approving ${txLink(h)}…`));
+        res("r-res", "Confirm the compound in your wallet…");
+        const r2 = await wallet.send(p.tx, (h) => res("r-res", `Compounding ${txLink(h)}…`));
+        res("r-res", `Compounded · ${txLink(r2.hash)}`);
+        setTimeout(load, 1200);
+      } catch (e) { res("r-res", fail(e), true); }
+    }
+    async function withdraw(s) {
+      const v = parseUnits($("w-amt").value, 18); if (!v || v === 0n) return;
+      $("w-go").disabled = true;
+      try {
+        const staked = BigInt(s.me?.staked ?? 0), loose = BigInt(s.me?.loose ?? 0);
+        const fromFarm = v > loose ? v - loose : 0n;
+        if (fromFarm > 0n) {
+          if (fromFarm > staked) throw new Error("more than you hold");
+          const c = await api(`/api/pools/stake-unstake?farm=${s.farm}&shares=${fromFarm}`);
+          res("w-res", "1/2 · Confirm unstaking in your wallet…");
+          await wallet.send(c, (h) => res("w-res", `1/2 · Unstaking ${txLink(h)}…`));
+        }
+        const c2 = await api(`/api/pools/stake-withdraw?vault=${s.vault}&shares=${v}&to=${wallet.account}`);
+        res("w-res", "2/2 · Confirm the withdrawal in your wallet…");
+        const r = await wallet.send(c2, (h) => res("w-res", `2/2 · Withdrawing ${txLink(h)}…`));
+        res("w-res", `Withdrawn · ${txLink(r.hash)}`);
+        setTimeout(load, 1200);
+      } catch (e) { res("w-res", fail(e), true); $("w-go").disabled = false; }
+    }
+
+    // ---- create
+    let createPlan = null;
+    for (const ev of ["input", "change", "keyup"]) $("c-token").addEventListener(ev, async () => {
+      const t = $("c-token").value.trim().toLowerCase(); createPlan = null; $("c-go").disabled = true;
+      if (!/^0x[0-9a-f]{40}$/.test(t)) { res("c-res", t ? "That is not an address." : ""); return; }
+      try {
+        const p = await api(`/api/pools/stake-create?token=${t}`);
+        createPlan = p;
+        if (p.exists) { res("c-res", `${esc(p.symbol ?? "This token")} already has a stake. <a href="/stakes?vault=${p.exists.vault}">Open it →</a>`); return; }
+        res("c-res", `Will attach to ${esc(p.symbol ?? "the token")}/ETH ${(p.fee / 1e4).toFixed(2)}% — its deepest ETH pool.`);
+        $("c-go").disabled = !wallet.account; $("c-go").textContent = wallet.account ? "Create stake" : "Connect wallet";
+        if (!wallet.account) $("c-go").disabled = false;
+      } catch (e) { res("c-res", esc(e.message), true); }
+    });
+    $("c-go").addEventListener("click", async () => {
+      if (!wallet.account) return wallet.openPicker();
+      if (!createPlan?.tx || createPlan.exists) return;
+      $("c-go").disabled = true;
+      try {
+        res("c-res", "Confirm in your wallet…");
+        const r = await wallet.send(createPlan.tx, (h) => res("c-res", `Creating ${txLink(h)}…`));
+        res("c-res", `Created · ${txLink(r.hash)}`);
+        setTimeout(load, 1500);
+      } catch (e) { res("c-res", fail(e), true); $("c-go").disabled = false; }
+    });
+
+    document.querySelectorAll(".filters button").forEach((b) => b.addEventListener("click", () => { filter = b.dataset.f; document.querySelectorAll(".filters button").forEach((x) => x.classList.toggle("on", x === b)); render(); }));
+    $("s-tvl").addEventListener("click", () => { sort = "tvl"; $("s-tvl").classList.add("on"); $("s-rate").classList.remove("on"); render(); });
+    $("s-rate").addEventListener("click", () => { sort = "rate"; $("s-rate").classList.add("on"); $("s-tvl").classList.remove("on"); render(); });
+
+    api("/api/trade/chain").then(async (c) => { await wallet.init(c); wallet.bindButton($("nav-connect")); wallet.onChange(load); load(); });
+  </script>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand"><div class="logo">ordo<span class="logo-app">app</span></div><p>The execution layer for Robinhood Chain.</p></div>
+        <div class="footer-col"><h5>Product</h5><a href="/trade">Trade</a><a href="/pools">Pools</a><a href="/stakes">Stakes</a><a href="/positions">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/docs">Documentation</a></div>
+        <div class="footer-col"><h5>Participate</h5><a href="/searchers">For searchers</a><a href="/apps">For apps &amp; wallets</a><a href="/operators">For node operators</a></div>
+        <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs#quickstart">Quickstart</a></div>
+      </div>
+      <div class="footer-bottom"><div class="disclaimer">© 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc.</div><div class="socials"><a href="/docs">Docs</a></div></div>
+    </div>
+  </footer>
+</body>
+</html>
