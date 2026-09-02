@@ -11,7 +11,7 @@
  * off on 429s, and shrinks its window when a query is refused.
  *
  *   node scripts/backfill-candles.mjs --rpc http://node:8547[,https://…] [--days 90 | --all] [--pools 500] [--pool 0x…]
- *                                     [--concurrency 1] [--pace 400]
+ *                                     [--pace 400]
  *
  * Walks each pool backwards from the recorder's earliest bucket (or the head)
  * in adaptive block windows, converts every V3 Swap into a minute candle, and
@@ -40,7 +40,6 @@ if (RPCS.length === 0) {
 const ALL = args.all === "1";
 const DAYS = Number(args.days ?? 90);
 const MAX_POOLS = Number(args.pools ?? 500);
-const CONCURRENCY = Number(args.concurrency ?? 2);
 const PACE_MS = Number(args.pace ?? 600);
 const DB = process.env.ORDO_DB ?? join(import.meta.dirname, "../data/ordo.db");
 const V3_SWAP_TOPIC = toEventSelector("Swap(address,address,int256,int256,uint160,uint128,int24)");
@@ -104,11 +103,11 @@ async function rpc(method, params) {
 const store = new OrdoStore(DB);
 const head = parseInt(await rpc("eth_blockNumber", []), 16);
 const floorBlock = ALL ? 0 : Math.max(0, head - DAYS * BLOCKS_PER_DAY);
-console.log(`backfill | rpc=${RPCS.map((u) => new URL(u).host).join(",")} head=${head} floor=${floorBlock} (${ALL ? "all history" : DAYS + "d"}) pace=${PACE_MS}ms x${CONCURRENCY} db=${DB}`);
+console.log(`backfill | rpc=${RPCS.map((u) => new URL(u).host).join(",")} head=${head} floor=${floorBlock} (${ALL ? "all history" : DAYS + "d"}) pace=${PACE_MS}ms db=${DB}`);
 
 // Which pools: the busiest by recorded swaps, plus anything explicitly named.
 let pools = [];
-if (args.pool) pools = [args.pool.toLowerCase()];
+if (args.pool) pools = args.pool.toLowerCase().split(",").map((x) => x.trim()).filter(Boolean);
 else {
   const since = Math.floor(Date.now() / 1000) - 7 * 86_400;
   pools = store.marketStats(since).slice(0, MAX_POOLS).map((r) => r.pool.toLowerCase());
@@ -129,40 +128,48 @@ async function blockTime(bn) {
   return ts;
 }
 
-async function backfillPool(pool) {
-  const key = `backfill:${pool}`;
-  const cov = store.candleCoverage(pool);
-  // Resume point: the checkpoint if one exists, else just before the
-  // recorder's tape begins (found by its earliest bucket → block guess).
-  let hi = Number(store.getMeta(key) ?? NaN);
-  if (!Number.isFinite(hi)) {
-    if (cov) {
-      const nowTs = Math.floor(Date.now() / 1000);
-      hi = head - Math.ceil((nowTs - cov.from) * 10) - 600; // 10 blocks/s, one minute of slack
-    } else hi = head;
-  }
-  if (hi <= floorBlock) return { pool, done: true, minutes: 0, logs: 0 };
+const started = Date.now();
 
-  // Start narrow: the busiest pool is ~2 swaps a block, and the public
-  // endpoint refuses anything over 10,000 logs. Quiet stretches widen fast.
-  let span = Number(store.getMeta(`${key}:span`) ?? 4_000);
-  let logsTotal = 0, minutes = 0, poolCalls = 0, lastReport = Date.now();
+/** Where a pool's walk resumes: its checkpoint, else just before the recorder's tape. */
+function resumeBlock(pool) {
+  const saved = Number(store.getMeta(`backfill:${pool}`) ?? NaN);
+  if (Number.isFinite(saved)) return saved;
+  const cov = store.candleCoverage(pool);
+  if (!cov) return head;
+  const nowTs = Math.floor(Date.now() / 1000);
+  return head - Math.ceil((nowTs - cov.from) * 10) - 600; // ~10 blocks/s, a minute of slack
+}
+
+/**
+ * One walk for every pool at once.
+ *
+ * eth_getLogs takes an array of addresses, and the cost of a query is driven by
+ * the logs it returns, not the number of contracts asked about. Walking each
+ * pool separately therefore re-scanned the same 52M blocks sixty times over;
+ * asking for all of them together scans the range once, which is the difference
+ * between a backfill that finishes and one that does not.
+ */
+async function backfillAll(pools) {
+  const active = pools.filter((p) => resumeBlock(p) > floorBlock);
+  if (!active.length) return { logs: 0, minutes: 0 };
+  let hi = Math.max(...active.map(resumeBlock));
+  let span = Number(store.getMeta("backfill:span") ?? 2_000);
+  let logsTotal = 0, minutes = 0, windows = 0, lastReport = Date.now(), reachedTs = 0;
+
   while (hi > floorBlock) {
     const lo = Math.max(floorBlock, hi - span + 1);
     let logs;
     try {
-      poolCalls++;
-      logs = await rpc("eth_getLogs", [{ address: pool, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + lo.toString(16), toBlock: "0x" + hi.toString(16) }]);
+      windows++;
+      logs = await rpc("eth_getLogs", [{ address: active, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + lo.toString(16), toBlock: "0x" + hi.toString(16) }]);
     } catch (e) {
-      if (isTooWide(e) && span > 200) { span = Math.max(200, Math.floor(span / 2)); continue; }
-      throw new Error(`${pool}: getLogs refused at ${span} blocks: ${e.message}`);
+      if (isTooWide(e) && span > 100) { span = Math.max(100, Math.floor(span / 2)); continue; }
+      throw new Error(`getLogs refused at ${span} blocks: ${e.message}`);
     }
-    if (Date.now() - lastReport > 60_000) {
-      lastReport = Date.now();
-      console.log(`backfill | ${pool.slice(0, 10)} at block ${lo} · ${logsTotal} swaps → ${minutes} min-candles so far · window ${span} · ${poolCalls} calls`);
-    }
+
     if (logs.length) {
       const [tLo, tHi] = await Promise.all([blockTime(lo), blockTime(hi)]);
+      reachedTs = tLo;
       const perBlock = hi > lo ? (tHi - tLo) / (hi - lo) : 0;
       const points = [];
       for (const l of logs) {
@@ -173,37 +180,38 @@ async function backfillPool(pool) {
         if (!Number.isFinite(price) || price <= 0) continue;
         const bn = Number(BigInt(l.blockNumber));
         const ts = Math.round(tLo + (bn - lo) * perBlock);
-        points.push({ pool, bucket: Math.floor(ts / 60) * 60, price, vol0: Number(absInt256(data.slice(0, 64))), vol1: Number(absInt256(data.slice(64, 128))), block: bn });
+        points.push({ pool: l.address.toLowerCase(), bucket: Math.floor(ts / 60) * 60, price, vol0: Number(absInt256(data.slice(0, 64))), vol1: Number(absInt256(data.slice(64, 128))), block: bn });
       }
       store.upsertCandles(points);
-      minutes += new Set(points.map((p) => p.bucket)).size;
+      minutes += new Set(points.map((p) => p.pool + ":" + p.bucket)).size;
       logsTotal += logs.length;
     }
+
+    // Checkpoint every pool, but never move one backwards: a pool walked
+    // further by an earlier per-pool run keeps the progress it already has.
+    for (const pool of active) {
+      const key = `backfill:${pool}`;
+      const cur = Number(store.getMeta(key) ?? NaN);
+      if (!Number.isFinite(cur) || lo - 1 < cur) store.setMeta(key, String(lo - 1));
+    }
+
     hi = lo - 1;
-    store.setMeta(key, String(hi));
     if (logs.length < 4_000 && span < 200_000) span *= 2;
-    else if (logs.length > 8_000) span = Math.max(200, Math.floor(span / 2));
-    store.setMeta(`${key}:span`, String(span));
+    else if (logs.length > 8_000) span = Math.max(100, Math.floor(span / 2));
+    store.setMeta("backfill:span", String(span));
+
+    if (Date.now() - lastReport > 60_000) {
+      lastReport = Date.now();
+      const pct = (100 * (head - hi)) / Math.max(1, head - floorBlock);
+      const rate = (head - hi) / Math.max(1, (Date.now() - started) / 3_600_000);
+      const eta = rate > 0 ? (hi - floorBlock) / rate : 0;
+      const at = reachedTs ? new Date(reachedTs * 1000).toISOString().slice(0, 16).replace("T", " ") : "?";
+      console.log(`backfill | reached ${at} (block ${hi}, ${pct.toFixed(1)}% of range) · ${logsTotal.toLocaleString()} swaps → ${minutes.toLocaleString()} candle writes · window ${span} · ${windows} windows · ${throttles} throttled · eta ${eta.toFixed(1)}h`);
+    }
   }
-  return { pool, done: true, minutes, logs: logsTotal, calls: poolCalls };
+  return { logs: logsTotal, minutes };
 }
 
-let i = 0, done = 0;
-const started = Date.now();
-setInterval(() => console.log(`backfill | ${calls} calls, ${throttles} throttled, ${done}/${pools.length} pools done, ${((Date.now() - started) / 60_000).toFixed(0)} min`), 300_000).unref();
-await Promise.all(
-  Array.from({ length: CONCURRENCY }, async () => {
-    while (i < pools.length) {
-      const pool = pools[i++];
-      try {
-        const r = await backfillPool(pool);
-        done++;
-        console.log(`backfill | ${done}/${pools.length} ${pool} · ${r.logs} swaps → ${r.minutes} minute-candles (${r.calls ?? 0} calls)`);
-      } catch (e) {
-        console.warn(`backfill | ${pool} failed: ${e.message}`);
-      }
-    }
-  }),
-);
-console.log(`backfill | finished ${done}/${pools.length} pools in ${((Date.now() - started) / 60_000).toFixed(1)} min`);
+const r = await backfillAll(pools);
+console.log(`backfill | finished ${pools.length} pools · ${r.logs.toLocaleString()} swaps → ${r.minutes.toLocaleString()} candle writes in ${((Date.now() - started) / 60_000).toFixed(1)} min`);
 store.close();
