@@ -143,7 +143,10 @@ services:
   backfill:
     build: { context: .., dockerfile: deploy/Dockerfile }
     profiles: ["backfill"]
-    command: ["node", "scripts/backfill-candles.mjs", "--all", "--pools", "${ORDO_BACKFILL_POOLS:-150}", "--pace", "${ORDO_BACKFILL_PACE_MS:-0}", "--parallel", "${ORDO_BACKFILL_PARALLEL:-12}"]
+    command: ["node", "--max-old-space-size=768", "scripts/backfill-candles.mjs", "--all", "--pools", "${ORDO_BACKFILL_POOLS:-120}", "--pace", "${ORDO_BACKFILL_PACE_MS:-0}", "--parallel", "${ORDO_BACKFILL_PARALLEL:-5}", "--max-logs", "${ORDO_BACKFILL_MAX_LOGS:-12000}"]
+    # The app server has 3 GB and also runs the indexer; keep the backfill from
+    # crowding it out even when a window comes back unexpectedly large.
+    mem_limit: 1g
     environment:
       ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-https://rpc.mainnet.chain.robinhood.com}
       ORDO_DB: /app/data/ordo.db

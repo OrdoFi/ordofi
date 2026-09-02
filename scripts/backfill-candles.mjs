@@ -48,6 +48,9 @@ const PARALLEL = Math.max(1, Number(args.parallel ?? 1));
 // Chainstack's by block range. Rather than hard-code either, remember the
 // narrowest span that was ever refused and never grow back into it.
 let spanCeiling = Number(args.maxSpan ?? 200_000);
+// Target logs per window. Every window in a round is parsed at once, so this
+// times --parallel is the memory the job will ask for.
+const MAX_LOGS = Number(args.maxLogs ?? 12_000);
 const DB = process.env.ORDO_DB ?? join(import.meta.dirname, "../data/ordo.db");
 const V3_SWAP_TOPIC = toEventSelector("Swap(address,address,int256,int256,uint160,uint128,int24)");
 const BLOCKS_PER_DAY = 864_000; // 0.1 s blocks
@@ -177,26 +180,16 @@ async function backfillAll(pools) {
       cursor = lo - 1;
     }
 
-    let results;
+    // Each window is turned into candles the moment it lands, rather than
+    // holding every response until the whole round resolves. A window here can
+    // be a hundred thousand logs, and the app server has three gigabytes.
+    let widest = 0, tooWide = null;
     try {
       windows += ranges.length;
-      results = await Promise.all(ranges.map((r) =>
-        rpc("eth_getLogs", [{ address: active, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + r.lo.toString(16), toBlock: "0x" + r.hi.toString(16) }])));
-    } catch (e) {
-      if (isTooWide(e) && span > 100) {
-        spanCeiling = Math.min(spanCeiling, span);
-        span = Math.max(100, Math.floor(span / 2));
-        continue;
-      }
-      throw new Error(`getLogs refused at ${span} blocks: ${e.message}`);
-    }
-
-    let widest = 0;
-    for (let k = 0; k < ranges.length; k++) {
-      const { lo, hi: rHi } = ranges[k];
-      const logs = results[k];
-      widest = Math.max(widest, logs.length);
-      if (logs.length) {
+      await Promise.all(ranges.map(async ({ lo, hi: rHi }) => {
+        const logs = await rpc("eth_getLogs", [{ address: active, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + lo.toString(16), toBlock: "0x" + rHi.toString(16) }]);
+        widest = Math.max(widest, logs.length);
+        if (!logs.length) return;
         const [tLo, tHi] = await Promise.all([blockTime(lo), blockTime(rHi)]);
         reachedTs = tLo;
         const perBlock = rHi > lo ? (tHi - tLo) / (rHi - lo) : 0;
@@ -211,10 +204,18 @@ async function backfillAll(pools) {
           const ts = Math.round(tLo + (bn - lo) * perBlock);
           points.push({ pool: l.address.toLowerCase(), bucket: Math.floor(ts / 60) * 60, price, vol0: Number(absInt256(data.slice(0, 64))), vol1: Number(absInt256(data.slice(64, 128))), block: bn });
         }
+        logs.length = 0;
         store.upsertCandles(points);
         minutes += new Set(points.map((x) => x.pool + ":" + x.bucket)).size;
-        logsTotal += logs.length;
-      }
+        logsTotal += points.length;
+      }));
+    } catch (e) {
+      if (isTooWide(e) && span > 100) tooWide = e; else throw new Error(`getLogs refused at ${span} blocks: ${e.message}`);
+    }
+    if (tooWide) {
+      spanCeiling = Math.min(spanCeiling, span);
+      span = Math.max(100, Math.floor(span / 2));
+      continue;
     }
 
     hi = ranges[ranges.length - 1].lo - 1;
@@ -228,8 +229,8 @@ async function backfillAll(pools) {
     }
 
     const roof = Math.max(100, spanCeiling - 1);
-    if (widest < 12_000 && span < roof) span = Math.min(roof, span * 2);
-    else if (widest > 40_000) span = Math.max(100, Math.floor(span / 2));
+    if (widest < MAX_LOGS / 2 && span < roof) span = Math.min(roof, Math.ceil(span * 1.5));
+    else if (widest > MAX_LOGS) span = Math.max(100, Math.floor(span / 2));
     store.setMeta("backfill:span", String(span));
 
     if (Date.now() - lastReport > 60_000) {
