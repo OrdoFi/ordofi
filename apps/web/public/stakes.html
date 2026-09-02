@@ -152,6 +152,9 @@
         render();
       } catch (e) { $("rows").innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`; }
     }
+    // Chain state and the indexer settle a few seconds after a receipt; one
+    // early refresh for responsiveness, one later so nothing stays stale.
+    function refreshSoon() { setTimeout(load, 1200); setTimeout(load, 6000); }
     function rows() {
       let r = data.stakes.slice();
       if (filter === "mine") r = r.filter((s) => s.me && (Number(s.me.staked) > 0 || Number(s.me.loose) > 0));
@@ -313,7 +316,7 @@
         res("d-res", "Confirm the deposit in your wallet…");
         const r = await wallet.sendProven(quote, (h) => res("d-res", `Depositing & staking ${txLink(h)}…`));
         res("d-res", `Staked · ${txLink(r.hash)}`);
-        setTimeout(load, 1200);
+        refreshSoon();
       } catch (e) { res("d-res", fail(e), true); $("d-go").disabled = false; }
     }
     async function claim(s, compound) {
@@ -321,7 +324,7 @@
         const c = await api(`/api/pools/stake-claim?farm=${s.farm}`);
         res("r-res", "Confirm the claim in your wallet…");
         const r = await wallet.send(c, (h) => res("r-res", `Claiming ${txLink(h)}…`));
-        if (!compound) { res("r-res", `Claimed · ${txLink(r.hash)}`); setTimeout(load, 1200); return; }
+        if (!compound) { res("r-res", `Claimed · ${txLink(r.hash)}`); refreshSoon(); return; }
         // Compound exactly the WETH this claim paid — read from the receipt's
         // Transfer(farm → account) logs — never the wallet's whole WETH balance.
         const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -339,7 +342,7 @@
         res("r-res", "Confirm the compound in your wallet…");
         const r2 = await wallet.sendProven(p, (h) => res("r-res", `Compounding ${txLink(h)}…`));
         res("r-res", `Compounded · ${txLink(r2.hash)}`);
-        setTimeout(load, 1200);
+        refreshSoon();
       } catch (e) { res("r-res", fail(e), true); }
     }
     async function withdraw(s) {
@@ -359,7 +362,7 @@
         res("w-res", `2/2 · Confirm the withdrawal in your wallet… (at least ${num(formatUnits(c2.minimum.weth, 18, 6), 6)} ETH + ${num(formatUnits(c2.minimum.token, s.decimals, 6), 6)} ${esc(s.symbol)} or it reverts)`);
         const r = await wallet.sendProven(c2, (h) => res("w-res", `2/2 · Withdrawing ${txLink(h)}…`));
         res("w-res", `Withdrawn · ${txLink(r.hash)}`);
-        setTimeout(load, 1200);
+        refreshSoon();
       } catch (e) { res("w-res", fail(e), true); $("w-go").disabled = false; }
     }
 
@@ -385,7 +388,7 @@
         res("c-res", "Confirm in your wallet…");
         const r = await wallet.send(createPlan.tx, (h) => res("c-res", `Creating ${txLink(h)}…`));
         res("c-res", `Created · ${txLink(r.hash)}`);
-        setTimeout(load, 1500);
+        refreshSoon();
       } catch (e) { res("c-res", fail(e), true); $("c-go").disabled = false; }
     });
 

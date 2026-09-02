@@ -212,6 +212,15 @@ class Wallet {
     await this.ensureChain();
     const tx = { from: this.account, to, data: data ?? "0x", chainId: this.chain.idHex };
     if (value && BigInt(value) > 0n) tx.value = "0x" + BigInt(value).toString(16);
+    // Gas is estimated here, through our RPC, with 30% headroom. A vault or
+    // manager call does more work when fees have accrued between the estimate
+    // and the block that includes it — on a pool trading many times a second
+    // that is the normal case — and a bare estimate then runs out of gas on
+    // the last transfer. Unused gas is refunded, so the headroom costs nothing.
+    try {
+      const est = BigInt(await this.rpc("eth_estimateGas", [{ from: tx.from, to: tx.to, data: tx.data, value: tx.value ?? "0x0" }]));
+      tx.gas = "0x" + ((est * 13n) / 10n).toString(16);
+    } catch { /* the wallet estimates on its own */ }
     const hash = await this.provider.request({ method: "eth_sendTransaction", params: [tx] });
     onSent?.(hash);
     const rec = await this.waitFor(hash);
