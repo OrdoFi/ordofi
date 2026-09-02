@@ -199,6 +199,10 @@
     // A token sitting at a fresh address cannot pay for its own withdrawal, so
     // the sender covers the first move. Without this the payment is stranded.
     const GAS_STIPEND = parseEther("0.00006");
+    // A sweep prices gas with a buffer and gets refunded the difference, so a
+    // spent address keeps a few thousand wei. Below this it cannot pay to move
+    // itself, so it is spent, not spendable.
+    const DUST = parseEther("0.00002");
 
     let CHAIN = null, provider = null, account = null, keys = null;
     let feed = { announcements: [], syncing: true, scannedTo: null, head: null };
@@ -487,7 +491,7 @@
         const eth = BigInt(b?.eth ?? "0");
         const usdg = BigInt(b?.tokens?.[USDG.address] ?? "0");
         const held = [];
-        if (eth > 0n) held.push(`${formatEther(eth)} ETH`);
+        if (eth > DUST) held.push(`${formatEther(eth)} ETH`);
         if (usdg > 0n) held.push(`${formatUnits(usdg, USDG.decimals)} USDG`);
         const idx = mine.length - 1 - i;
         const spent = !held.length;
