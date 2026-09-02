@@ -48,7 +48,12 @@
     .tok b { font-size: 13.5px; }
     .tok small { color: var(--muted); font-size: 11.5px; margin-left: 6px; }
     .up { color: #1e9e6a; } .dn { color: var(--danger); }
-    canvas.spark { width: 110px; height: 28px; display: inline-block; vertical-align: middle; }
+    canvas.spark { width: 110px; height: 28px; display: block; }
+    .sparkwrap { position: relative; display: inline-block; vertical-align: middle; }
+    .fcard .fhead, .fcard .fgrid, .fcard .fline { position: relative; z-index: 1; }
+    .list tr.row td { transition: background .15s ease; }
+    .fcard { transition: border-color .15s ease, transform .15s ease; }
+    .fcard:hover { transform: translateY(-1px); }
 
     /* featured cards, like Delta's header trio */
     .feat { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-bottom: 22px; }
@@ -169,7 +174,7 @@
   <script type="module">
     import { wallet, rejected } from "/wallet.js";
     import { renderLadders, esc, usd, num, fmtPx, fmtBig, formatUnits, parseUnits, SHAPE_DESC } from "/ladders.js";
-    import { mountShell } from "/liquidity.js";
+    import { mountShell, skeletonRows, drawSpark, busy } from "/liquidity.js";
     const $ = (id) => document.getElementById(id);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const pct = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
@@ -208,8 +213,9 @@
               <div class="seg qf" data-sec="${sec}"><button data-q="all" class="on">All</button><button data-q="ETH">ETH</button><button data-q="USDG">USDG</button></div>
               <span class="chip" title="Volume, fees, trades and change over the last 24 hours">24h</span>
             </div></div>
-          <table class="list"><thead><tr><th>Token</th><th>MC</th><th>24h</th><th>Fees 24h</th><th>Trades</th><th>Vol 24h</th><th>Age</th><th>Last 24h</th></tr></thead><tbody id="rows-${sec}"><tr><td colspan="8" class="empty">Loading markets…</td></tr></tbody></table>
+          <table class="list"><thead><tr><th>Token</th><th>MC</th><th>24h</th><th>Fees 24h</th><th>Trades</th><th>Vol 24h</th><th>Age</th><th>Last 24h</th></tr></thead><tbody id="rows-${sec}">${skeletonRows(8, 8)}</tbody></table>
         </div>`).join("")}`;
+      $("f-hero").innerHTML = `<div class="fhead"><div class="tok"><span class="sk round" style="width:40px;height:40px"></span><span class="sk w2" style="height:22px;width:140px"></span></div></div><div class="fgrid">${Array.from({ length: 6 }, () => `<div><span class="sk w2"></span><br/><span class="sk w3" style="height:16px;margin-top:6px"></span></div>`).join("")}</div>`;
       mountShell($("lq-shell"), { page: "pools" });
       document.querySelectorAll(".qf button").forEach((b) => b.addEventListener("click", () => {
         const sec = b.parentElement.dataset.sec; quoteFilter[sec] = b.dataset.q;
@@ -242,10 +248,10 @@
       const q = quoteFilter[sec];
       const rows = (listData[sec] ?? []).filter((t) => q === "all" || (t.quotes ?? [t.quote]).includes(q));
       const tb = $(`rows-${sec}`);
-      tb.innerHTML = rows.length ? rows.map((t, i) => `<tr class="row" data-t="${t.token}">
+      tb.innerHTML = rows.length ? rows.map((t, i) => `<tr class="row rise rise-${Math.min(i + 1, 8)}" data-t="${t.token}">
         <td>${tokenCell(t)}</td>
         <td>${usd(t.marketCapUsd)}</td><td class="${cls(t.change24)}">${pct(t.change24)}</td><td>${usd(t.fees24Usd)}</td><td>${num(t.trades24, 0)}</td><td>${usd(t.volume24Usd)}</td><td>${t.ageDays == null ? "—" : t.ageDays + "d"}</td>
-        <td><canvas class="spark" data-i="${i}" width="220" height="56"></canvas></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No ${q === "all" ? "" : q + " "}markets yet.</td></tr>`;
+        <td><span class="sparkwrap"><canvas class="spark" data-i="${i}" width="220" height="56"></canvas></span></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No ${q === "all" ? "" : q + " "}markets yet.</td></tr>`;
       tb.querySelectorAll("tr.row").forEach((r) => r.addEventListener("click", () => { location.href = `/pools/${r.dataset.t}`; }));
       rows.forEach((t, i) => sparkInto(t, tb.querySelector(`canvas[data-i="${i}"]`), 2.5));
     }
@@ -257,14 +263,8 @@
     }
     async function sparkInto(t, cv, lw) {
       if (!cv) return;
-      const c = await closes24(t); if (c.length < 2) return;
-      const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...c), hi = Math.max(...c);
-      const up = c.at(-1) >= c[0], col = up ? "#1e9e6a" : "#c0392b";
-      const pts = c.map((v, i) => [(i / (c.length - 1)) * W, H - 4 - ((v - lo) / (hi - lo || 1)) * (H - 8)]);
-      ctx.clearRect(0, 0, W, H);
-      const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, up ? "rgba(30,158,106,.22)" : "rgba(192,57,43,.22)"); g.addColorStop(1, "rgba(0,0,0,0)");
-      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(pts[0][0], H); pts.forEach(([x, y]) => ctx.lineTo(x, y)); ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.lineJoin = "round"; ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+      const c = await closes24(t); if (c.length < 2 || !cv.isConnected) return;
+      drawSpark(cv, c, { lineWidth: lw, dot: true });
     }
 
     // ================= DETAIL =================
@@ -561,10 +561,14 @@
     async function build() {
       if (!wallet.account) return wallet.openPicker();
       if (!plan?.tx) return;
-      $("go").disabled = true;
+      return busy($("go"), buildNow);
+    }
+    async function buildNow() {
       try {
         if (plan.tx.approve) { setResult(`Approve ${esc(token.symbol)} in your wallet…`); await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => setResult(`Approving ${txLink(h)}…`)); }
         await replan(); // the plan was made for a price; take a fresh one right before signing
+        $("go").disabled = true; // replan re-enables; stay locked until the block
+        if (!plan?.tx) throw new Error("the plan changed while you were signing — check the amounts and try again");
         setResult(`Confirm in your wallet…`);
         const rec = await wallet.send(plan.tx, (h) => setResult(`Building ${txLink(h)} — waiting for the block…`));
         setResult(`Built ${plan.rungs.length} positions · ${txLink(rec.hash)}`);

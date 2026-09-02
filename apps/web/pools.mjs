@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { decodeEventLog, decodeFunctionResult, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
 import { rpcFetch, rpcOnce, rpcUrls, RPC_HEADERS } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
@@ -181,30 +183,63 @@ async function cachedSWR(key, ttlMs, fn) {
  */
 let ICON_SEED = {};
 try { ICON_SEED = JSON.parse(readFileSync(new URL("./token-icons.json", import.meta.url), "utf8")); } catch { /* optional */ }
+const ICON_CACHE_FILE = join(process.env.ORDO_DATA_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "../../data"), "token-icons-cache.json");
 const iconCache = new Map(); // address → { url: string|null, at }
-const NEG_ICON_TTL = 6 * 3_600_000;
+try { for (const [a, v] of Object.entries(JSON.parse(readFileSync(ICON_CACHE_FILE, "utf8")))) iconCache.set(a, v); } catch { /* first run */ }
+const NEG_ICON_TTL = 24 * 3_600_000;
+const UA = { "user-agent": "Mozilla/5.0 (compatible; OrdoFi)", accept: "application/json, image/*" };
 export function iconFor(address) {
   const a = lower(address);
   return ICON_SEED[a] ?? iconCache.get(a)?.url ?? null;
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/**
+ * Three places a logo can live, cheapest first: DexScreener's per-address
+ * image, then the token's DexScreener profile, then GeckoTerminal. The last
+ * two are rate-limited APIs, so the probe is paced rather than parallel.
+ */
 async function probeIcon(a) {
-  const u = `https://dd.dexscreener.com/ds-data/tokens/robinhood/${a}.png?size=lg`;
+  const dd = `https://dd.dexscreener.com/ds-data/tokens/robinhood/${a}.png?size=lg`;
   try {
-    const r = await fetch(u, { signal: AbortSignal.timeout(6_000), headers: { "user-agent": "Mozilla/5.0 (compatible; OrdoFi)" } });
+    const r = await fetch(dd, { signal: AbortSignal.timeout(6_000), headers: UA });
     const ok = r.ok && (r.headers.get("content-type") ?? "").startsWith("image/");
-    try { await r.body?.cancel(); } catch { /* already drained */ }
-    return ok ? u : null;
-  } catch { return null; }
+    try { await r.body?.cancel(); } catch { /* drained */ }
+    if (ok) return dd;
+  } catch { /* next source */ }
+  try {
+    const r = await fetch(`https://api.dexscreener.com/tokens/v1/robinhood/${a}`, { signal: AbortSignal.timeout(8_000), headers: UA });
+    const d = await r.json();
+    const u = Array.isArray(d) ? d.find((p) => p?.info?.imageUrl)?.info?.imageUrl : null;
+    if (u) return u;
+  } catch { /* next source */ }
+  try {
+    await sleep(2_100); // GeckoTerminal allows ~30 calls a minute
+    const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/robinhood/tokens/${a}`, { signal: AbortSignal.timeout(8_000), headers: UA });
+    const d = await r.json();
+    const u = d?.data?.attributes?.image_url;
+    if (u && u !== "missing.png") return u;
+  } catch { /* none */ }
+  return null;
 }
 let iconJob = null;
+function persistIcons() {
+  try { writeFileSync(ICON_CACHE_FILE, JSON.stringify(Object.fromEntries(iconCache))); } catch { /* read-only data dir */ }
+}
 function scheduleIconProbe(addresses) {
   const now = Date.now();
   const todo = [...new Set(addresses.map(lower))].filter((a) => !ICON_SEED[a] && (!iconCache.has(a) || (iconCache.get(a).url == null && now - iconCache.get(a).at > NEG_ICON_TTL)));
   if (!todo.length || iconJob) return;
   iconJob = (async () => {
-    let i = 0;
-    const worker = async () => { while (i < todo.length) { const a = todo[i++]; iconCache.set(a, { url: await probeIcon(a), at: Date.now() }); } };
-    await Promise.all(Array.from({ length: 6 }, worker));
+    let i = 0, since = 0;
+    const worker = async () => {
+      while (i < todo.length) {
+        const a = todo[i++];
+        iconCache.set(a, { url: await probeIcon(a), at: Date.now() });
+        if (++since % 10 === 0) { persistIcons(); cache.delete("list"); }
+      }
+    };
+    await Promise.all(Array.from({ length: 2 }, worker));
+    persistIcons();
     cache.delete("list"); // the next list carries the new logos
   })().catch(() => {}).finally(() => { iconJob = null; });
 }

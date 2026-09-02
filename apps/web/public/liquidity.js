@@ -37,6 +37,23 @@ const CSS = `
 .lq-stats .v { font-family: var(--mono); font-size: 15px; margin-top: 2px; white-space: nowrap; }
 @media (max-width: 1100px) { .lq { grid-template-columns: 1fr 1fr; } .lq-stats { grid-column: 1 / -1; overflow-x: auto; } }
 @media (max-width: 640px) { .lq { grid-template-columns: 1fr; } .lq-rail a { flex: 1; justify-content: center; padding: 11px 6px; } }
+
+/* motion shared by the liquidity pages */
+@keyframes lq-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+@keyframes lq-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes lq-flash { 0% { background: rgba(255,100,20,.18); } 100% { background: transparent; } }
+@keyframes lq-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.9); opacity: .35; } }
+.sk { display: inline-block; height: 12px; border-radius: 3px; background: linear-gradient(90deg, rgba(0,0,0,.05) 25%, rgba(0,0,0,.10) 50%, rgba(0,0,0,.05) 75%); background-size: 800px 100%; animation: lq-shimmer 1.3s linear infinite; }
+.sk.w1 { width: 34%; } .sk.w2 { width: 55%; } .sk.w3 { width: 80%; } .sk.round { width: 26px; height: 26px; border-radius: 50%; }
+.rise { animation: lq-rise .32s ease-out both; }
+.rise-1 { animation-delay: .03s; } .rise-2 { animation-delay: .06s; } .rise-3 { animation-delay: .09s; } .rise-4 { animation-delay: .12s; } .rise-5 { animation-delay: .15s; } .rise-6 { animation-delay: .18s; } .rise-7 { animation-delay: .21s; } .rise-8 { animation-delay: .24s; }
+.flash { animation: lq-flash 1.1s ease-out; }
+.spark-dot { position: absolute; width: 7px; height: 7px; border-radius: 50%; transform: translate(-50%, -50%); animation: lq-pulse 1.6s ease-in-out infinite; pointer-events: none; }
+.spark-dot::after { content: ""; position: absolute; inset: 1.5px; border-radius: 50%; background: inherit; }
+.lq-busy { position: relative; color: transparent !important; }
+.lq-busy::after { content: ""; position: absolute; left: 50%; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; animation: lq-spin .7s linear infinite; }
+@keyframes lq-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .rise, .flash, .spark-dot, .sk { animation: none !important; } }
 `;
 
 const ICONS = {
@@ -51,6 +68,49 @@ const int = (v) => v == null ? "—" : Number(v).toLocaleString();
 
 let injected = false;
 function inject() { if (injected) return; injected = true; const s = document.createElement("style"); s.textContent = CSS; document.head.appendChild(s); }
+export function ensureMotionStyles() { inject(); }
+
+/** Placeholder table rows while a list loads: `cols` cells, the first with a round avatar. */
+export function skeletonRows(rows, cols) {
+  inject();
+  return Array.from({ length: rows }, (_, i) => `<tr class="rise rise-${Math.min(i + 1, 8)}"><td><span class="sk round"></span> <span class="sk w2"></span></td>${Array.from({ length: cols - 1 }, () => `<td><span class="sk w${1 + ((i + cols) % 3)}"></span></td>`).join("")}</tr>`).join("");
+}
+
+/**
+ * Sparkline with a soft area fill and a pulsing dot on the latest print — the
+ * canvas draws the line, the dot is an element so it can animate cheaply.
+ */
+export function drawSpark(cv, closes, { lineWidth = 2.5, dot = true } = {}) {
+  if (!cv || closes.length < 2) return;
+  const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...closes), hi = Math.max(...closes);
+  const up = closes.at(-1) >= closes[0], col = up ? "#1e9e6a" : "#c0392b";
+  const pts = closes.map((v, i) => [(i / (closes.length - 1)) * W, H - 4 - ((v - lo) / (hi - lo || 1)) * (H - 8)]);
+  ctx.clearRect(0, 0, W, H);
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, up ? "rgba(30,158,106,.22)" : "rgba(192,57,43,.22)"); g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(pts[0][0], H); pts.forEach(([x, y]) => ctx.lineTo(x, y)); ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = lineWidth; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+  if (!dot) return;
+  const host = cv.parentElement; if (!host) return;
+  if (getComputedStyle(host).position === "static") host.style.position = "relative";
+  let d = host.querySelector(":scope > .spark-dot"); if (!d) { d = document.createElement("span"); d.className = "spark-dot"; host.appendChild(d); }
+  const r = cv.getBoundingClientRect(), hr = host.getBoundingClientRect();
+  const [lx, ly] = pts.at(-1);
+  d.style.background = col;
+  d.style.left = `${r.left - hr.left + (lx / W) * r.width}px`; d.style.top = `${r.top - hr.top + (ly / H) * r.height}px`;
+}
+
+/** A button that shows a spinner while `work` runs and restores itself after. */
+export async function busy(btn, work) {
+  if (!btn) return work();
+  const was = btn.disabled; btn.disabled = true; btn.classList.add("lq-busy");
+  try { return await work(); } finally { btn.classList.remove("lq-busy"); btn.disabled = was; }
+}
+
+/** Set text and flash the element when the value actually changed. */
+export function setLive(el, text) {
+  if (!el || el.textContent === text) return;
+  el.textContent = text; el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+}
 
 /** Fetch JSON, tolerating a proxy or upstream that answers with plain text. */
 async function api(path) {
@@ -87,10 +147,10 @@ export function mountShell(root, { page } = {}) {
   const stats = root.querySelector("#lq-stats");
   const paint = (p) => {
     const v = stats.querySelectorAll(".v");
-    v[0].textContent = int(p.totalPositions); v[0].title = `${p.openPositions ?? 0} open · ${p.stakes ?? 0} stake${p.stakes === 1 ? "" : "s"}`;
-    v[1].textContent = usd(p.totalFeesUsd); v[1].title = "Fees earned by liquidity providers, valued the day they were collected";
-    v[2].textContent = usd(p.tvlUsd); v[2].title = "Value in open positions and stakes right now";
-    v[3].textContent = usd(p.ethUsd, 2);
+    setLive(v[0], int(p.totalPositions)); v[0].title = `${p.openPositions ?? 0} open · ${p.stakes ?? 0} stake${p.stakes === 1 ? "" : "s"}`;
+    setLive(v[1], usd(p.totalFeesUsd)); v[1].title = "Fees earned by liquidity providers, valued the day they were collected";
+    setLive(v[2], usd(p.tvlUsd)); v[2].title = "Value in open positions and stakes right now";
+    setLive(v[3], usd(p.ethUsd, 2));
   };
   const refresh = () => api("/api/pools/platform").then(paint).catch(() => {});
   refresh(); setInterval(refresh, 60_000);
@@ -101,8 +161,8 @@ export function mountShell(root, { page } = {}) {
   const close = () => { box.classList.remove("open"); sel = -1; };
   const render = (d) => {
     const rows = [];
-    if (d.tokens.length) { rows.push(`<h6>Tokens</h6>`); for (const x of d.tokens) rows.push(`<a href="/pools/${x.token}"><div class="ic" data-i="${esc((x.symbol ?? "?").slice(0, 2))}">${x.icon ? `<img src="${esc(x.icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>${esc(x.name ?? "")}</small></span><span class="r">${usd(x.marketCapUsd)} MC</span></a>`); }
-    if (d.stakes.length) { rows.push(`<h6>Stakes</h6>`); for (const x of d.stakes) rows.push(`<a href="/stakes?vault=${x.vault}"><div class="ic" data-i="${esc((x.symbol ?? "?").slice(0, 2))}">${x.icon ? `<img src="${esc(x.icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>stake · ${(x.rate7d * 100).toFixed(1)}% 7d</small></span><span class="r">${usd(x.tvlUsd)} TVL</span></a>`); }
+    if (d.tokens.length) { rows.push(`<h6>Tokens</h6>`); for (const x of d.tokens) rows.push(`<a href="/pools/${x.token}"><div class="ic">${x.icon ? `<img src="${esc(x.icon)}" alt="" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>${esc(x.name ?? "")}</small></span><span class="r">${usd(x.marketCapUsd)} MC</span></a>`); }
+    if (d.stakes.length) { rows.push(`<h6>Stakes</h6>`); for (const x of d.stakes) rows.push(`<a href="/stakes?vault=${x.vault}"><div class="ic">${x.icon ? `<img src="${esc(x.icon)}" alt="" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>stake · ${(x.rate7d * 100).toFixed(1)}% 7d</small></span><span class="r">${usd(x.tvlUsd)} TVL</span></a>`); }
     out.innerHTML = rows.length ? rows.join("") : `<div class="none">Nothing matches “${esc(q.value.trim())}”.</div>`;
     box.classList.add("open"); sel = -1;
   };
