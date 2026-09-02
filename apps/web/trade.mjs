@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { encodeFunctionData, decodeFunctionResult, encodePacked, toEventSelector } from "viem";
 import { rpcFetch } from "@ordofi/core";
 import { getTokenInfo, toWhole } from "@ordofi/core/pricing";
+import { ROUTER as SWAP_ROUTER, encodeExactInputSwap } from "@ordofi/core/router";
 
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../data");
 const EXPLORER_API = "https://robinhoodchain.blockscout.com/api/v2";
@@ -35,14 +36,11 @@ export const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
 export const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
 const V3_FACTORY = "0x1f7d7550b1b028f7571e69a784071f0205fd2efa";
 const QUOTER_V2 = "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7";
-export const ROUTER = "0xcaf681a66d020601342297493863e78c959e5cb2"; // SwapRouter02
+export const ROUTER = SWAP_ROUTER; // SwapRouter02
 const FEES = [100, 500, 3000, 10000];
-// SwapRouter02 sentinels. MSG_SENDER means "whoever sent the transaction",
-// which makes the calldata safe to build without knowing the wallet;
-// ADDRESS_THIS parks output in the router so a trailing unwrapWETH9 can pay
-// the trader in native ETH.
-const MSG_SENDER = "0x0000000000000000000000000000000000000001";
-const ADDRESS_THIS = "0x0000000000000000000000000000000000000002";
+// Swap calldata is encoded by @ordofi/core/router, which knows which
+// SwapRouter02 calls resolve the MSG_SENDER/ADDRESS_THIS sentinels and which
+// take a recipient literally. Never hand-roll unwrapWETH9 or sweepToken here.
 export const NATIVE = "eth";
 
 const ERC20_ABI = [
@@ -78,38 +76,6 @@ const QUOTER_ABI = [
       { type: "uint256", name: "gasEstimate" },
     ],
   },
-];
-
-const ROUTER_ABI = [
-  {
-    type: "function",
-    name: "multicall",
-    stateMutability: "payable",
-    inputs: [
-      { type: "uint256", name: "deadline" },
-      { type: "bytes[]", name: "data" },
-    ],
-    outputs: [{ type: "bytes[]" }],
-  },
-  {
-    type: "function",
-    name: "exactInput",
-    stateMutability: "payable",
-    inputs: [
-      {
-        type: "tuple",
-        name: "params",
-        components: [
-          { type: "bytes", name: "path" },
-          { type: "address", name: "recipient" },
-          { type: "uint256", name: "amountIn" },
-          { type: "uint256", name: "amountOutMinimum" },
-        ],
-      },
-    ],
-    outputs: [{ type: "uint256" }],
-  },
-  { type: "function", name: "unwrapWETH9", stateMutability: "payable", inputs: [{ type: "uint256" }, { type: "address" }], outputs: [] },
 ];
 
 async function call(to, abi, functionName, args = []) {
@@ -663,25 +629,9 @@ export async function tradeQuote({ tokenIn, tokenOut, amountIn, slippageBps = 50
   const minOut = (best.amountOut * BigInt(10_000 - slippageBps)) / 10_000n;
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 600);
 
-  const swapCall = encodeFunctionData({
-    abi: ROUTER_ABI,
-    functionName: "exactInput",
-    args: [
-      {
-        path: best.path,
-        // Native-ETH output goes to the router first, then a trailing unwrap
-        // forwards it to the trader as ETH.
-        recipient: nativeOut ? ADDRESS_THIS : MSG_SENDER,
-        amountIn: amt,
-        amountOutMinimum: minOut,
-      },
-    ],
-  });
-  const calls = [swapCall];
-  if (nativeOut) {
-    calls.push(encodeFunctionData({ abi: ROUTER_ABI, functionName: "unwrapWETH9", args: [minOut, MSG_SENDER] }));
-  }
-  const data = encodeFunctionData({ abi: ROUTER_ABI, functionName: "multicall", args: [deadline, calls] });
+  // Proceeds always go to msg.sender: token output straight from the swap,
+  // native output via the router's unwrapWETH9(amountMinimum).
+  const data = encodeExactInputSwap({ path: best.path, amountIn: amt, amountOutMinimum: minOut, nativeOut, deadline });
 
   // Balances and allowance only when the caller says who is asking.
   let account = null;

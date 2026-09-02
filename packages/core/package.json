@@ -10,7 +10,8 @@
     "./simulate": "./src/simulate.ts",
     "./receipt": "./src/receipt.ts",
     "./stealth": "./src/stealth.ts",
-    "./liquidity": "./src/liquidity.ts"
+    "./liquidity": "./src/liquidity.ts",
+    "./router": "./src/router.ts"
   },
   "dependencies": {
     "viem": "^2.21.0",

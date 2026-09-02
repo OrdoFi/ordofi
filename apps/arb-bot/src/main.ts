@@ -9,6 +9,7 @@ import {
 } from "viem";
 import { join } from "node:path";
 import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
+import { ROUTER, encodeExactInputSwap } from "@ordofi/core/router";
 import { Telemetry, edgeBps, wethReturned } from "./telemetry.js";
 
 /**
@@ -56,9 +57,6 @@ const WETH: Hex = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
 const USDG: Hex = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
 const V3_FACTORY: Hex = "0x1f7d7550b1b028f7571e69a784071f0205fd2efa";
 const QUOTER_V2: Hex = "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7";
-const ROUTER: Hex = "0xcaf681a66d020601342297493863e78c959e5cb2"; // SwapRouter02
-const MSG_SENDER: Hex = "0x0000000000000000000000000000000000000001";
-const ADDRESS_THIS: Hex = "0x0000000000000000000000000000000000000002";
 const ZERO = "0x0000000000000000000000000000000000000000";
 const FEES = [100, 500, 3000, 10000];
 
@@ -107,22 +105,6 @@ const QUOTER_ABI = [
     ],
   },
 ] as const;
-const ROUTER_ABI = [
-  {
-    type: "function", name: "multicall", stateMutability: "payable",
-    inputs: [{ type: "uint256" }, { type: "bytes[]" }], outputs: [{ type: "bytes[]" }],
-  },
-  {
-    type: "function", name: "exactInput", stateMutability: "payable",
-    inputs: [{ type: "tuple", name: "params", components: [
-      { type: "bytes", name: "path" }, { type: "address", name: "recipient" },
-      { type: "uint256", name: "amountIn" }, { type: "uint256", name: "amountOutMinimum" },
-    ] }],
-    outputs: [{ type: "uint256" }],
-  },
-  { type: "function", name: "unwrapWETH9", stateMutability: "payable", inputs: [{ type: "uint256" }, { type: "address" }], outputs: [] },
-] as const;
-
 async function ethCall(to: string, data: Hex): Promise<Hex> {
   return (await rpcFetch("eth_call", [{ to, data }, "latest"])) as Hex;
 }
@@ -258,15 +240,11 @@ function sizeLadder(budget: bigint): bigint[] {
 
 // --- execution ---------------------------------------------------------------
 
-function buildTx(c: Cycle, amountIn: bigint, minReturn: bigint) {
+/** WETH -> ... -> WETH round trip, paid back to this wallet as native ETH. */
+function buildTx(c: Cycle, amountIn: bigint, minReturn: bigint): Hex {
   const path = encodePath(c.tokens, c.fees);
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 60);
-  const swap = encodeFunctionData({
-    abi: ROUTER_ABI, functionName: "exactInput",
-    args: [{ path, recipient: ADDRESS_THIS, amountIn, amountOutMinimum: minReturn }],
-  });
-  const unwrap = encodeFunctionData({ abi: ROUTER_ABI, functionName: "unwrapWETH9", args: [minReturn, MSG_SENDER] });
-  return encodeFunctionData({ abi: ROUTER_ABI, functionName: "multicall", args: [deadline, [swap, unwrap]] });
+  return encodeExactInputSwap({ path, amountIn, amountOutMinimum: minReturn, nativeOut: true, deadline });
 }
 
 let busy = false; // one scan/fire at a time — quotes are many and the RPC is shared
