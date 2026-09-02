@@ -55,7 +55,7 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
   .status .v.ok { color:var(--ok); } .status .v.bad { color:var(--bad); }
   .status.protocol { grid-template-columns:repeat(5,minmax(0,1fr)); background:var(--card); }
   .status.protocol .v { font-size:22px; color:var(--accent); }
-  .status.protocol .v small { display:block; margin:4px 0 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .status.protocol .v small { display:block; margin:5px 0 0; line-height:1.5; white-space:normal; }
   section { padding:64px 0; border-bottom:1px solid var(--border); }
   h2 { font-family:var(--display); font-weight:500; font-size:30px; letter-spacing:-.015em; margin-bottom:26px; }
   .grid3 { display:grid; grid-template-columns:repeat(3,1fr); border:1px solid var(--border); }
@@ -186,13 +186,13 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
     try {
       const h = (await (await fetch("${app}/api/stats")).json()).headline;
       if (!h) return;
-      const usd = (n) => "$" + Number(n).toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
+      const usd = (n) => "$" + Number(n).toLocaleString(undefined, n >= 1000 ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const eth = (n) => Number(n).toLocaleString(undefined, { maximumSignificantDigits: 4 }) + " ETH";
       const int = (n) => Number(n).toLocaleString();
       const money = (usdV, ethV) => (usdV == null ? eth(ethV) : usd(usdV));
       $("st-vol").innerHTML = usd(h.protectedVolumeUsd) + "<small>" + usd(h.protectedVolume24hUsd) + " in 24h</small>";
-      $("st-tx").innerHTML = int(h.transactions) + "<small>" + int(h.transactions24h) + " in 24h · simulated, private</small>";
-      $("st-mev").innerHTML = money(h.mevCapturedUsd, h.mevCapturedEth) + "<small>" + eth(h.mevCapturedEth) + " settled on-chain</small>";
+      $("st-tx").innerHTML = int(h.transactions) + "<small>" + int(h.transactions24h) + " in 24h · delivered privately</small>";
+      $("st-mev").innerHTML = money(h.mevCapturedUsd, h.mevCapturedEth) + "<small>" + eth(h.mevCapturedEth) + " settled <span style='white-space:nowrap'>on-chain</span></small>";
       $("st-reb").innerHTML = money(h.rebatesReturnedUsd, h.rebatesReturnedEth) + "<small>" + eth(h.rebatesReturnedEth) + " to users and apps</small>";
       $("st-srch").innerHTML = int(h.activeSearchers24h) + "<small>last 24h · " + int(h.searchersAllTime) + " all time</small>";
     } catch { /* cosmetic */ }

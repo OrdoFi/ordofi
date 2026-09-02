@@ -128,7 +128,7 @@ nav .wrap { display: flex; align-items: center; justify-content: space-between; 
 .stats.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .stats.five .stat { padding: 30px 24px; }
 .stats.five .stat .num { font-size: clamp(24px, 2.6vw, 34px); }
-.stat .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat .sub { font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--muted); margin-top: 6px; }
 
 /* ---------- Ticker ---------- */
 .ticker { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); overflow: hidden; white-space: nowrap; position: relative; background: var(--bg); }

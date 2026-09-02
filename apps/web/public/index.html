@@ -108,7 +108,7 @@
     </div>
     <div class="stats routed five" id="routed">
       <div class="stat"><div class="num" id="h-vol">—</div><div class="lbl">Protected volume</div><div class="sub" id="h-vol-sub">through rpc.ordofi.network</div></div>
-      <div class="stat"><div class="num" id="h-tx">—</div><div class="lbl">Transactions</div><div class="sub" id="h-tx-sub">simulated, delivered privately</div></div>
+      <div class="stat"><div class="num" id="h-tx">—</div><div class="lbl">Transactions</div><div class="sub" id="h-tx-sub">delivered privately</div></div>
       <div class="stat"><div class="num" id="h-mev">—</div><div class="lbl">MEV captured</div><div class="sub" id="h-mev-sub">settled on-chain</div></div>
       <div class="stat"><div class="num" id="h-reb">—</div><div class="lbl">Rebates returned</div><div class="sub" id="h-reb-sub">to users and apps</div></div>
       <div class="stat"><div class="num" id="h-srch">—</div><div class="lbl">Active searchers</div><div class="sub" id="h-srch-sub">last 24h on-chain</div></div>
@@ -326,15 +326,15 @@
     fetch('/api/stats').then(r => r.json()).then(d => {
       const h = d.headline; if (!h) return;
       const $ = id => document.getElementById(id);
-      const usd = n => '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
+      const usd = n => '$' + Number(n).toLocaleString(undefined, n >= 1000 ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const eth = n => Number(n).toLocaleString(undefined, { maximumSignificantDigits: 4 }) + ' ETH';
       const int = n => Number(n).toLocaleString();
       $('h-vol').textContent = usd(h.protectedVolumeUsd);
       $('h-vol-sub').textContent = usd(h.protectedVolume24hUsd) + ' in 24h' + (h.since ? ' · since ' + new Date(h.since).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '');
       $('h-tx').textContent = int(h.transactions);
-      $('h-tx-sub').textContent = int(h.transactions24h) + ' in 24h · revert-protected, private';
+      $('h-tx-sub').textContent = int(h.transactions24h) + ' in 24h · delivered privately';
       $('h-mev').textContent = h.mevCapturedUsd == null ? eth(h.mevCapturedEth) : usd(h.mevCapturedUsd);
-      $('h-mev-sub').textContent = eth(h.mevCapturedEth) + ' · ' + int(h.settlements) + (h.settlements === 1 ? ' settlement' : ' settlements') + ' on-chain';
+      $('h-mev-sub').innerHTML = eth(h.mevCapturedEth) + ' · ' + int(h.settlements) + (h.settlements === 1 ? ' settlement' : ' settlements') + ' <span style="white-space:nowrap">on-chain</span>';
       $('h-reb').textContent = h.rebatesReturnedUsd == null ? eth(h.rebatesReturnedEth) : usd(h.rebatesReturnedUsd);
       $('h-reb-sub').textContent = eth(h.rebatesReturnedEth) + ' to users and apps';
       $('h-srch').textContent = int(h.activeSearchers24h);
