@@ -88,6 +88,26 @@
     .honest b { color: var(--text); font-weight: 600; }
     h2.sec { font-size: 22px; margin: 34px 0 12px; letter-spacing: -0.01em; }
 
+    /* wallet picker */
+    .modal { position: fixed; inset: 0; background: rgba(25,24,23,.4); display: none; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 200; }
+    .modal.open { display: flex; }
+    .modal .sheet { background: var(--card); border: 1px solid var(--border); width: 440px; max-width: calc(100vw - 32px); overflow: hidden; }
+    .sheet .mh { padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+    .sheet .mh .x { cursor: pointer; color: var(--muted); }
+    .wrow { display: flex; align-items: center; gap: 12px; padding: 12px 18px; cursor: pointer; border-bottom: 1px solid var(--border); color: inherit; }
+    .wrow:last-of-type { border-bottom: none; }
+    .wrow:hover { background: var(--bg-elev); }
+    .wrow .wicon { width: 30px; height: 30px; flex: none; background: var(--bg-elev); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent-dim); overflow: hidden; }
+    .wrow .wicon img { width: 100%; height: 100%; object-fit: contain; }
+    .wrow .wmain { flex: 1; min-width: 0; }
+    .wrow .wname { font-weight: 600; font-size: 13.5px; }
+    .wrow .wsub { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+    .wrow .wgo { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+    .wrow:hover .wgo { color: var(--accent); }
+    .wnote { padding: 13px 18px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--muted); line-height: 1.6; background: var(--bg); }
+    .wnote b { color: var(--text-dim); font-weight: 600; }
+    .wempty { padding: 14px 18px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+
     @media (max-width: 1000px) { .cols { grid-template-columns: 1fr; } .how { grid-template-columns: 1fr 1fr; } .how div:nth-child(2) { border-right: none; } .how div:nth-child(-n+2) { border-bottom: 1px solid var(--border); } }
     @media (max-width: 640px) { .stealth h1 { font-size: 30px; } .how { grid-template-columns: 1fr; } .how div { border-right: none; border-bottom: 1px solid var(--border); } }
   </style>
@@ -181,6 +201,14 @@
     </div>
   </div>
 
+  <div class="modal" id="wmodal">
+    <div class="sheet">
+      <div class="mh">Connect a wallet<span class="x" id="wmodal-x">✕</span></div>
+      <div id="wlist"></div>
+      <div class="wnote"><b>Two steps.</b> Your wallet connects, then signs one free message. The signature derives your stealth keys here in the browser; it never authorises a transfer and nothing is stored anywhere.</div>
+    </div>
+  </div>
+
   <script type="module">
     import {
       ANNOUNCER_ABI, ERC5564_ANNOUNCER, ERC6538_REGISTRY, NATIVE_TOKEN, REGISTRY_ABI, SCHEME_ID,
@@ -263,14 +291,45 @@
       }
     }
 
-    async function unlock() {
+    const INSTALL = [
+      { name: "MetaMask", sub: "metamask.io", url: "https://metamask.io/download" },
+      { name: "Rabby", sub: "rabby.io", url: "https://rabby.io" },
+      { name: "Coinbase Wallet", sub: "coinbase.com/wallet", url: "https://www.coinbase.com/wallet/downloads" },
+    ];
+
+    function renderWallets() {
+      const found = wallets();
+      const el = $("wlist");
+      if (found.length) {
+        el.innerHTML = found.map((w, i) => `<div class="wrow" data-i="${i}">
+          <div class="wicon">${w.info.icon ? `<img src="${esc(w.info.icon)}" alt="" />` : esc(w.info.name.slice(0, 1))}</div>
+          <div class="wmain"><div class="wname">${esc(w.info.name)}</div><div class="wsub">detected</div></div>
+          <div class="wgo">connect ›</div></div>`).join("");
+        el.querySelectorAll(".wrow").forEach((r) => r.addEventListener("click", () => connectWith(wallets()[Number(r.dataset.i)])));
+      } else {
+        el.innerHTML = `<div class="wempty">No wallet detected in this browser. Install one, then reload this page.</div>` +
+          INSTALL.map((w) => `<a class="wrow" href="${w.url}" target="_blank" rel="noopener">
+            <div class="wicon">${esc(w.name.slice(0, 1))}</div>
+            <div class="wmain"><div class="wname">${esc(w.name)}</div><div class="wsub">${esc(w.sub)}</div></div>
+            <div class="wgo">install ›</div></a>`).join("");
+      }
+    }
+    const openPicker = () => { renderWallets(); $("wmodal").classList.add("open"); };
+    const closePicker = () => $("wmodal").classList.remove("open");
+
+    function unlock() {
+      $("gate-note").textContent = "Requires a wallet on Robinhood Chain.";
+      openPicker();
+    }
+
+    async function connectWith(entry) {
+      if (!entry) return;
+      closePicker();
       const btn = $("unlock");
       btn.disabled = true;
       try {
-        const list = wallets();
-        if (!list.length) { $("gate-note").innerHTML = 'No wallet found. <a href="https://metamask.io/download" target="_blank" rel="noopener" style="color:var(--accent)">Install one</a>, then reload.'; return; }
-        provider = list[0].provider;
-        $("gate-note").textContent = "Confirm the connection in your wallet…";
+        provider = entry.provider;
+        $("gate-note").textContent = `Confirm the connection in ${entry.info.name}…`;
         const [a] = await provider.request({ method: "eth_requestAccounts" });
         account = a;
         await ensureChain();
@@ -563,6 +622,9 @@
 
     // ---------- boot ----------
     $("unlock").addEventListener("click", unlock);
+    $("wmodal-x").addEventListener("click", closePicker);
+    $("wmodal").addEventListener("click", (e) => { if (e.target === $("wmodal")) closePicker(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePicker(); });
     $("publish").addEventListener("click", publish);
     $("send").addEventListener("click", send);
     $("to").addEventListener("change", resolveRecipient);
