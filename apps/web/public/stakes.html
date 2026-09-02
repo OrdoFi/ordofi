@@ -271,7 +271,8 @@
       // Stop clicks inside the detail from toggling the row.
       document.querySelectorAll("tr.detail").forEach((tr) => tr.addEventListener("click", (e) => e.stopPropagation()));
     }
-    async function requote(s) {
+    async function requote(s, extra) {
+      const signed = extra && typeof extra === "object" && extra.permitV ? extra : null; // an event object is not a permit
       const my = ++qSeq, q = $("d-quote"), go = $("d-go");
       quote = null; // whatever was quoted before is void; a failed re-quote leaves nothing to send
       if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
@@ -289,6 +290,7 @@
       // The server executes the deposit from this account before handing it out;
       // without the account there is no proof and no transaction.
       if (wallet.account) url += `&from=${wallet.account}`;
+      if (signed) url += "&" + new URLSearchParams(signed).toString();
       try {
         const p = await api(url);
         if (my !== qSeq) return;
@@ -301,7 +303,8 @@
         q.innerHTML = p.quote ? `<div class="kv"><span>Swapped</span><b>${num(formatUnits(p.quote.swapIn, asset === "eth" ? 18 : s.decimals, 6), 6)} ${asset === "eth" ? "ETH" : esc(s.symbol)} → ${num(formatUnits(p.quote.swapOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"}</b></div>
           <div class="kv"><span>Price impact</span><b class="${p.quote.priceImpactBps > 100 ? "dn" : ""}">${p.quote.priceImpactBps == null ? "—" : (p.quote.priceImpactBps / 100).toFixed(2) + "%"}</b></div>
           <div class="kv"><span>Protection</span><b>at least ${num(formatUnits(p.quote.minOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"} or it reverts · through rpc.ordofi.network</b></div>` : `<div class="kv"><span>Protection</span><b>no swap · deposited at the pool's ratio, the rest refunded</b></div>`;
-        if (wallet.account) { go.textContent = p.tx?.approve ? `Approve & deposit` : "Deposit & stake"; go.disabled = !p.tx; }
+        if (p.tx?.approve && p.permit?.supported) q.innerHTML += `<div class="kv"><span>Allowance</span><b>${esc(s.symbol)} allowed by signature — no approval transaction</b></div>`;
+        if (wallet.account) { go.textContent = p.tx?.approve ? (p.permit?.supported ? "Sign & deposit" : "Approve & deposit") : "Deposit & stake"; go.disabled = !p.tx; }
       } catch (e) { if (my === qSeq) { q.innerHTML = `<div class="kv"><span>Quote</span><b class="dn">${esc(e.message)}</b></div>`; if (wallet.account) go.disabled = true; } }
     }
     const res = (id, html, bad) => { const el = $(id); if (el) { el.innerHTML = html; el.className = "res" + (bad ? " bad" : ""); } };
@@ -310,9 +313,18 @@
       if (!quote?.tx) return;
       $("d-go").disabled = true;
       try {
-        if (quote.tx.approve) { res("d-res", "Approve in your wallet…"); await wallet.ensureAllowance(quote.tx.approve.token, quote.tx.approve.spender, quote.tx.approve.amount, (h) => res("d-res", `Approving ${txLink(h)}…`)); }
-        await requote(s);
+        let signed = null;
+        if (quote.tx.approve) {
+          const pm = quote.permit;
+          if (pm?.supported && pm.nonce != null) {
+            res("d-res", `Sign to allow ${esc(s.symbol)} — a signature, not a transaction…`);
+            try { signed = await wallet.signPermit(pm); } catch (e) { if (rejected(e)) throw e; signed = null; }
+          }
+          if (!signed) { res("d-res", "Approve in your wallet…"); await wallet.ensureAllowance(quote.tx.approve.token, quote.tx.approve.spender, quote.tx.approve.amount, (h) => res("d-res", `Approving ${txLink(h)}…`)); }
+        }
+        await requote(s, signed);
         if (!quote?.tx) throw new Error(quote?.guard?.reason ?? "deposit not verified");
+        if (signed && quote.tx.approve) throw new Error("the signature could not be used — try again, or approve instead");
         res("d-res", "Confirm the deposit in your wallet…");
         const r = await wallet.sendProven(quote, (h) => res("d-res", `Depositing & staking ${txLink(h)}…`));
         res("d-res", `Staked · ${txLink(r.hash)}`);

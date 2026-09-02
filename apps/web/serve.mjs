@@ -11,7 +11,7 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
-import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, LADDER_MANAGER } from "./pools.mjs";
+import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
 import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawPlan, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
@@ -715,10 +715,14 @@ async function handle(req, res) {
         mode: q.get("mode") === "scale" ? "scale" : "split",
         baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
         slippageBps: Math.max(0, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
+        owner: q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null,
+        permit: permitFromQuery(q),
       });
       else if (path === "/api/pools/plan-add") body = await planAdd({
         id: big("id"), shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "spot",
         baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
+        owner: q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null,
+        permit: permitFromQuery(q),
       });
       else if (path === "/api/pools/positions") body = await positionsOf(store, addr("owner"));
       else if (path === "/api/pools/collect") body = collectCalldata(big("id"));
@@ -731,6 +735,7 @@ async function handle(req, res) {
         vault: addr("vault"), mode: q.get("mode") === "both" ? "both" : "one", asset: ["eth", "weth", "token"].includes(q.get("asset")) ? q.get("asset") : "eth",
         amount: big("amount"), tokenAmount: big("tokenAmount"), slippageBps: Math.max(10, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
         from: q.get("from") ? addr("from") : null,
+        permit: permitFromQuery(q),
       });
       else if (path === "/api/pools/stake-create") body = await stakeCreatePlan(addr("token"));
       else if (path === "/api/pools/stake-unstake") body = farmWithdrawCalldata(addr("farm"), big("shares"));

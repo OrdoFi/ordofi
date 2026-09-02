@@ -4,7 +4,7 @@ import { ethUsd } from "@ordofi/core/pricing";
 import { proveDelivery, proofToJson } from "@ordofi/core/guard";
 import { amountsForLiquidity, tickToSqrtPriceX96 } from "@ordofi/core/liquidity";
 import { WETH, USDG, poolCache, quotePath, tradeTokens } from "./trade.mjs";
-import { poolState, poolsForToken } from "./pools.mjs";
+import { poolState, poolsForToken, permitInfo } from "./pools.mjs";
 
 /**
  * Stakes: pooled always-in-range liquidity for a token's ETH pool, paid in
@@ -47,11 +47,14 @@ const FARM_ABI = [
   { type: "function", name: "getReward", stateMutability: "nonpayable", inputs: [], outputs: [] },
   { type: "function", name: "exit", stateMutability: "nonpayable", inputs: [], outputs: [] },
 ];
+const ZAP_PERMIT = { name: "pm", type: "tuple", components: [{ name: "value", type: "uint256" }, { name: "deadline", type: "uint256" }, { name: "v", type: "uint8" }, { name: "r", type: "bytes32" }, { name: "s", type: "bytes32" }] };
 const ZAP_ABI = [
   { type: "function", name: "zapETH", stateMutability: "payable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "zapWETH", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "zapToken", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "zapBoth", stateMutability: "payable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "zapTokenWithPermit", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, ZAP_PERMIT], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "zapBothWithPermit", stateMutability: "payable", inputs: [{ type: "address" }, { type: "uint256" }, ZAP_PERMIT], outputs: [{ type: "uint256" }] },
 ];
 const NPM_ABI = [{ type: "function", name: "positions", stateMutability: "view", inputs: [{ type: "uint256" }], outputs: [
   { type: "uint96" }, { type: "address" }, { type: "address" }, { type: "address" }, { type: "uint24" }, { type: "int24" }, { type: "int24" }, { type: "uint128" }, { type: "uint256" }, { type: "uint256" }, { type: "uint128" }, { type: "uint128" },
@@ -67,7 +70,12 @@ async function cached(key, ttl, fn) { const h = cache.get(key); if (h && Date.no
 
 let STORE = null;
 export function setStakesStore(store) { STORE = store; }
-let ZAP = null;
+/**
+ * The zap is stateless and serves every vault, so it can move independently
+ * of the factory: v2 adds the permit entry points. The factory's own zap is
+ * the fallback when no address is configured.
+ */
+let ZAP = process.env.ORDO_STAKE_ZAP ? getAddress(process.env.ORDO_STAKE_ZAP) : "0x8a424d43dc4D44e80b93A31cB955dC86490Ba8ac";
 async function zapAddress() { if (!ZAP) ZAP = getAddress(await call(STAKE_FACTORY, FACTORY_ABI, "zap")); return ZAP; }
 
 /** Live state of one stake: TVL, rate, stream, plus the caller's share if `owner` is given. */
@@ -142,7 +150,7 @@ export async function stakeView(vault, owner) {
  * "both": ETH and token together, no swap. Returns the zap calldata, the
  * quote for the swapped half, price impact and what protects the user.
  */
-export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 0n, tokenAmount = 0n, slippageBps = 100, from = null }) {
+export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 0n, tokenAmount = 0n, slippageBps = 100, from = null, permit = null }) {
   const s = await stakeView(vault);
   const zap = await zapAddress();
   const token = s.token;
@@ -150,9 +158,13 @@ export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 
   let quote = null, minOut = 0n, data, value = 0n, approve = null;
   if (mode === "both") {
     if (amount === 0n && tokenAmount === 0n) throw new Error("nothing to deposit");
-    data = encodeFunctionData({ abi: ZAP_ABI, functionName: "zapBoth", args: [getAddress(vault), tokenAmount] });
     value = amount;
     if (tokenAmount > 0n) approve = { token: getAddress(token), spender: zap, amount: tokenAmount.toString() };
+    const signed = approve && permit ? [{ value: permit.value, deadline: permit.deadline, v: permit.v, r: permit.r, s: permit.s }] : null;
+    data = signed
+      ? encodeFunctionData({ abi: ZAP_ABI, functionName: "zapBothWithPermit", args: [getAddress(vault), tokenAmount, signed[0]] })
+      : encodeFunctionData({ abi: ZAP_ABI, functionName: "zapBoth", args: [getAddress(vault), tokenAmount] });
+    if (signed) approve = null;
   } else {
     if (amount === 0n) throw new Error("nothing to deposit");
     const half = amount / 2n;
@@ -165,8 +177,11 @@ export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 
     minOut = (q.amountOut * BigInt(10_000 - slippageBps)) / 10_000n;
     quote = { swapIn: half.toString(), swapOut: q.amountOut.toString(), minOut: minOut.toString(), priceImpactBps: impactBps };
     if (tokenIsIn) {
-      data = encodeFunctionData({ abi: ZAP_ABI, functionName: "zapToken", args: [getAddress(vault), amount, minOut] });
       approve = { token: getAddress(token), spender: zap, amount: amount.toString() };
+      if (permit) {
+        data = encodeFunctionData({ abi: ZAP_ABI, functionName: "zapTokenWithPermit", args: [getAddress(vault), amount, minOut, { value: permit.value, deadline: permit.deadline, v: permit.v, r: permit.r, s: permit.s }] });
+        approve = null;
+      } else data = encodeFunctionData({ abi: ZAP_ABI, functionName: "zapToken", args: [getAddress(vault), amount, minOut] });
     } else if (asset === "weth") {
       data = encodeFunctionData({ abi: ZAP_ABI, functionName: "zapWETH", args: [getAddress(vault), amount, minOut] });
       approve = { token: getAddress(WETH), spender: zap, amount: amount.toString() };
@@ -183,13 +198,18 @@ export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 
     tx: { to: zap, data, value },
     approval: approve ? { token: approve.token, spender: zap, amount: BigInt(approve.amount) } : null,
     expect: [{ asset: getAddress(s.farm), min: 1n }],
-    pay: [...(value > 0n ? [{ asset: "eth", max: value }] : []), ...(approve ? [{ asset: approve.token, max: BigInt(approve.amount) }] : [])],
+    // The token side is capped whether it arrives by approve or by permit.
+    pay: [...(value > 0n ? [{ asset: "eth", max: value }] : []), ...(approve ? [{ asset: approve.token, max: BigInt(approve.amount) }] : (mode === "both" ? tokenAmount : tokenIsIn ? amount : 0n) > 0n ? [{ asset: getAddress(token), max: mode === "both" ? tokenAmount : amount }] : [])],
     mustNotRetain: [{ holder: zap, asset: "eth" }, { holder: zap, asset: getAddress(WETH) }, { holder: zap, asset: getAddress(token) }],
   });
+  // Whether the token side could be granted by signature instead of an approve transaction.
+  const tokenSide = mode === "both" ? tokenAmount : tokenIsIn ? amount : 0n;
+  const pinfo = tokenSide > 0n ? await permitInfo(token, from).catch(() => ({ supported: false })) : null;
   return {
     vault: s.vault, farm: s.farm, symbol: s.symbol, decimals: s.decimals, mode, asset, quote, slippageBps,
     ...check,
     tx: check.guard.ok ? { to: zap, data, value: value.toString(), approve } : null,
+    permit: pinfo ? { ...pinfo, spender: zap, value: tokenSide.toString(), deadline: Math.floor(Date.now() / 1000) + 900, applied: !!permit && !approve } : null,
   };
 }
 

@@ -244,17 +244,19 @@ async function addDialog(l, opts) {
     if (side !== "base") $("ld-bal-q").textContent = `balance ${num(bal.quote, 6)}`;
     if ($("ld-base").value || $("ld-quote").value) replan();
   });
-  async function replan() {
+  async function replan(extra) {
+    const signed = extra && typeof extra === "object" && extra.permitV ? extra : null;
     const my = ++seq;
     const ba = parseUnits($("ld-base").value, l.base.decimals) ?? 0n, qa = parseUnits($("ld-quote").value, l.quote.decimals) ?? 0n;
     if (ba === 0n && qa === 0n) { plan = null; $("ld-lands").textContent = "Enter an amount."; $("ld-go").disabled = true; return; }
     try {
-      const p = await api(`/api/pools/plan-add?id=${l.id}&shape=${shape}&baseAmount=${ba}&quoteAmount=${qa}`);
+      const q = new URLSearchParams({ id: l.id, shape, baseAmount: ba.toString(), quoteAmount: qa.toString(), ...(wallet.account ? { owner: wallet.account } : {}), ...(signed ?? {}) });
+      const p = await api(`/api/pools/plan-add?${q}`);
       if (my !== seq) return;
       plan = p;
       if (!p.tx) { $("ld-lands").textContent = "Nothing lands: this range needs the other token."; $("ld-go").disabled = true; return; }
       const mx = Math.max(...p.rungs.map((r) => r.weight));
-      $("ld-lands").innerHTML = `<canvas id="ld-cv" width="600" height="96"></canvas>fills <b>${p.filled}</b> of ${p.bins} bins · uses ${num(formatUnits(p.baseTotal, l.base.decimals), 6)} ${esc(l.base.symbol)} + ${num(formatUnits(p.quoteTotal, l.quote.decimals), 6)} ${esc(l.quote.symbol)}${p.tx.approve ? " · needs an approval first" : ""}`;
+      $("ld-lands").innerHTML = `<canvas id="ld-cv" width="600" height="96"></canvas>fills <b>${p.filled}</b> of ${p.bins} bins · uses ${num(formatUnits(p.baseTotal, l.base.decimals), 6)} ${esc(l.base.symbol)} + ${num(formatUnits(p.quoteTotal, l.quote.decimals), 6)} ${esc(l.quote.symbol)}${p.tx.approve ? (p.tx.permit?.supported ? " · allowed by signature, no approval transaction" : " · needs an approval first") : ""}`;
       const cv = $("ld-cv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
       p.rungs.slice().sort((x, y) => x.priceLower - y.priceLower).forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.5)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
       $("ld-go").disabled = false;
@@ -265,8 +267,18 @@ async function addDialog(l, opts) {
     $("ld-go").disabled = true;
     const r = $("ld-res");
     try {
-      if (plan.tx.approve) { r.textContent = `Approve ${esc(l.base.symbol)} in your wallet…`; await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => { r.innerHTML = `Approving ${txLink(h)}…`; }); }
-      await replan();
+      let signed = null;
+      if (plan.tx.approve) {
+        const pm = plan.tx.permit;
+        if (pm?.supported && pm.nonce != null) {
+          r.textContent = `Sign to allow ${esc(l.base.symbol)} — a signature, not a transaction…`;
+          try { signed = await wallet.signPermit(pm); } catch (e) { if (rejected(e)) throw e; signed = null; }
+        }
+        if (!signed) { r.textContent = `Approve ${esc(l.base.symbol)} in your wallet…`; await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => { r.innerHTML = `Approving ${txLink(h)}…`; }); }
+      }
+      await replan(signed);
+      if (!plan?.tx) throw new Error("the plan changed — check the amounts and try again");
+      if (signed && plan.tx.approve) throw new Error("the signature could not be used — try again, or approve instead");
       r.textContent = "Confirm in your wallet…";
       const rec = await wallet.send(plan.tx, (h) => { r.innerHTML = `Adding ${txLink(h)}…`; });
       r.innerHTML = `Added · ${txLink(rec.hash)}`;

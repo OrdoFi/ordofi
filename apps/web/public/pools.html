@@ -532,15 +532,16 @@
 
     // ---- planner
     let planSeq = 0;
-    async function replan() {
+    async function replan(extra) {
       if (!state) return;
+      const signed = extra && typeof extra === "object" && extra.permitV ? extra : null; // an event object is not a permit
       const seq = ++planSeq;
       const baseAmt = parseUnits($("amt-base").value, state.base.decimals), quoteAmt = parseUnits($("amt-quote").value, state.quote.decimals);
       const go = $("go");
       if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
       if ((baseAmt ?? 0n) === 0n && (quoteAmt ?? 0n) === 0n) { plan = null; $("preview").textContent = "Set a range and an amount to see the ladder."; if (wallet.account) { go.textContent = "Build position"; go.disabled = true; } return; }
       try {
-        const q = new URLSearchParams({ pool, base: token.address, minPrice: rangeLo(), maxPrice: rangeHi(), shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps });
+        const q = new URLSearchParams({ pool, base: token.address, minPrice: rangeLo(), maxPrice: rangeHi(), shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps, ...(wallet.account ? { owner: wallet.account } : {}), ...(signed ?? {}) });
         const p = await api(`/api/pools/plan?${q}`);
         if (seq !== planSeq) return;
         plan = p;
@@ -549,7 +550,7 @@
         const usdTot = Number(bt) * (state.priceUsd ?? 0) + Number(qt) * (state.quote.usdPerToken ?? 0);
         $("preview").innerHTML = `<canvas id="pv" width="600" height="112"></canvas>
           <b>${p.rungs.length}</b> positions · <b>${fmtDisp(disp(p.minPrice))}</b> – <b>${fmtDisp(disp(p.maxPrice))}</b> ${mode === "mc" ? "market cap" : "USD"}<br/>
-          uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}${p.tx.approve ? `<br/>needs a one-time ${esc(token.symbol)} approval first` : ""}`;
+          uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}${p.tx.approve ? (p.tx.permit?.supported ? `<br/>${esc(token.symbol)} is allowed by signature — no approval transaction` : `<br/>needs a one-time ${esc(token.symbol)} approval first`) : p.tx.permit?.applied ? `<br/>${esc(token.symbol)} allowed by your signature` : ""}`;
         const cv = $("pv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height, mx = Math.max(...p.rungs.map((r) => r.weight));
         p.rungs.slice().sort((x, y) => x.priceLower - y.priceLower).forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
         if (wallet.account) { go.textContent = "Build position"; go.disabled = false; }
@@ -565,10 +566,20 @@
     }
     async function buildNow() {
       try {
-        if (plan.tx.approve) { setResult(`Approve ${esc(token.symbol)} in your wallet…`); await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => setResult(`Approving ${txLink(h)}…`)); }
-        await replan(); // the plan was made for a price; take a fresh one right before signing
+        let signed = null;
+        if (plan.tx.approve) {
+          const pm = plan.tx.permit;
+          if (pm?.supported && pm.nonce != null) {
+            // The token allows an allowance by signature: one signature, no approval transaction.
+            setResult(`Sign to allow ${esc(token.symbol)} — a signature, not a transaction…`);
+            try { signed = await wallet.signPermit(pm); } catch (e) { if (rejected(e)) throw e; signed = null; }
+          }
+          if (!signed) { setResult(`Approve ${esc(token.symbol)} in your wallet…`); await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => setResult(`Approving ${txLink(h)}…`)); }
+        }
+        await replan(signed); // the plan was made for a price; take a fresh one right before signing, carrying the permit
         $("go").disabled = true; // replan re-enables; stay locked until the block
         if (!plan?.tx) throw new Error("the plan changed while you were signing — check the amounts and try again");
+        if (signed && plan.tx.approve) throw new Error("the signature could not be used — try again, or approve instead");
         setResult(`Confirm in your wallet…`);
         const rec = await wallet.send(plan.tx, (h) => setResult(`Building ${txLink(h)} — waiting for the block…`));
         setResult(`Built ${plan.rungs.length} positions · ${txLink(rec.hash)}`);

@@ -242,6 +242,33 @@ class Wallet {
   }
 
   /**
+   * An EIP-2612 permit: the allowance a token approval would grant, signed
+   * instead of sent, and consumed inside the deposit transaction itself. Takes
+   * the `permit` block a plan returns (token, name, version, chainId, nonce,
+   * spender, value, deadline) and gives back the fields the calldata needs.
+   * Nothing moves on signing; the signature is only good for `spender`, for
+   * `value`, until `deadline`.
+   */
+  async signPermit(p) {
+    if (!this.account) throw new Error("connect a wallet first");
+    if (!p?.supported || p.nonce == null) throw new Error("this token cannot be approved by signature");
+    checkedAddress(p.token, "the token"); checkedAddress(p.spender, "the spender");
+    const typed = {
+      types: {
+        EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }],
+        Permit: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }, { name: "value", type: "uint256" }, { name: "nonce", type: "uint256" }, { name: "deadline", type: "uint256" }],
+      },
+      primaryType: "Permit",
+      domain: { name: p.name, version: p.version ?? "1", chainId: Number(p.chainId ?? this.chain.id), verifyingContract: p.token },
+      message: { owner: this.account, spender: p.spender, value: String(p.value), nonce: String(p.nonce), deadline: String(p.deadline) },
+    };
+    const sig = await this.provider.request({ method: "eth_signTypedData_v4", params: [this.account, JSON.stringify(typed)] });
+    if (!/^0x[0-9a-fA-F]{130}$/.test(sig)) throw new Error("the wallet returned an unusable signature");
+    let v = parseInt(sig.slice(130, 132), 16); if (v < 27) v += 27;
+    return { permitValue: String(p.value), permitDeadline: String(p.deadline), permitV: String(v), permitR: "0x" + sig.slice(2, 66), permitS: "0x" + sig.slice(66, 130) };
+  }
+
+  /**
    * ERC-20 allowance check + approve if short. Approves exactly what this
    * action needs: an unlimited allowance turns any bug in the spender into a
    * claim on the whole balance, and one more click is a fair price for not

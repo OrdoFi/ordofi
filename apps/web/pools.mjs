@@ -26,9 +26,10 @@ import { CHAIN, USDG, WETH, bestPool, poolCache, tradeCandles, tradeMarkets, tra
  * the contract will mint, and it reads back what a wallet already holds.
  */
 
-export const LADDER_MANAGER = process.env.ORDO_LADDER_ADDRESS ?? "0x01A4227345B017aDfffF4799226179A4ADe3a2ad";
+/** v3: the v2 manager plus EIP-2612 permit entry points. */
+export const LADDER_MANAGER = process.env.ORDO_LADDER_ADDRESS ?? "0xf9b15283AcbDd693d39d23AccDA7213d8d46a9E2";
 /** Block the manager was deployed in; event scans never look further back. */
-const LADDER_DEPLOY_BLOCK = Number(process.env.ORDO_LADDER_BLOCK ?? 52_536_362);
+const LADDER_DEPLOY_BLOCK = Number(process.env.ORDO_LADDER_BLOCK ?? 52_895_364);
 const NPM = "0x73991a25c818bf1f1128deaab1492d45638de0d3";
 const NATIVE = "eth";
 export const SHAPES = ["spot", "curve", "bidask"];
@@ -45,6 +46,10 @@ const ERC20_ABI = [
   { type: "function", name: "totalSupply", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
 ];
+const PERMIT_TUPLE = { name: "permit", type: "tuple", components: [
+  { name: "token", type: "address" }, { name: "value", type: "uint256" }, { name: "deadline", type: "uint256" },
+  { name: "v", type: "uint8" }, { name: "r", type: "bytes32" }, { name: "s", type: "bytes32" },
+] };
 const RUNG_TUPLE = { name: "rungs", type: "tuple[]", components: [
   { name: "tickLower", type: "int24" }, { name: "tickUpper", type: "int24" },
   { name: "amount0", type: "uint256" }, { name: "amount1", type: "uint256" },
@@ -59,6 +64,16 @@ export const LADDER_ABI = [
   {
     type: "function", name: "addLiquidity", stateMutability: "payable",
     inputs: [{ name: "ladderId", type: "uint256" }, RUNG_TUPLE, { name: "deadline", type: "uint256" }],
+    outputs: [{ type: "uint256" }, { type: "uint256" }],
+  },
+  {
+    type: "function", name: "openLadderWithPermit", stateMutability: "payable",
+    inputs: [{ name: "pool", type: "address" }, RUNG_TUPLE, { name: "shape", type: "uint8" }, { name: "minTick", type: "int24" }, { name: "maxTick", type: "int24" }, { name: "deadline", type: "uint256" }, PERMIT_TUPLE],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function", name: "addLiquidityWithPermit", stateMutability: "payable",
+    inputs: [{ name: "ladderId", type: "uint256" }, RUNG_TUPLE, { name: "deadline", type: "uint256" }, PERMIT_TUPLE],
     outputs: [{ type: "uint256" }, { type: "uint256" }],
   },
   { type: "function", name: "collect", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
@@ -454,7 +469,7 @@ export async function poolDepth(pool, { spanTicks = 3000, buckets = 60 } = {}) {
  * units, as shown on the chart. Amounts are raw units of the base and quote
  * tokens the user is willing to spend.
  */
-export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bidask", bins = 40, baseAmount = 0n, quoteAmount = 0n, slippageBps = 100, mode = "split" }) {
+export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bidask", bins = 40, baseAmount = 0n, quoteAmount = 0n, slippageBps = 100, mode = "split", owner = null, permit = null }) {
   const st = await poolState(pool, base);
   const sc = 10 ** (st.base.decimals - st.quote.decimals);
   // Back to raw token1/token0 ticks. For an inverted pool a higher quote price is a lower tick.
@@ -487,9 +502,9 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
   const band = Math.max(st.tickSpacing, 100);
   const deadline = Math.floor(Date.now() / 1000) + 900;
   const rungs = plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: r.amount0Min ?? 0n, amount1Min: r.amount1Min ?? 0n }));
-  const data = rungs.length
-    ? encodeFunctionData({ abi: LADDER_ABI, functionName: "openLadder", args: [getAddress(st.pool), rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline)] })
-    : null;
+  const build = (signed) => signed
+    ? encodeFunctionData({ abi: LADDER_ABI, functionName: "openLadderWithPermit", args: [getAddress(st.pool), rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline), signed] })
+    : encodeFunctionData({ abi: LADDER_ABI, functionName: "openLadder", args: [getAddress(st.pool), rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline)] });
   const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
   return {
     pool: st.pool, tick: st.tick, price: st.price, priceUsd: st.priceUsd,
@@ -501,20 +516,69 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
     baseTotal: (st.base.isToken0 ? plan.total0 : plan.total1).toString(),
     quoteTotal: (st.base.isToken0 ? plan.total1 : plan.total0).toString(),
     rungs: plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight, side: r.side ?? (r.amount0 > 0n && r.amount1 > 0n ? "both" : r.amount0 > 0n ? "token0" : "token1") })),
-    tx: data ? fundingFor(st, plan.total0, plan.total1, data, deadline) : null,
+    tx: rungs.length ? await fundingFor(st, plan.total0, plan.total1, build, deadline, owner, permit) : null,
   };
 }
 
-/** How a deposit is paid: the WETH side as native ETH, anything else by allowance. */
-function fundingFor(st, total0, total1, data, deadline) {
+// ---------------------------------------------------------------- permit
+
+const PERMIT_ABI = [
+  { type: "function", name: "DOMAIN_SEPARATOR", stateMutability: "view", inputs: [], outputs: [{ type: "bytes32" }] },
+  { type: "function", name: "nonces", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "name", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
+  { type: "function", name: "version", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
+];
+const permitSupport = new Map(); // token → { supported, name, version } (never changes for a token)
+
+/**
+ * Whether a token can grant an allowance by signature (EIP-2612), and the
+ * EIP-712 domain to sign it under. Wallets sign the domain the token
+ * declares, so the name is read from the token and the version defaults to
+ * "1" when the token exposes none — the OpenZeppelin convention the Robinhood
+ * stock tokens, USDG and most launchpad tokens follow.
+ */
+export async function permitInfo(token, owner) {
+  token = lower(token);
+  let sup = permitSupport.get(token);
+  if (!sup) {
+    const [ds, name, version] = await Promise.all([
+      call(token, PERMIT_ABI, "DOMAIN_SEPARATOR").catch(() => null),
+      call(token, PERMIT_ABI, "name").catch(() => null),
+      call(token, PERMIT_ABI, "version").catch(() => "1"),
+    ]);
+    // `nonces` must answer too, or a wallet cannot build the message.
+    const nonceOk = ds != null && (await call(token, PERMIT_ABI, "nonces", ["0x0000000000000000000000000000000000000001"]).then(() => true).catch(() => false));
+    sup = { supported: ds != null && name != null && nonceOk, name, version: version || "1", domainSeparator: ds };
+    permitSupport.set(token, sup);
+  }
+  if (!sup.supported) return { supported: false };
+  const nonce = owner ? await call(token, PERMIT_ABI, "nonces", [getAddress(owner)]).catch(() => null) : null;
+  return { supported: true, token: getAddress(token), name: sup.name, version: sup.version, chainId: CHAIN.id, nonce: nonce == null ? null : nonce.toString() };
+}
+
+/** A signed permit from the query string, or null when none was provided. */
+export function permitFromQuery(q) {
+  const v = q.get("permitV"), r = q.get("permitR"), s = q.get("permitS"), value = q.get("permitValue"), deadline = q.get("permitDeadline");
+  if (!v || !r || !s || !value || !deadline) return null;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(r) || !/^0x[0-9a-fA-F]{64}$/.test(s) || !/^\d+$/.test(value) || !/^\d+$/.test(deadline) || !/^\d+$/.test(v)) throw new Error("bad permit");
+  return { value: BigInt(value), deadline: BigInt(deadline), v: Number(v), r, s };
+}
+
+/** How a deposit is paid: the WETH side as native ETH, anything else by allowance — or by permit when the caller signed one. */
+async function fundingFor(st, total0, total1, build, deadline, owner, permit) {
   const wethIsToken0 = st.token0 === WETH;
   const wethNeeded = st.token0 === WETH ? total0 : st.token1 === WETH ? total1 : 0n;
   const other = st.token0 === WETH ? st.token1 : st.token0;
   const otherNeeded = st.token0 === WETH ? total1 : total0;
+  const needsToken = otherNeeded > 0n;
+  const info = needsToken ? await permitInfo(other, owner).catch(() => ({ supported: false })) : { supported: false };
+  const signed = needsToken && permit && info.supported ? { token: getAddress(other), value: permit.value, deadline: permit.deadline, v: permit.v, r: permit.r, s: permit.s } : null;
   return {
-    to: getAddress(LADDER_MANAGER), data,
+    to: getAddress(LADDER_MANAGER), data: build(signed),
     value: wethNeeded.toString(),
-    approve: otherNeeded > 0n ? { token: getAddress(other), amount: otherNeeded.toString(), spender: getAddress(LADDER_MANAGER) } : null,
+    // With a signed permit no approve transaction is needed; the signature rides in the calldata.
+    approve: needsToken && !signed ? { token: getAddress(other), amount: otherNeeded.toString(), spender: getAddress(LADDER_MANAGER) } : null,
+    permit: needsToken ? { ...info, spender: getAddress(LADDER_MANAGER), value: otherNeeded.toString(), deadline, applied: !!signed } : null,
     wethIsToken0, deadline,
   };
 }
@@ -524,7 +588,7 @@ function fundingFor(st, total0, total1, data, deadline) {
  * the contract deepens each position rather than minting new ones — and the
  * shape is whatever the user picks for the amount being added.
  */
-export async function planAdd({ id, shape = "spot", baseAmount = 0n, quoteAmount = 0n }) {
+export async function planAdd({ id, shape = "spot", baseAmount = 0n, quoteAmount = 0n, owner = null, permit = null }) {
   const l = await call(LADDER_MANAGER, LADDER_ABI, "ladder", [BigInt(id)]);
   if (l.closedAt !== 0n) throw new Error("ladder is closed");
   const st = await poolState(l.pool, await baseOf(l.pool));
@@ -535,7 +599,9 @@ export async function planAdd({ id, shape = "spot", baseAmount = 0n, quoteAmount
   const total0 = rs.reduce((n, r) => n + r.amount0, 0n), total1 = rs.reduce((n, r) => n + r.amount1, 0n);
   const deadline = Math.floor(Date.now() / 1000) + 900;
   const rungs = rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: 0n, amount1Min: 0n }));
-  const data = rungs.length ? encodeFunctionData({ abi: LADDER_ABI, functionName: "addLiquidity", args: [BigInt(id), rungs, BigInt(deadline)] }) : null;
+  const build = (signed) => signed
+    ? encodeFunctionData({ abi: LADDER_ABI, functionName: "addLiquidityWithPermit", args: [BigInt(id), rungs, BigInt(deadline), signed] })
+    : encodeFunctionData({ abi: LADDER_ABI, functionName: "addLiquidity", args: [BigInt(id), rungs, BigInt(deadline)] });
   const sc = 10 ** (st.base.decimals - st.quote.decimals);
   const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
   return {
@@ -544,7 +610,7 @@ export async function planAdd({ id, shape = "spot", baseAmount = 0n, quoteAmount
     total0: total0.toString(), total1: total1.toString(),
     baseTotal: (st.base.isToken0 ? total0 : total1).toString(), quoteTotal: (st.base.isToken0 ? total1 : total0).toString(),
     rungs: rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight, side: r.side })),
-    tx: data ? fundingFor(st, total0, total1, data, deadline) : null,
+    tx: rungs.length ? await fundingFor(st, total0, total1, build, deadline, owner, permit) : null,
   };
 }
 
