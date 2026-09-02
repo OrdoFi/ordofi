@@ -30,12 +30,12 @@ export const CSS = `
 .lg-h b{font-family:var(--display);font-size:15px;letter-spacing:.02em}
 .lg-h small{color:var(--muted);font-family:var(--mono);font-size:11px}
 .lg-h a{color:var(--accent);font-size:12.5px;margin-left:auto;text-decoration:none}
-.lg-h .closeall{font:inherit;font-size:12px;padding:7px 14px;border:1px solid var(--text);background:var(--text);color:#fff;cursor:pointer;margin-left:12px}
+.lg-h .closeall{white-space:nowrap;font:inherit;font-size:12px;padding:7px 14px;border:1px solid var(--text);background:var(--text);color:#fff;cursor:pointer;margin-left:12px}
 .lg-h .closeall:disabled{opacity:.4;cursor:default}
 .lc{padding:16px;border-bottom:1px solid var(--border)}
 .lc:last-child{border-bottom:none}
 .lc .tags{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.lc .tag{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:4px 9px;border:1px solid var(--border-light);color:var(--text-dim);border-radius:999px}
+.lc .tag{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:4px 9px;border:1px solid var(--border-light);color:var(--text-dim);border-radius:999px}
 .lc .tag.in{border-color:#1e9e6a;color:#1e9e6a}.lc .tag.out{color:var(--muted)}.lc .tag.done{border-color:var(--text);color:var(--text)}
 .lc .tags .bins{font-family:var(--mono);font-size:11px;color:var(--muted);margin-left:4px}
 .lc .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
@@ -218,7 +218,7 @@ async function addDialog(l, opts) {
   const b = dialog("Add liquidity", `
     <p><b>${esc(l.base.symbol)} / ${esc(l.quote.symbol)}</b> · ${fmtPx(l.minPrice)} – ${fmtPx(l.maxPrice)} ${esc(l.quote.symbol)} · ${l.openBins} bins</p>
     <h4>Shape of what you're adding</h4>
-    <div class="shapes">${["spot", "curve", "bidask"].map((s) => `<div class="shape ${s === shape ? "on" : ""}" data-s="${s}"><b>${SHAPE_NAME[s]}</b><small>${SHAPE_DESC[s]}</small></div>`).join("")}</div>
+    <div class="shapes">${["spot", "curve", "bidask"].map((s) => `<div class="shape ${s === shape ? "on" : ""}" role="button" tabindex="0" data-s="${s}"><b>${SHAPE_NAME[s]}</b><small>${SHAPE_DESC[s]}</small></div>`).join("")}</div>
     <h4>Amount</h4>
     <div class="box"><input id="ld-base" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(l.base.symbol)}</span><button id="ld-max-b">max</button></div><div class="hint" id="ld-bal-b"></div>
     <div class="box"><input id="ld-quote" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(l.quote.symbol)}</span><button id="ld-max-q">max</button></div><div class="hint" id="ld-bal-q"></div>
@@ -247,7 +247,7 @@ async function addDialog(l, opts) {
       const mx = Math.max(...p.rungs.map((r) => r.weight));
       $("ld-lands").innerHTML = `<canvas id="ld-cv" width="600" height="96"></canvas>fills <b>${p.filled}</b> of ${p.bins} bins · uses ${num(formatUnits(p.baseTotal, l.base.decimals), 6)} ${esc(l.base.symbol)} + ${num(formatUnits(p.quoteTotal, l.quote.decimals), 6)} ${esc(l.quote.symbol)}${p.tx.approve ? " · needs an approval first" : ""}`;
       const cv = $("ld-cv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
-      p.rungs.forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.5)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
+      p.rungs.slice().sort((x, y) => x.priceLower - y.priceLower).forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.5)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
       $("ld-go").disabled = false;
     } catch (e) { if (my === seq) { $("ld-lands").textContent = e.message; $("ld-go").disabled = true; } }
   }

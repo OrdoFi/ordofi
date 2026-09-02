@@ -470,7 +470,7 @@
           <b>${p.rungs.length}</b> positions · <b>${fmtDisp(disp(p.minPrice))}</b> – <b>${fmtDisp(disp(p.maxPrice))}</b> ${mode === "mc" ? "market cap" : "USD"}<br/>
           uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}${p.tx.approve ? `<br/>needs a one-time ${esc(token.symbol)} approval first` : ""}`;
         const cv = $("pv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height, mx = Math.max(...p.rungs.map((r) => r.weight));
-        p.rungs.forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
+        p.rungs.slice().sort((x, y) => x.priceLower - y.priceLower).forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
         if (wallet.account) { go.textContent = "Build position"; go.disabled = false; }
       } catch (e) { if (seq === planSeq) { $("preview").textContent = e.message; if (wallet.account) { go.textContent = "Cannot plan"; go.disabled = true; } } }
     }

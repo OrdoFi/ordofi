@@ -113,7 +113,7 @@ class Wallet {
   renderPicker() {
     const body = this.modal.querySelector("#wm-body"), found = this.list(), last = localStorage.getItem(LS);
     body.innerHTML = found.length
-      ? found.map((w) => `<div class="wm-row" data-r="${esc(w.info.rdns)}"><div class="wm-ic">${w.info.icon ? `<img src="${esc(w.info.icon)}" alt="" />` : esc(w.info.name[0])}</div><div class="wm-main"><div class="wm-name">${esc(w.info.name)}</div><div class="wm-sub">${w.info.rdns === last ? "last used" : "detected"}</div></div><div class="wm-go">connect ›</div></div>`).join("")
+      ? found.map((w) => `<div class="wm-row" role="button" tabindex="0" data-r="${esc(w.info.rdns)}"><div class="wm-ic">${w.info.icon ? `<img src="${esc(w.info.icon)}" alt="" />` : esc(w.info.name[0])}</div><div class="wm-main"><div class="wm-name">${esc(w.info.name)}</div><div class="wm-sub">${w.info.rdns === last ? "last used" : "detected"}</div></div><div class="wm-go">connect ›</div></div>`).join("")
       : `<div class="wm-note">No wallet detected in this browser. Install one, then reload.</div>` + INSTALL.map((w) => `<a class="wm-row" href="${w.url}" target="_blank" rel="noopener"><div class="wm-ic">${w.name[0]}</div><div class="wm-main"><div class="wm-name">${w.name}</div><div class="wm-sub">${w.sub}</div></div><div class="wm-go">install ›</div></a>`).join("");
     body.querySelectorAll(".wm-row[data-r]").forEach((r) => r.addEventListener("click", () => { const e = this.list().find((w) => w.info.rdns === r.dataset.r); if (e) this.connectWith(e); }));
   }
