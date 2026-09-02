@@ -40,6 +40,18 @@ import { concatHex, getAddress, keccak256, pad, toHex, type Hex } from "viem";
 /** ERC-5564 SECP256k1 with view tags. */
 export const SCHEME_ID = 1n;
 
+/**
+ * The message whose signature is the stealth account.
+ *
+ * Every byte of it is load-bearing: change one and every user's keys change
+ * with it, and their funds become unreachable through this app. It is versioned
+ * so that if it ever must change, the old account can still be recovered.
+ */
+export const UNLOCK_MESSAGE =
+  "OrdoFi Stealth\n\nSign to derive your stealth keys for Robinhood Chain.\n\n" +
+  "This signature is free, costs no gas, and never moves funds. It is the only\n" +
+  "thing that can recreate your stealth account, so only sign it on ordofi.network.\n\nVersion: 1";
+
 /** Canonical singletons, at the same addresses on every chain they exist on. */
 export const ERC5564_ANNOUNCER = "0x55649E01B5Df198D18D95b5cc5051630cfD45564" as const;
 export const ERC6538_REGISTRY = "0x6538E6bf4B0eBd30A8Ea093027Ac2422ce5d6538" as const;

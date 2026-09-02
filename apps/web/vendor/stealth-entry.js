@@ -15,6 +15,7 @@ export {
   NATIVE_TOKEN,
   REGISTRY_ABI,
   SCHEME_ID,
+  UNLOCK_MESSAGE,
   checkAnnouncement,
   computeStealthPrivateKey,
   decodeMetadata,

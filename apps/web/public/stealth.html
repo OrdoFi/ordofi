@@ -185,7 +185,7 @@
     import {
       ANNOUNCER_ABI, ERC5564_ANNOUNCER, ERC6538_REGISTRY, NATIVE_TOKEN, REGISTRY_ABI, SCHEME_ID,
       checkAnnouncement, computeStealthPrivateKey, decodeMetadata, encodeMetadata, generateStealthAddress,
-      keysFromSignature, metaAddressBytes, parseMetaAddress,
+      keysFromSignature, metaAddressBytes, parseMetaAddress, UNLOCK_MESSAGE,
       encodeFunctionData, formatEther, formatUnits, getAddress, isAddress, parseEther, parseUnits,
       privateKeyToAccount,
     } from "/vendor/stealth.js";
@@ -194,13 +194,6 @@
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const short = (a) => a.slice(0, 8) + "…" + a.slice(-6);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-    // The signature the whole account hangs off. Changing a character of this
-    // changes everyone's stealth account, so it is frozen.
-    const UNLOCK_MESSAGE =
-      "OrdoFi Stealth\n\nSign to derive your stealth keys for Robinhood Chain.\n\n" +
-      "This signature is free, costs no gas, and never moves funds. It is the only\n" +
-      "thing that can recreate your stealth account, so only sign it on ordofi.network.\n\nVersion: 1";
 
     const USDG = { symbol: "USDG", address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", decimals: 6 };
     // A token sitting at a fresh address cannot pay for its own withdrawal, so

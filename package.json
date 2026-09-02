@@ -25,7 +25,8 @@
     "hints": "node --import tsx apps/auction/test-hints.mjs",
     "typecheck": "tsc -p apps/watcher/tsconfig.json && tsc -p apps/gateway/tsconfig.json && tsc -p apps/auction/tsconfig.json && tsc -p apps/searcher-bot/tsconfig.json && tsc -p apps/arb-bot/tsconfig.json",
     "test": "node --import tsx --test apps/gateway/test/*.test.ts apps/auction/test/*.test.ts apps/watcher/test/*.test.ts apps/arb-bot/test/*.test.ts packages/store/test/*.test.ts packages/core/test/*.test.ts",
-    "build:stealth": "esbuild apps/web/vendor/stealth-entry.js --bundle --format=esm --minify --target=es2022 --outfile=apps/web/public/vendor/stealth.js --legal-comments=none"
+    "build:stealth": "esbuild apps/web/vendor/stealth-entry.js --bundle --format=esm --minify --target=es2022 --outfile=apps/web/public/vendor/stealth.js --legal-comments=none",
+    "prove-stealth": "node --import tsx scripts/prove-stealth.mjs"
   },
   "dependencies": {
     "tsx": "^4.19.0"
