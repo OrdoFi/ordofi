@@ -9,6 +9,9 @@
  * with a key derived on the spot. Every step has a transaction hash to check.
  *
  *   ORDO_STEALTH_KEY=0x… node scripts/prove-stealth.mjs [--amount 0.0002]
+ *
+ * With --to <meta-address> it pays someone else and stops after delivery,
+ * which is how the browser's own scan and withdraw get exercised end to end.
  */
 import { privateKeyToAccount } from "viem/accounts";
 import { decodeEventLog, encodeFunctionData, formatEther, parseEther } from "viem";
@@ -96,8 +99,11 @@ if (keysFromSignature(await payer.signMessage({ message: UNLOCK_MESSAGE })).meta
 }
 ok("derivation is deterministic");
 
+const recipient = args.to ?? keys.metaAddress;
+if (args.to) console.log(`    paying ${args.to.slice(0, 30)}… instead of ourselves`);
+
 step(2, "Derive a one-time address to pay");
-const payment = generateStealthAddress(keys.metaAddress);
+const payment = generateStealthAddress(recipient);
 ok(`stealth address ${payment.stealthAddress} (view tag 0x${payment.viewTag.toString(16).padStart(2, "0")})`);
 if ((await rpcFetch("eth_getBalance", [payment.stealthAddress, "latest"])) !== "0x0") {
   throw new Error("that address is already in use — this should be impossible");
@@ -119,6 +125,13 @@ ok(`announced in block ${ann.block} — ${ann.hash}`);
 step(4, "Send the ETH");
 const sent = await send(payer, { to: payment.stealthAddress, value: AMOUNT, gas: 21000n });
 ok(`sent — ${sent.hash}`);
+
+if (args.to) {
+  console.log(`\nDELIVERED to ${payment.stealthAddress} — the recipient can now find and sweep it.`);
+  console.log(`  announce  https://robinhoodchain.blockscout.com/tx/${ann.hash}`);
+  console.log(`  deliver   https://robinhoodchain.blockscout.com/tx/${sent.hash}`);
+  process.exit(0);
+}
 
 step(5, "Find it again from the announcement feed, using only the viewing key");
 const topic = "0x5f0eab8057630ba7676c49b4f21a0231414e79474595be8e4c432fbf6bf0f4e7";
