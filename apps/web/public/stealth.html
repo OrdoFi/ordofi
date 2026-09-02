@@ -20,7 +20,7 @@
     .chip.on { border-color: var(--accent); color: var(--accent); }
 
     .center { display: flex; flex-direction: column; align-items: center; gap: 18px; }
-    .card { width: 400px; max-width: 100%; background: #fff; border: 1px solid var(--border); padding: 30px 30px 28px; }
+    .card { width: 520px; max-width: 100%; background: #fff; border: 1px solid var(--border); padding: 34px 36px 32px; }
     .card h2 { font-size: 22px; text-align: center; letter-spacing: -0.01em; }
     .card .sub { text-align: center; color: var(--muted); font-size: 12.5px; margin: 6px 0 26px; }
     label.f { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 7px; }
@@ -30,7 +30,8 @@
     .box .ro { flex: 1; font-family: var(--mono); font-size: 18px; color: var(--text); }
     .box .ro.dim { color: var(--muted); }
     .pill { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: #fff; padding: 6px 10px 6px 7px; font-size: 13px; font-weight: 600; position: relative; }
-    .pill .ico { width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); font-family: var(--mono); font-size: 10px; display: flex; align-items: center; justify-content: center; }
+    .pill .ico { width: 24px; height: 24px; flex: none; }
+    .pill .ico img { width: 100%; height: 100%; display: block; }
     .pill select { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
     .hint { font-family: var(--mono); font-size: 10.5px; color: var(--muted); text-align: right; margin-top: 6px; min-height: 14px; }
     .hint.left { text-align: left; line-height: 1.55; }
@@ -52,7 +53,7 @@
     .result a { color: var(--accent); }
     .result.bad { color: var(--danger); }
 
-    .side { width: 400px; max-width: 100%; border: 1px solid var(--border); background: var(--card); padding: 18px 22px; }
+    .side { width: 520px; max-width: 100%; border: 1px solid var(--border); background: var(--card); padding: 18px 22px; }
     .side h3 { font-size: 15px; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
     .side h3 span { font-family: var(--mono); font-size: 10.5px; color: var(--muted); font-weight: 400; }
     .side p { font-size: 12.5px; color: var(--muted); line-height: 1.65; margin-top: 8px; }
@@ -115,7 +116,7 @@
         <label class="f">You send</label>
         <div class="box">
           <input id="amt" placeholder="0.0" inputmode="decimal" autocomplete="off" />
-          <div class="pill"><span class="ico" id="ico-in">Ξ</span><span id="sym-in">ETH</span> ▾
+          <div class="pill"><span class="ico" id="ico-in"><img src="/token-eth.png" alt="" /></span><span id="sym-in">ETH</span> ▾
             <select id="asset"><option value="eth">ETH</option><option value="usdg">USDG</option></select></div>
         </div>
         <div class="hint" id="bal-hint"></div>
@@ -123,7 +124,7 @@
         <div class="arrow">↓</div>
 
         <label class="f">Recipient receives</label>
-        <div class="box"><div class="ro dim" id="recv">0.0</div><div class="pill"><span class="ico" id="ico-out">Ξ</span><span id="sym-out">ETH</span></div></div>
+        <div class="box"><div class="ro dim" id="recv">0.0</div><div class="pill"><span class="ico" id="ico-out"><img src="/token-eth.png" alt="" /></span><span id="sym-out">ETH</span></div></div>
 
         <div class="field">
           <label class="f">Recipient wallet</label>
@@ -190,8 +191,8 @@
     const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const ASSETS = {
-      eth: { symbol: "ETH", decimals: 18, ico: "Ξ", address: null },
-      usdg: { symbol: "USDG", decimals: 6, ico: "$", address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168" },
+      eth: { symbol: "ETH", decimals: 18, ico: "/token-eth.png", address: null },
+      usdg: { symbol: "USDG", decimals: 6, ico: "/token-usdg.png", address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168" },
     };
     const GAS_STIPEND = parseEther("0.00006");
     const DUST = parseEther("0.00002");
@@ -267,7 +268,7 @@
     }
     function render() {
       const a = asset();
-      $("sym-in").textContent = a.symbol; $("sym-out").textContent = a.symbol; $("ico-in").textContent = a.ico; $("ico-out").textContent = a.ico;
+      $("sym-in").textContent = a.symbol; $("sym-out").textContent = a.symbol; $("ico-in").innerHTML = `<img src="${a.ico}" alt="" />`; $("ico-out").innerHTML = `<img src="${a.ico}" alt="" />`;
       const gross = parseAmt();
       const net = gross > 0n && stealthOn ? stealthSplit(gross).net : gross > 0n ? gross : 0n;
       $("recv").textContent = gross > 0n ? fmt(net) : "0.0";
