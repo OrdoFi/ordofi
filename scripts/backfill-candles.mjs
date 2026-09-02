@@ -235,7 +235,7 @@ async function backfillAll(pools) {
     if (Date.now() - lastReport > 60_000) {
       lastReport = Date.now();
       const pct = (100 * (head - hi)) / Math.max(1, head - floorBlock);
-      const rate = (head - hi) / Math.max(1, (Date.now() - started) / 3_600_000);
+      const rate = (head - hi) / Math.max(0.001, (Date.now() - started) / 3_600_000);
       const eta = rate > 0 ? (hi - floorBlock) / rate : 0;
       const at = reachedTs ? new Date(reachedTs * 1000).toISOString().slice(0, 16).replace("T", " ") : "?";
       console.log(`backfill | reached ${at} (block ${hi}, ${pct.toFixed(1)}% of range) · ${logsTotal.toLocaleString()} swaps → ${minutes.toLocaleString()} candle writes · window ${span}/${spanCeiling}x${PARALLEL} · ${windows} windows · ${throttles} throttled · eta ${eta.toFixed(1)}h`);
