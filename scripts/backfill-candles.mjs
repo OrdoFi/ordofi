@@ -44,6 +44,10 @@ const PACE_MS = Number(args.pace ?? 600);
 // How many log windows to keep in flight. One is right for the throttled public
 // endpoint; raise it to match an archive plan's requests-per-second headroom.
 const PARALLEL = Math.max(1, Number(args.parallel ?? 1));
+// Providers cap eth_getLogs differently: Robinhood's endpoint by log count,
+// Chainstack's by block range. Rather than hard-code either, remember the
+// narrowest span that was ever refused and never grow back into it.
+let spanCeiling = Number(args.maxSpan ?? 200_000);
 const DB = process.env.ORDO_DB ?? join(import.meta.dirname, "../data/ordo.db");
 const V3_SWAP_TOPIC = toEventSelector("Swap(address,address,int256,int256,uint160,uint128,int24)");
 const BLOCKS_PER_DAY = 864_000; // 0.1 s blocks
@@ -179,7 +183,11 @@ async function backfillAll(pools) {
       results = await Promise.all(ranges.map((r) =>
         rpc("eth_getLogs", [{ address: active, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + r.lo.toString(16), toBlock: "0x" + r.hi.toString(16) }])));
     } catch (e) {
-      if (isTooWide(e) && span > 100) { span = Math.max(100, Math.floor(span / 2)); continue; }
+      if (isTooWide(e) && span > 100) {
+        spanCeiling = Math.min(spanCeiling, span);
+        span = Math.max(100, Math.floor(span / 2));
+        continue;
+      }
       throw new Error(`getLogs refused at ${span} blocks: ${e.message}`);
     }
 
@@ -219,8 +227,9 @@ async function backfillAll(pools) {
       if (!Number.isFinite(cur) || hi < cur) store.setMeta(key, String(hi));
     }
 
-    if (widest < 4_000 && span < 200_000) span *= 2;
-    else if (widest > 8_000) span = Math.max(100, Math.floor(span / 2));
+    const roof = Math.max(100, spanCeiling - 1);
+    if (widest < 12_000 && span < roof) span = Math.min(roof, span * 2);
+    else if (widest > 40_000) span = Math.max(100, Math.floor(span / 2));
     store.setMeta("backfill:span", String(span));
 
     if (Date.now() - lastReport > 60_000) {
@@ -229,7 +238,7 @@ async function backfillAll(pools) {
       const rate = (head - hi) / Math.max(1, (Date.now() - started) / 3_600_000);
       const eta = rate > 0 ? (hi - floorBlock) / rate : 0;
       const at = reachedTs ? new Date(reachedTs * 1000).toISOString().slice(0, 16).replace("T", " ") : "?";
-      console.log(`backfill | reached ${at} (block ${hi}, ${pct.toFixed(1)}% of range) · ${logsTotal.toLocaleString()} swaps → ${minutes.toLocaleString()} candle writes · window ${span}x${PARALLEL} · ${windows} windows · ${throttles} throttled · eta ${eta.toFixed(1)}h`);
+      console.log(`backfill | reached ${at} (block ${hi}, ${pct.toFixed(1)}% of range) · ${logsTotal.toLocaleString()} swaps → ${minutes.toLocaleString()} candle writes · window ${span}/${spanCeiling}x${PARALLEL} · ${windows} windows · ${throttles} throttled · eta ${eta.toFixed(1)}h`);
     }
   }
   return { logs: logsTotal, minutes };
