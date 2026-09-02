@@ -703,7 +703,7 @@ async function buildPortfolio(owner) {
       unclaimed0: fee0.toString(), unclaimed1: fee1.toString(), unclaimedUsd,
       collected0: l.collected0.toString(), collected1: l.collected1.toString(), claimedUsd,
       costUsd: openCostUsd, gasEth: gasAllEth, gasUsd: gasAllUsd,
-      returnedUsd: isOpen ? valueUsd + unclaimedUsd : returnedUsd,
+      returnedUsd: isOpen ? valueUsd + unclaimedUsd + returnedUsd : returnedUsd, // what is out or could come out now, plus what already did
       unrealizedUsd, realizedUsd, pnlUsd, netUsd: pnlUsd - gasAllUsd,
       pnlPct: depositedUsd > 0 ? pnlUsd / depositedUsd : null,
       inRange: bins.some((b) => b.inRange),

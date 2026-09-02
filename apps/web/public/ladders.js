@@ -95,7 +95,7 @@ export const CSS = `
 
 let styled = false;
 function ensureStyle() { if (styled) return; styled = true; const st = document.createElement("style"); st.textContent = CSS; document.head.appendChild(st); }
-async function api(path) { const r = await fetch(path, { cache: "no-store" }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
+async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
 
 /** Orientation helpers: amounts come as token0/token1; the UI speaks base/quote. */
 const baseAmt = (l, a0, a1) => BigInt(l.base.isToken0 ? a0 : a1);
@@ -193,10 +193,11 @@ function dialog(title, body) {
   ensureStyle();
   if (!modal) {
     modal = document.createElement("div"); modal.className = "ld-modal";
-    modal.innerHTML = `<div class="ld"><div class="h"><span id="ld-title"></span><span class="x" id="ld-x">✕</span></div><div class="b" id="ld-body"></div></div>`;
+    modal.innerHTML = `<div class="ld"><div class="h"><span id="ld-title"></span><button class="x" id="ld-x" aria-label="Close" style="background:none;border:none;font:inherit;cursor:pointer;color:var(--muted)">✕</button></div><div class="b" id="ld-body"></div></div>`;
     document.body.appendChild(modal);
     modal.querySelector("#ld-x").addEventListener("click", closeDialog);
     modal.addEventListener("click", (e) => { if (e.target === modal) closeDialog(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDialog(); });
   }
   modal.querySelector("#ld-title").textContent = title;
   modal.querySelector("#ld-body").innerHTML = body;
@@ -231,9 +232,9 @@ async function addDialog(l, opts) {
   const bal = await balancesOf(l);
   if (bal) { if (side !== "quote") $("ld-bal-b").textContent = `balance ${num(bal.base, 6)}`; if (side !== "base") $("ld-bal-q").textContent = `balance ${num(bal.quote, 6)}`; }
   $("ld-max-b").addEventListener("click", () => { if (bal) { $("ld-base").value = bal.base; replan(); } });
-  $("ld-max-q").addEventListener("click", () => { if (bal) { $("ld-quote").value = Math.max(0, bal.quote - (l.quote.symbol === "ETH" ? 0.002 : 0)); replan(); } });
+  $("ld-max-q").addEventListener("click", () => { if (bal) { $("ld-quote").value = Math.max(0, bal.quote - (l.quote.symbol === "ETH" ? 0.002 : 0)).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); replan(); } });
   b.querySelectorAll(".shape").forEach((el) => el.addEventListener("click", () => { shape = el.dataset.s; b.querySelectorAll(".shape").forEach((x) => x.classList.toggle("on", x === el)); replan(); }));
-  $("ld-base").addEventListener("input", replan); $("ld-quote").addEventListener("input", replan);
+  for (const ev of ["input", "change", "keyup"]) { $("ld-base").addEventListener(ev, replan); $("ld-quote").addEventListener(ev, replan); }
   $("ld-cancel").addEventListener("click", closeDialog);
   async function replan() {
     const my = ++seq;

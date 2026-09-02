@@ -152,7 +152,7 @@
     const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
     const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
     const EXPLORER = "https://robinhoodchain.blockscout.com";
-    async function api(path) { const r = await fetch(path, { cache: "no-store" }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
+    async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
     const txLink = (h) => `<a href="${EXPLORER}/tx/${h}" target="_blank" rel="noopener">${h.slice(0, 12)}…</a>`;
 
     // ---------------- routing ----------------
@@ -275,9 +275,9 @@
       $("maxv").addEventListener("input", () => { const v = Number($("maxv").value.replace(/,/g, "")); if (v > 0 && state) { maxPct = (fromDisp(v) / state.price - 1) * 100; syncRange("val"); } });
       document.querySelectorAll(".hint button[data-r]").forEach((b) => b.addEventListener("click", () => { [minPct, maxPct] = b.dataset.r.split(",").map(Number); syncRange(); }));
       $("bins").addEventListener("input", () => { bins = Math.max(1, Math.min(40, Number($("bins").value) || 1)); replan(); });
-      $("amt-base").addEventListener("input", replan); $("amt-quote").addEventListener("input", replan);
+      for (const ev of ["input", "change", "keyup"]) { $("amt-base").addEventListener(ev, replan); $("amt-quote").addEventListener(ev, replan); }
       $("max-base").addEventListener("click", () => { if (balances?.base != null) { $("amt-base").value = balances.base; replan(); } });
-      $("max-quote").addEventListener("click", () => { if (balances?.quote != null) { $("amt-quote").value = Math.max(0, balances.quote - (state.quote.address === WETH ? 0.003 : 0)); replan(); } });
+      $("max-quote").addEventListener("click", () => { if (balances?.quote != null) { $("amt-quote").value = Math.max(0, balances.quote - (state.quote.address === WETH ? 0.003 : 0)).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); replan(); } });
       $("go").addEventListener("click", build);
       document.querySelectorAll("#tfs button").forEach((b) => b.addEventListener("click", () => { tfSec = Number(b.dataset.tf); document.querySelectorAll("#tfs button").forEach((x) => x.classList.toggle("on", x === b)); loadCandles(); }));
       document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => { if (b.dataset.m === "mc" && !supply) return; mode = b.dataset.m; document.querySelectorAll("#mode button").forEach((x) => x.classList.toggle("on", x === b)); applyMode(); }));

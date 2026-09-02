@@ -65,10 +65,11 @@ class Wallet {
     if (!document.getElementById("wm-style")) { const st = document.createElement("style"); st.id = "wm-style"; st.textContent = CSS; document.head.appendChild(st); }
     if (!this.modal) {
       this.modal = document.createElement("div"); this.modal.className = "wm-modal";
-      this.modal.innerHTML = `<div class="wm-sheet"><div class="wm-h"><span id="wm-title">Connect a wallet</span><span class="x" id="wm-x">✕</span></div><div id="wm-body"></div></div>`;
+      this.modal.innerHTML = `<div class="wm-sheet"><div class="wm-h"><span id="wm-title">Connect a wallet</span><button class="x" id="wm-x" aria-label="Close" style="background:none;border:none;font:inherit;cursor:pointer;color:var(--muted)">✕</button></div><div id="wm-body"></div></div>`;
       document.body.appendChild(this.modal);
       this.modal.querySelector("#wm-x").addEventListener("click", () => this.close());
       this.modal.addEventListener("click", (e) => { if (e.target === this.modal) this.close(); });
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.close(); });
     }
     window.dispatchEvent(new Event("eip6963:requestProvider"));
     // Silent reconnect: a wallet already authorised for this site answers

@@ -94,7 +94,7 @@
     import { renderLadders, usd, num } from "/ladders.js";
     const $ = (id) => document.getElementById(id);
     async function api(path) { const r = await fetch(path, { cache: "no-store" }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
-    let portfolio = null, unit = "usd", cur = new Date(); cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
+    let portfolio = null, lastSig = null, unit = "usd", cur = new Date(); cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
     const fmt = (v) => unit === "usd" ? (v < 0 ? "-" : "") + usd(Math.abs(v)) : (v < 0 ? "-" : "") + num(Math.abs(v), 5) + " Ξ";
     const pick = (d) => unit === "usd" ? d.pnlUsd : d.pnlEth;
 
@@ -135,7 +135,11 @@
     async function load() {
       if (!wallet.account) { portfolio = null; renderCal(); $("cards").innerHTML = `<div class="panel"><div class="empty">Connect a wallet to see your positions.</div></div>`; return; }
       try {
-        portfolio = await api(`/api/pools/positions?owner=${wallet.account}`);
+        const fresh = await api(`/api/pools/positions?owner=${wallet.account}`);
+        // Nothing moved: leave the DOM alone so open menus and focus survive the poll.
+        const sig = JSON.stringify(fresh.ladders.map((l) => [l.id, l.openBins, l.valueUsd.toFixed(2), l.unclaimedUsd.toFixed(4), l.closed]));
+        if (portfolio && sig === lastSig) return;
+        lastSig = sig; portfolio = fresh;
         renderCal();
         const wrap = document.createElement("div");
         renderLadders(wrap, portfolio, { onChange: load, emptyText: "No open positions. Build one from any token's pool page." });
