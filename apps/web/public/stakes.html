@@ -270,6 +270,7 @@
     }
     async function requote(s) {
       const my = ++qSeq, q = $("d-quote"), go = $("d-go");
+      quote = null; // whatever was quoted before is void; a failed re-quote leaves nothing to send
       if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
       let url;
       if (mode === "one") {
@@ -321,10 +322,17 @@
         res("r-res", "Confirm the claim in your wallet…");
         const r = await wallet.send(c, (h) => res("r-res", `Claiming ${txLink(h)}…`));
         if (!compound) { res("r-res", `Claimed · ${txLink(r.hash)}`); setTimeout(load, 1200); return; }
-        // Compound: the WETH just paid goes straight back through the zap.
+        // Compound exactly the WETH this claim paid — read from the receipt's
+        // Transfer(farm → account) logs — never the wallet's whole WETH balance.
+        const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+        const topicOf = (a) => "0x" + a.slice(2).toLowerCase().padStart(64, "0");
+        const paid = (r.logs ?? [])
+          .filter((l) => l.address?.toLowerCase() === WETH.toLowerCase() && l.topics?.[0] === TRANSFER && l.topics[1]?.toLowerCase() === topicOf(s.farm) && l.topics[2]?.toLowerCase() === topicOf(wallet.account))
+          .reduce((n, l) => n + BigInt(l.data), 0n);
+        if (paid === 0n) { res("r-res", `Claimed · ${txLink(r.hash)} — nothing to compound`); return; }
         const bal = BigInt(await wallet.rpc("eth_call", [{ to: WETH, data: "0x70a08231" + wallet.account.slice(2).padStart(64, "0") }, "latest"]));
-        if (bal === 0n) { res("r-res", `Claimed · ${txLink(r.hash)} — nothing to compound`); return; }
-        const p = await api(`/api/pools/stake-quote?vault=${s.vault}&mode=one&asset=weth&amount=${bal}&slippageBps=${slippage}&from=${wallet.account}`);
+        const amount = paid < bal ? paid : bal;
+        const p = await api(`/api/pools/stake-quote?vault=${s.vault}&mode=one&asset=weth&amount=${amount}&slippageBps=${slippage}&from=${wallet.account}`);
         if (!p.tx) throw new Error(p.guard?.reason ?? "compound not verified");
         res("r-res", "Approve WETH for the zap…");
         await wallet.ensureAllowance(p.tx.approve.token, p.tx.approve.spender, p.tx.approve.amount, (h) => res("r-res", `Approving ${txLink(h)}…`));

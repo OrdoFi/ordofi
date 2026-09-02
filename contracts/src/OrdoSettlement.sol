@@ -171,11 +171,15 @@ contract OrdoSettlement {
 
         uint256 amount = s.chargeWei;
         if (bond[s.searcher] < amount) revert InsufficientBond();
+        // claim() pays msg.sender only, so anything credited to the zero
+        // address is gone for good. The user must be real; an absent app
+        // forfeits its share to the user rather than to nobody.
+        if (s.user == address(0)) revert ZeroAddress();
 
         settled[s.opportunityId] = true;
         bond[s.searcher] -= amount;
 
-        uint256 appAmt = (amount * appBps) / 10_000;
+        uint256 appAmt = s.app == address(0) ? 0 : (amount * appBps) / 10_000;
         uint256 protocolAmt = (amount * protocolBps) / 10_000;
         uint256 userAmt = amount - appAmt - protocolAmt;
 

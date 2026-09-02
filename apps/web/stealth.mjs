@@ -154,6 +154,9 @@ export async function stealthFeed({ since = 0 } = {}) {
   return {
     announcer: ERC5564_ANNOUNCER,
     registry: ERC6538_REGISTRY,
+    // Informational. The page pays only the contract compiled into its bundle
+    // (packages/core/src/stealth.ts → npm run build:stealth); a different value
+    // here is logged by the page and ignored, never followed.
     sender: process.env.ORDO_STEALTH_SEND_ADDRESS ?? ORDO_STEALTH_SEND,
     scannedFrom: state.scannedFrom,
     scannedTo: state.scannedTo,

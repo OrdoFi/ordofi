@@ -97,6 +97,7 @@ abstract contract Shares is IERC20 {
     event Approval(address indexed owner, address indexed spender, uint256 value);
     error InsufficientBalance();
     error InsufficientAllowance();
+    error ZeroRecipient();
 
     function approve(address spender, uint256 amount) external returns (bool) { allowance[msg.sender][spender] = amount; emit Approval(msg.sender, spender, amount); return true; }
     function transfer(address to, uint256 amount) external returns (bool) { _move(msg.sender, to, amount); return true; }
@@ -106,7 +107,7 @@ abstract contract Shares is IERC20 {
         _move(from, to, amount);
         return true;
     }
-    function _move(address from, address to, uint256 amount) internal { if (balanceOf[from] < amount) revert InsufficientBalance(); balanceOf[from] -= amount; balanceOf[to] += amount; emit Transfer(from, to, amount); }
+    function _move(address from, address to, uint256 amount) internal { if (to == address(0)) revert ZeroRecipient(); if (balanceOf[from] < amount) revert InsufficientBalance(); balanceOf[from] -= amount; balanceOf[to] += amount; emit Transfer(from, to, amount); }
     function _mint(address to, uint256 amount) internal { totalSupply += amount; balanceOf[to] += amount; emit Transfer(address(0), to, amount); }
     function _burn(address from, uint256 amount) internal { if (balanceOf[from] < amount) revert InsufficientBalance(); balanceOf[from] -= amount; totalSupply -= amount; emit Transfer(from, address(0), amount); }
 }
@@ -135,6 +136,13 @@ contract OrdoStakeVault is Shares, Guard {
     uint256 public constant FEE_BPS = 100;
     uint32 public constant TWAP_WINDOW = 600;
     uint256 public constant TWAP_SLIPPAGE_BPS = 300;
+    /// @notice Shares locked forever at the first deposit (worth a few cents of
+    ///         liquidity). Anyone can add liquidity to the vault's position
+    ///         without receiving shares, so a tiny first supply could be
+    ///         inflated against everyone who deposits after it; with this floor
+    ///         the supply can never be tiny, and can never return to zero.
+    uint256 public constant MIN_SHARES = 1e9;
+    address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     event Harvest(uint256 wethFees, uint256 tokenFees, uint256 tokenSwappedToWeth, uint256 toTreasury, uint256 toFarm);
     event Deposit(address indexed from, address indexed to, uint256 shares, uint256 amount0, uint256 amount1);
@@ -144,6 +152,7 @@ contract OrdoStakeVault is Shares, Guard {
     error FarmSet();
     error NotFactory();
     error ZeroShares();
+    error FirstDepositTooSmall();
     error ETHNotAccepted();
     error TransferFailed();
 
@@ -178,6 +187,7 @@ contract OrdoStakeVault is Shares, Guard {
     function deposit(uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address to)
         external payable nonReentrant returns (uint256 shares, uint256 used0, uint256 used1)
     {
+        if (to == address(0)) revert ZeroAddress();
         harvest();
         uint128 before = liquidity();
         // Pull the deposit. Anything the vault already holds (fees waiting for an
@@ -198,7 +208,18 @@ contract OrdoStakeVault is Shares, Guard {
         }
         IERC20(token0).approve(address(positionManager), 0);
         IERC20(token1).approve(address(positionManager), 0);
-        shares = before == 0 ? uint256(liq) : (uint256(liq) * totalSupply) / before;
+        if (totalSupply == 0) {
+            // First depositor: shares are liquidity, less a floor that is minted
+            // to a dead address and can never be withdrawn. Branching on the
+            // supply (not the position's liquidity) means liquidity donated to
+            // an empty vault is simply captured by the next depositor instead of
+            // making every later deposit round to zero.
+            if (liq <= MIN_SHARES) revert FirstDepositTooSmall();
+            _mint(DEAD, MIN_SHARES);
+            shares = uint256(liq) - MIN_SHARES;
+        } else {
+            shares = (uint256(liq) * totalSupply) / before;
+        }
         if (shares == 0) revert ZeroShares();
         _mint(to, shares);
 
@@ -211,6 +232,7 @@ contract OrdoStakeVault is Shares, Guard {
     /// @notice Burn shares for the matching slice of the position, paid to `to`. WETH arrives as ETH.
     function withdraw(uint256 shares, uint256 amount0Min, uint256 amount1Min, address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
         if (shares == 0) revert ZeroShares();
+        if (to == address(0)) revert ZeroAddress();
         harvest();
         uint128 liq = uint128((uint256(liquidity()) * shares) / totalSupply);
         _burn(msg.sender, shares);

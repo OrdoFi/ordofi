@@ -440,12 +440,18 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- Served from our own origin: a script host must not be able to change what this page signs. sha384 38aeef10…978c0 (matches unpkg and jsdelivr). -->
+  <script src="/vendor/lightweight-charts-4.2.0.js"></script>
   <script>
   (() => {
     const $ = (id) => document.getElementById(id);
     const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
     const EXPLORER_FALLBACK = "https://robinhoodchain.blockscout.com";
+    // Pinned in the page. The server may agree with these; it may not replace them.
+    const PINNED_CHAIN = Object.freeze({ id: 4663, idHex: "0x1237", name: "Robinhood Chain", rpc: "https://rpc.ordofi.network", explorer: EXPLORER_FALLBACK });
+    const ROUTER = "0xcaf681a66d020601342297493863e78c959e5cb2"; // Uniswap SwapRouter02 — the only contract a trade may pay into
+    const SEL_MULTICALL = "0x5ae401dc"; // multicall(uint256,bytes[])
+    const SEL_APPROVE = "0x095ea7b3";
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const store = {
       get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
@@ -495,7 +501,8 @@
     let tokens = [];
     let tokenByAddr = new Map();
     let markets = [];
-    let CHAIN = null;
+    let CHAIN = PINNED_CHAIN;
+    let chainMismatch = false; // the server described another chain: quotes are shown, nothing is signed
     let account = null;
     let provider = null;    // the chosen wallet's EIP-1193 provider
     let walletInfo = null;  // its EIP-6963 identity (name, icon, rdns)
@@ -1213,7 +1220,39 @@
 
     // ---------- quoting ----------
     let debounceT = null;
-    function requestQuote() { clearTimeout(debounceT); debounceT = setTimeout(fetchQuote, 350); }
+    function requestQuote() {
+      // The old quote dies the moment the inputs change, not 350 ms later.
+      quote = null; ++quoteSeq; setAction();
+      clearTimeout(debounceT); debounceT = setTimeout(fetchQuote, 350);
+    }
+
+    /**
+     * The server built this transaction; this page checks it is the transaction
+     * the user asked for before it can be signed: the pair and amount echoed
+     * back, the destination fixed to the router, the ETH value exactly the
+     * amount paid (or zero), a router multicall, and any approval exact and
+     * to the router. A wrong or compromised answer is discarded, not signed.
+     */
+    function vetQuote(d, tin, tout, raw) {
+      const same = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
+      if (!same(d.tokenIn?.address, tin.address) || !same(d.tokenOut?.address, tout.address)) throw new Error("quote is for a different pair");
+      // The typed amount was parsed with the token list's decimals; the quote
+      // carries the chain's. If they differ, "10" may have meant 10 million.
+      if (Number(d.tokenIn?.decimals) !== Number(tin.decimals) || Number(d.tokenOut?.decimals) !== Number(tout.decimals)) throw new Error("token decimals disagree with the chain — reload the page");
+      if (BigInt(d.amountIn) !== raw) throw new Error("quote is for a different amount");
+      if (BigInt(d.minOut) <= 0n || BigInt(d.minOut) > BigInt(d.amountOut)) throw new Error("quote has an impossible minimum");
+      if (d.tx) {
+        if (!same(d.tx.to, ROUTER)) throw new Error("transaction is not addressed to the router");
+        if (!String(d.tx.data).toLowerCase().startsWith(SEL_MULTICALL)) throw new Error("transaction is not a router multicall");
+        if (BigInt(d.tx.value ?? 0) !== (tin.address === NATIVE ? raw : 0n)) throw new Error("transaction value does not match the amount");
+      }
+      if (d.approval) {
+        if (tin.address === NATIVE || !same(d.approval.token, tin.address)) throw new Error("approval is for a different token");
+        const exact = SEL_APPROVE + ROUTER.slice(2).padStart(64, "0") + raw.toString(16).padStart(64, "0");
+        if (!same(d.approval.data, exact)) throw new Error("approval is not exactly this amount for the router");
+      }
+      return d;
+    }
 
     async function fetchQuote() {
       const seq = ++quoteSeq;
@@ -1225,7 +1264,7 @@
       try {
         const q = new URLSearchParams({ tokenIn: tin.address, tokenOut: tout.address, amountIn: raw.toString(), slippageBps: String(slippageBps) });
         if (account) q.set("from", account);
-        const d = await jfetch("/api/trade/quote?" + q, 30_000);
+        const d = vetQuote(await jfetch("/api/trade/quote?" + q, 30_000), tin, tout, raw);
         if (seq !== quoteSeq) return;
         quote = d;
         $("amt-out").value = formatUnits(d.amountOut, d.tokenOut.decimals, 6);
@@ -1269,7 +1308,7 @@
     }
     /** A quote may be sent only with a delivery proof for the wallet that will sign it. */
     function sendable(q) {
-      return !!(q && q.tx && q.tx.to && q.tx.data && q.guard?.ok === true && account && (q.for ?? "").toLowerCase() === account.toLowerCase());
+      return !!(q && !chainMismatch && q.tx && String(q.tx.to).toLowerCase() === ROUTER && q.tx.data && q.guard?.ok === true && account && (q.for ?? "").toLowerCase() === account.toLowerCase());
     }
     /** Balance straight from the chain through the wallet's own connection, not our API. */
     async function rawBalance(asset) {
@@ -1291,26 +1330,30 @@
 
     async function act() {
       if (!account) return openWalletModal();
-      if (!quote) return;
+      // Pin the quote the user clicked on. Nothing that arrives while we wait on
+      // the wallet (a refresh, a retyped amount) may take its place.
+      const sent = quote;
+      if (!sent) return;
+      if (chainMismatch) { setStatus(`<span class="bad">not sending: the server describes a different chain than this page is built for</span>`); return; }
       if (!(await ensureChain())) { setStatus("switch to Robinhood Chain to continue"); return; }
+      if (sent !== quote) { setStatus("the quote changed while switching networks — check it and try again"); setAction(); return; }
       const b = $("action");
       b.disabled = true;
       try {
-        if (quote.approval) {
+        if (sent.approval) {
           setStatus("approve in your wallet…");
-          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: quote.approval.token, data: quote.approval.data }] });
+          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: sent.approval.token, data: sent.approval.data, chainId: CHAIN.idHex }] });
           setStatus("approval sent — waiting…");
           await waitReceipt(hash);
           await fetchQuote();
           setStatus("approved. Ready to trade.");
           return;
         }
-        if (!sendable(quote)) {
-          setStatus(`<span class="bad">not sending: ${esc(quote.guard?.reason ?? "this quote was not verified for the connected wallet")}</span>`);
+        if (!sendable(sent)) {
+          setStatus(`<span class="bad">not sending: ${esc(sent.guard?.reason ?? "this quote was not verified for the connected wallet")}</span>`);
           requestQuote();
           return;
         }
-        const sent = quote; // pin it: a refresh must not swap the quote under the send
         const outAsset = sent.tokenOut.address;
         const outSym = sent.tokenOut.symbol;
         const outDec = sent.tokenOut.decimals;
@@ -1319,7 +1362,7 @@
         setStatus("confirm in your wallet…");
         const hash = await provider.request({
           method: "eth_sendTransaction",
-          params: [{ from: account, to: sent.tx.to, data: sent.tx.data, value: sent.tx.value }],
+          params: [{ from: account, to: sent.tx.to, data: sent.tx.data, value: sent.tx.value, chainId: CHAIN.idHex }],
         });
         setStatus(`submitted through the protected RPC — <a target="_blank" href="${CHAIN.explorer}/tx/${hash}">view on explorer</a>`);
         const rec = await waitReceipt(hash);
@@ -1495,7 +1538,15 @@
     renderTab();
     setAction();
     loadChart(); loadPair(); loadTrades(); loadMarkets();
-    jfetch("/api/trade/chain").then((c) => { CHAIN = c; renderTab(); }).catch(() => {});
+    // The server's view of the chain is compared with what is pinned here, never adopted.
+    jfetch("/api/trade/chain").then((c) => {
+      if (c?.idHex !== PINNED_CHAIN.idHex || Number(c?.id) !== PINNED_CHAIN.id) {
+        chainMismatch = true;
+        console.error(`trade: server describes chain ${c?.idHex}; this page is pinned to ${PINNED_CHAIN.idHex} and will not sign`);
+        setStatus(`<span class="bad">the server describes a different chain than this page is built for — trading is disabled</span>`);
+      }
+      renderTab();
+    }).catch(() => {});
     loadTokens().then(() => {
       renderRecent();
       // Deep links: /trade?base=AAPL&quote=usdg&tf=1d or ?pay=eth&receive=AAPL&amt=0.5 (symbol or address).

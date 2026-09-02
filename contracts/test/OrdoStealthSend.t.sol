@@ -116,6 +116,60 @@ contract OrdoStealthSendTest is Test {
         assertEq(announcer.count(), 0, "no announcement without money");
     }
 
+    /// The class of loss behind the router incident: a recipient nobody controls.
+    /// A stealth address is uniformly random, so none of these can ever be one.
+    function test_send_refusesAddressesNobodyControls() public {
+        address[6] memory bad = [address(0), address(1), address(2), address(0xffff), treasury, ANNOUNCER];
+        token.mint(alice, 1_000e6);
+        vm.prank(alice);
+        token.approve(address(send), type(uint256).max);
+        for (uint256 i = 0; i < bad.length; i++) {
+            vm.prank(alice);
+            vm.expectRevert(OrdoStealthSend.BadStealthAddress.selector);
+            send.sendETH{value: 1 ether}(bad[i], ephemeral, metadata);
+            vm.prank(alice);
+            vm.expectRevert(OrdoStealthSend.BadStealthAddress.selector);
+            send.sendToken(address(token), 100e6, bad[i], ephemeral, metadata);
+        }
+        vm.prank(alice);
+        vm.expectRevert(OrdoStealthSend.BadStealthAddress.selector);
+        send.sendETH{value: 1 ether}(address(send), ephemeral, metadata);
+        assertEq(announcer.count(), 0, "nothing announced");
+        assertEq(alice.balance, 10 ether, "nothing left the sender");
+        assertEq(token.balanceOf(alice), 1_000e6);
+        assertEq(address(1).balance, 0);
+    }
+
+    /// An announcement the recipient's scanner cannot decode is money they can never find.
+    function test_send_refusesMalformedAnnouncements() public {
+        bytes memory key32 = hex"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        bytes memory key65 = abi.encodePacked(hex"04", key32, key32);
+        bytes memory badPrefix = hex"05aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        bytes memory none;
+
+        vm.startPrank(alice);
+        vm.expectRevert(OrdoStealthSend.BadAnnouncement.selector);
+        send.sendETH{value: 1 ether}(stealth, key32, metadata);
+        vm.expectRevert(OrdoStealthSend.BadAnnouncement.selector);
+        send.sendETH{value: 1 ether}(stealth, key65, metadata);
+        vm.expectRevert(OrdoStealthSend.BadAnnouncement.selector);
+        send.sendETH{value: 1 ether}(stealth, badPrefix, metadata);
+        vm.expectRevert(OrdoStealthSend.BadAnnouncement.selector);
+        send.sendETH{value: 1 ether}(stealth, ephemeral, none);
+        // The well-formed case still goes through, with either compressed prefix.
+        send.sendETH{value: 1 ether}(stealth, ephemeral, metadata);
+        send.sendETH{value: 1 ether}(stealth, hex"03aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", metadata);
+        vm.stopPrank();
+        assertEq(announcer.count(), 2);
+        assertEq(stealth.balance, 1.995 ether);
+    }
+
+    function test_sendToken_refusesZeroToken() public {
+        vm.prank(alice);
+        vm.expectRevert(OrdoStealthSend.ZeroAddress.selector);
+        send.sendToken(address(0), 1e6, stealth, ephemeral, metadata);
+    }
+
     function test_sendETH_failedDeliveryRevertsTheAnnouncementToo() public {
         address refuses = address(new Refuses());
         vm.prank(alice);

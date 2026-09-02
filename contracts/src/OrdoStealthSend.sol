@@ -46,10 +46,29 @@ contract OrdoStealthSend {
     error NothingToSend();
     error DeliveryFailed();
     error ZeroAddress();
+    error BadStealthAddress();
+    error BadAnnouncement();
 
     constructor(address _treasury) {
         if (_treasury == address(0)) revert ZeroAddress();
         treasury = _treasury;
+    }
+
+    /// @dev A stealth address is a uniformly random account, so rejecting the
+    ///      handful of addresses that can never be one costs nothing legitimate
+    ///      and refuses the class of loss where money is paid to a precompile,
+    ///      the zero address or a contract nobody can spend from. The
+    ///      announcement is checked for the shape scheme 1 requires (a 33-byte
+    ///      compressed ephemeral key and at least the view tag): a payment the
+    ///      recipient's scanner cannot decode is a payment they can never find.
+    function _check(address stealthAddress, bytes calldata ephemeralPubKey, bytes calldata metadata) private view {
+        if (
+            uint160(stealthAddress) < 0x10000 || stealthAddress == address(this) || stealthAddress == treasury
+                || stealthAddress == address(ANNOUNCER)
+        ) revert BadStealthAddress();
+        if (ephemeralPubKey.length != 33 || (ephemeralPubKey[0] != 0x02 && ephemeralPubKey[0] != 0x03) || metadata.length == 0) {
+            revert BadAnnouncement();
+        }
     }
 
     /// @notice The fee and the net delivered for a given gross amount.
@@ -66,6 +85,7 @@ contract OrdoStealthSend {
         payable
     {
         if (msg.value == 0) revert NothingToSend();
+        _check(stealthAddress, ephemeralPubKey, metadata);
         (uint256 fee, uint256 net) = split(msg.value);
         ANNOUNCER.announce(SCHEME_ID, stealthAddress, ephemeralPubKey, metadata);
         _deliver(stealthAddress, net);
@@ -83,6 +103,8 @@ contract OrdoStealthSend {
         bytes calldata metadata
     ) external payable {
         if (amount == 0) revert NothingToSend();
+        if (token == address(0)) revert ZeroAddress();
+        _check(stealthAddress, ephemeralPubKey, metadata);
         (uint256 fee, uint256 net) = split(amount);
         ANNOUNCER.announce(SCHEME_ID, stealthAddress, ephemeralPubKey, metadata);
         if (!IERC20Minimal(token).transferFrom(msg.sender, stealthAddress, net)) revert DeliveryFailed();

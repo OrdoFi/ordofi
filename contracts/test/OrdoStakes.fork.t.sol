@@ -21,7 +21,8 @@ contract OrdoStakesForkTest is Test {
     address bob = makeAddr("bob");
     address whale = makeAddr("whale");
 
-    modifier onFork() { if (block.chainid != 4663) { emit log("skipped: not a Robinhood Chain fork"); return; } _; }
+    // Reported as skipped, not passed: a run without the fork must not look green.
+    modifier onFork() { vm.skip(block.chainid != 4663); _; }
 
     function setUp() public {
         if (block.chainid != 4663) return;
@@ -129,8 +130,118 @@ contract OrdoStakesForkTest is Test {
         assertGt(bob.balance - ethBefore, 0.9 ether, "his ETH half as native ETH");
         assertGt(IERC20(NVDA).balanceOf(bob), 0, "his NVDA half");
         assertEq(vault.balanceOf(bob), 0);
-        assertEq(vault.totalSupply(), sa, "Alice's shares are all that is left");
+        assertEq(vault.totalSupply(), sa + vault.MIN_SHARES(), "Alice's shares and the locked floor are all that is left");
         assertGt(vault.liquidity(), 0);
+    }
+
+    function _buyNvda(address who, uint256 ethIn) internal returns (uint256 got) {
+        vm.startPrank(who);
+        IWETH(WETH).deposit{value: ethIn}();
+        IERC20(WETH).approve(ROUTER, type(uint256).max);
+        got = ISwapRouter02(ROUTER).exactInputSingle(ISwapRouter02.ExactInputSingleParams(WETH, NVDA, 500, who, ethIn, 0, 0));
+        vm.stopPrank();
+    }
+
+    /// Uniswap's position manager lets anyone add liquidity to any tokenId. Done to
+    /// the vault's position it changes what a share is worth without minting any.
+    function _donate(address who, uint256 wethAmt, uint256 nvdaAmt) internal returns (uint128 liq) {
+        vm.startPrank(who);
+        IWETH(WETH).deposit{value: wethAmt}();
+        IERC20(WETH).approve(NPM, type(uint256).max);
+        IERC20(NVDA).approve(NPM, type(uint256).max);
+        bool weth0 = vault.wethIs0();
+        (liq,,) = INonfungiblePositionManager(NPM).increaseLiquidity(
+            INonfungiblePositionManager.IncreaseLiquidityParams(vault.tokenId(), weth0 ? wethAmt : nvdaAmt, weth0 ? nvdaAmt : wethAmt, 0, 0, block.timestamp)
+        );
+        vm.stopPrank();
+    }
+
+    /// First-depositor inflation: a dust first deposit, a donation through the
+    /// position manager, then a victim whose shares round down. With the locked
+    /// floor the supply is never small enough for the rounding to matter.
+    function test_firstDepositor_cannotInflateSharesAgainstLaterDepositors() public onFork {
+        address attacker = makeAddr("attacker");
+        vm.deal(attacker, 100 ether);
+        _buyNvda(attacker, 3 ether);
+        vm.startPrank(attacker);
+        IERC20(NVDA).approve(address(vault), type(uint256).max);
+        // A few wei of each side is now refused outright...
+        vm.expectRevert(OrdoStakeVault.FirstDepositTooSmall.selector);
+        vault.deposit{value: 1}(0, 100, 0, 0, attacker);
+        // ...and the smallest deposit that is accepted leaves a supply of at least MIN_SHARES.
+        (uint256 attackerShares,,) = vault.deposit{value: 0.0001 ether}(0, IERC20(NVDA).balanceOf(attacker) / 1000, 0, 0, attacker);
+        vm.stopPrank();
+        assertEq(vault.balanceOf(vault.DEAD()), vault.MIN_SHARES(), "floor locked forever");
+        assertGe(vault.totalSupply(), vault.MIN_SHARES());
+
+        uint128 donated = _donate(attacker, 1 ether, IERC20(NVDA).balanceOf(attacker) / 2);
+        assertGt(donated, 0);
+        uint128 liqBefore = vault.liquidity();
+
+        uint256 victimShares;
+        {
+            vm.prank(bob);
+            victimShares = zap.zapETH{value: 1 ether}(address(vault), 0);
+        }
+        uint256 victimLiq = uint256(vault.liquidity() - liqBefore);
+        uint256 victimClaim = (uint256(vault.liquidity()) * victimShares) / vault.totalSupply();
+        uint256 attackerClaim = (uint256(vault.liquidity()) * attackerShares) / vault.totalSupply();
+        // The victim's rounding loss is bounded by one share's worth of liquidity: negligible.
+        assertGe(victimClaim, victimLiq - victimLiq / 100_000, "victim keeps what they deposited (within 0.001%)");
+        assertLe(attackerClaim, attackerShares + donated + donated / 100_000, "the attacker gains nothing from the donation");
+    }
+
+    /// Once everyone has left, a dust donation used to make every later deposit
+    /// compute zero shares and revert forever. The locked floor means the supply
+    /// never returns to zero, so the donation is simply shared out.
+    function test_vault_survivesDonationAfterEveryoneLeaves() public onFork {
+        vm.prank(alice);
+        uint256 s = zap.zapETH{value: 1 ether}(address(vault), 0);
+        vm.startPrank(alice);
+        farm.withdraw(s);
+        vault.withdraw(s, 0, 0, alice);
+        vm.stopPrank();
+        assertEq(vault.totalSupply(), vault.MIN_SHARES(), "only the floor remains");
+        assertTrue(vault.tokenId() != 0);
+
+        address attacker = makeAddr("attacker");
+        vm.deal(attacker, 10 ether);
+        _buyNvda(attacker, 0.01 ether);
+        _donate(attacker, 0.0001 ether, IERC20(NVDA).balanceOf(attacker));
+
+        vm.prank(bob);
+        uint256 again = zap.zapETH{value: 1 ether}(address(vault), 0);
+        assertGt(again, 0, "deposits still work");
+        // Bob can leave with what he put in, up to the tiny dust rounding.
+        uint256 ethBefore = bob.balance;
+        vm.startPrank(bob);
+        farm.withdraw(again);
+        vault.withdraw(again, 0, 0, bob);
+        vm.stopPrank();
+        assertGt(bob.balance - ethBefore, 0.45 ether, "his ETH half came back");
+    }
+
+    /// Shares minted to, or coins paid to, the zero address are lost to everyone.
+    function test_vault_refusesZeroRecipient() public onFork {
+        _buyNvda(alice, 1 ether);
+        vm.startPrank(alice);
+        IERC20(NVDA).approve(address(vault), type(uint256).max);
+        uint256 n = IERC20(NVDA).balanceOf(alice);
+        bool weth0 = vault.wethIs0();
+        vm.expectRevert(OrdoStakeVault.ZeroAddress.selector);
+        vault.deposit{value: 1 ether}(weth0 ? 0 : n, weth0 ? n : 0, 0, 0, address(0));
+        vm.stopPrank();
+
+        vm.prank(bob);
+        uint256 s = zap.zapETH{value: 1 ether}(address(vault), 0);
+        vm.startPrank(bob);
+        farm.withdraw(s);
+        vm.expectRevert(OrdoStakeVault.ZeroAddress.selector);
+        vault.withdraw(s, 0, 0, address(0));
+        vm.expectRevert(Shares.ZeroRecipient.selector);
+        vault.transfer(address(0), s);
+        vm.stopPrank();
+        assertEq(vault.balanceOf(bob), s, "nothing moved");
     }
 
     function test_zapToken_andZapBoth() public onFork {

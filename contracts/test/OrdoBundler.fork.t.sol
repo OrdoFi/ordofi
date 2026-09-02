@@ -106,7 +106,7 @@ contract OrdoBundlerForkTest is Test {
     }
 
     function test_Fork_BurnIsStuckOnItsOwn() public {
-        if (!forked) return;
+        vm.skip(!forked);
         assertEq(block.chainid, 4663, "forked Robinhood Chain");
 
         IInstantBurner burner = IInstantBurner(BURNER);
@@ -165,7 +165,7 @@ contract OrdoBundlerForkTest is Test {
     }
 
     function test_Fork_AtomicBundleUnsticksTheBurn() public {
-        if (!forked) return;
+        vm.skip(!forked);
 
         IInstantBurner burner = IInstantBurner(BURNER);
         uint128 deepen = _findDeepening();
@@ -214,7 +214,7 @@ contract OrdoBundlerForkTest is Test {
     }
 
     function test_Fork_TheSameBundleWithoutTheDeepeningLegReverts() public {
-        if (!forked) return;
+        vm.skip(!forked);
 
         IInstantBurner burner = IInstantBurner(BURNER);
         uint128 budget = uint128(BURNER.balance);
@@ -233,7 +233,7 @@ contract OrdoBundlerForkTest is Test {
     /// @notice The conditional-execution story, against a live pool: a bundle
     ///         that refuses to run unless the pool has already moved.
     function test_Fork_PreconditionRefusesToTradeOnStaleState() public {
-        if (!forked) return;
+        vm.skip(!forked);
 
         IInstantBurner burner = IInstantBurner(BURNER);
 

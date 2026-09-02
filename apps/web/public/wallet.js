@@ -16,6 +16,22 @@ const short = (a) => (a ? a.slice(0, 6) + "…" + a.slice(-4) : "");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const LS = "ordofi.wallet";
 
+/**
+ * The chain this app is built for, pinned in the code the browser runs. The
+ * server describes it too (/api/trade/chain) and the two must agree; the
+ * server can never substitute another network, RPC or explorer.
+ */
+export const PINNED_CHAIN = Object.freeze({ id: 4663, idHex: "0x1237", name: "Robinhood Chain", rpc: "https://rpc.ordofi.network", explorer: "https://robinhoodchain.blockscout.com" });
+
+const isAddress = (a) => typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a);
+/** The zero address and the precompiles: nobody controls them, nothing sent there can be recovered. */
+const isBlackhole = (a) => BigInt(a) < 0x10000n;
+function checkedAddress(a, what) {
+  if (!isAddress(a)) throw new Error(`not sending: ${what} is not an address`);
+  if (isBlackhole(a)) throw new Error(`not sending: ${what} ${a} belongs to nobody`);
+  return a;
+}
+
 const INSTALL = [
   { name: "MetaMask", sub: "metamask.io", url: "https://metamask.io/download" },
   { name: "Rabby", sub: "rabby.io", url: "https://rabby.io" },
@@ -61,7 +77,13 @@ class Wallet {
   }
 
   async init(chain) {
-    this.chain = chain;
+    // The server's description is checked against the pinned chain, never
+    // adopted. If they disagree the page keeps the pinned values and says so.
+    if (chain && (chain.idHex !== PINNED_CHAIN.idHex || Number(chain.id) !== PINNED_CHAIN.id)) {
+      console.error(`wallet: server describes chain ${chain.idHex}; this app is pinned to ${PINNED_CHAIN.idHex} and will not follow`);
+      this.chainMismatch = true;
+    }
+    this.chain = { ...PINNED_CHAIN, name: typeof chain?.name === "string" && chain.name.length < 40 ? chain.name : PINNED_CHAIN.name };
     if (!document.getElementById("wm-style")) { const st = document.createElement("style"); st.id = "wm-style"; st.textContent = CSS; document.head.appendChild(st); }
     if (!this.modal) {
       this.modal = document.createElement("div"); this.modal.className = "wm-modal";
@@ -148,6 +170,8 @@ class Wallet {
     if ((await this.provider.request({ method: "eth_chainId" })) === c.idHex) return;
     try { await this.provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: c.idHex }] }); }
     catch { await this.provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: c.idHex, chainName: c.name + " · OrdoFi protected", rpcUrls: [c.rpc], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: [c.explorer] }] }); }
+    // A switch the user dismissed resolves in some wallets; ask again rather than trust it.
+    if ((await this.provider.request({ method: "eth_chainId" })) !== c.idHex) throw new Error(`switch your wallet to ${c.name} first — nothing was sent`);
   }
 
   async openAccount() {
@@ -183,8 +207,10 @@ class Wallet {
   /** Sign through the wallet, then wait for the block. Returns the receipt with `.hash`. */
   async send({ to, data, value }, onSent) {
     if (!this.account) throw new Error("connect a wallet first");
+    checkedAddress(to, "the destination");
+    if (data != null && !/^0x([0-9a-fA-F]{2})*$/.test(data)) throw new Error("not sending: malformed calldata");
     await this.ensureChain();
-    const tx = { from: this.account, to, data: data ?? "0x" };
+    const tx = { from: this.account, to, data: data ?? "0x", chainId: this.chain.idHex };
     if (value && BigInt(value) > 0n) tx.value = "0x" + BigInt(value).toString(16);
     const hash = await this.provider.request({ method: "eth_sendTransaction", params: [tx] });
     onSent?.(hash);
@@ -213,6 +239,9 @@ class Wallet {
    * offering that.
    */
   async ensureAllowance(token, spender, amount, onSent) {
+    if (!this.account) throw new Error("connect a wallet first");
+    checkedAddress(token, "the token"); checkedAddress(spender, "the spender");
+    if (BigInt(amount) <= 0n) return null;
     const sel = "0xdd62ed3e" + this.account.slice(2).padStart(64, "0") + spender.slice(2).padStart(64, "0");
     const cur = BigInt(await this.rpc("eth_call", [{ to: token, data: sel }, "latest"]));
     if (cur >= BigInt(amount)) return null;

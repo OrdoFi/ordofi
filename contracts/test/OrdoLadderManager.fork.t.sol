@@ -41,10 +41,8 @@ contract OrdoLadderManagerForkTest is Test {
     }
 
     modifier onFork() {
-        if (block.chainid != 4663) {
-            emit log("skipped: not a Robinhood Chain fork");
-            return;
-        }
+        // Reported as skipped, not passed: a run without the fork must not look green.
+        vm.skip(block.chainid != 4663);
         _;
     }
 

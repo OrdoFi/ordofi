@@ -75,6 +75,34 @@ contract OrdoSettlementTest is Test {
         assertTrue(settlement.settled(oppId));
     }
 
+    /// claim() pays msg.sender only: a credit to address(0) could never be
+    /// claimed by anyone. The user must be real; a missing app forfeits its
+    /// share to the user rather than to nobody.
+    function test_RevertWhen_UserIsZero() public {
+        _deposit(10 ether);
+        bytes32 oppId = keccak256("opp-zero-user");
+        bytes memory sig = _sign(oppId, 1 ether);
+        OrdoSettlement.Settlement memory s = OrdoSettlement.Settlement(searcher, oppId, 1 ether, 1 ether, address(0), app);
+        vm.prank(auctioneer);
+        vm.expectRevert(OrdoSettlement.ZeroAddress.selector);
+        settlement.settle(s, sig);
+        assertEq(settlement.bond(searcher), 10 ether, "bond untouched");
+        assertFalse(settlement.settled(oppId));
+    }
+
+    function test_AbsentAppShareGoesToUser() public {
+        _deposit(10 ether);
+        bytes32 oppId = keccak256("opp-no-app");
+        bytes memory sig = _sign(oppId, 1 ether);
+        OrdoSettlement.Settlement memory s = OrdoSettlement.Settlement(searcher, oppId, 1 ether, 1 ether, user, address(0));
+        vm.prank(auctioneer);
+        settlement.settle(s, sig);
+        assertEq(settlement.claimable(address(0)), 0, "nothing credited to nobody");
+        assertEq(settlement.claimable(treasury), 0.05 ether, "protocol 5%");
+        assertEq(settlement.claimable(user), 0.95 ether, "user gets the app's share too");
+        assertEq(settlement.claimable(user) + settlement.claimable(treasury), 1 ether, "every wei accounted for");
+    }
+
     function test_SecondPriceChargesLessThanBid() public {
         _deposit(10 ether);
         bytes32 oppId = keccak256("opp-2price");

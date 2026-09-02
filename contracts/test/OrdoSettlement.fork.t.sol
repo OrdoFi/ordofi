@@ -41,7 +41,7 @@ contract OrdoSettlementForkTest is Test {
         if (!forked) {
             emit log("SKIPPED: not forked. Run: node scripts/fork-proxy.mjs");
             emit log("         then: forge test --fork-url http://127.0.0.1:8545");
-            return;
+            vm.skip(true);
         }
 
         assertEq(block.chainid, 4663, "forked Robinhood Chain");

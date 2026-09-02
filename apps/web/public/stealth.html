@@ -202,8 +202,15 @@
       { type: "function", name: "allowance", stateMutability: "view", inputs: [{ type: "address" }, { type: "address" }], outputs: [{ type: "uint256" }] },
     ];
 
-    let CHAIN = null, provider = null, account = null, keys = null, stealthOn = true, sender = ORDO_STEALTH_SEND;
-    let balances = null, recipientMeta = null, recipientState = "empty", mine = [];
+    // Pinned in the page: the API may describe the chain, it may not redefine
+    // it. A compromised or wrong answer must not be able to install another RPC
+    // into the wallet or point this page at another contract.
+    const PINNED_CHAIN = { id: 4663, idHex: "0x1237", name: "Robinhood Chain", rpc: "https://rpc.ordofi.network", explorer: "https://robinhoodchain.blockscout.com" };
+    let CHAIN = PINNED_CHAIN, provider = null, account = null, keys = null, stealthOn = true;
+    const sender = ORDO_STEALTH_SEND; // the only contract this page will ever pay into
+    let balances = null, recipientMeta = null, recipientFor = null, recipientState = "empty", mine = [];
+    /** Addresses below this are the zero address and the precompiles: nothing sent there can be spent. */
+    const isBlackhole = (a) => BigInt(a) < 0x10000n;
 
     // ---------- io ----------
     async function api(path) { const r = await fetch(path, { cache: "no-store" }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
@@ -236,14 +243,26 @@
       try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN.idHex }] }); }
       catch { await provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: CHAIN.idHex, chainName: CHAIN.name + " · OrdoFi protected", rpcUrls: [CHAIN.rpc], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: [CHAIN.explorer] }] }); }
     }
+    /** Every send starts here: the wallet must be on this chain, verified after any switch, or nothing is signed. */
+    async function assertChain() {
+      if (!provider) throw new Error("connect a wallet first");
+      await ensureChain();
+      if ((await provider.request({ method: "eth_chainId" })) !== CHAIN.idHex) throw new Error("switch your wallet to Robinhood Chain first — nothing was sent");
+    }
+    /** eth_sendTransaction with the chain pinned into the request, so a wallet on another chain refuses it. */
+    const sendTx = (tx) => provider.request({ method: "eth_sendTransaction", params: [{ ...tx, from: account, chainId: CHAIN.idHex }] });
+    const onAccounts = (accs) => { account = accs[0] ?? null; keys = null; mine = []; onAccount(); };
+    const onChain = () => render();
     async function connectWith(entry) {
       closePicker();
       try {
+        if (provider?.removeListener) { provider.removeListener("accountsChanged", onAccounts); provider.removeListener("chainChanged", onChain); }
         provider = entry.provider;
         const [a] = await provider.request({ method: "eth_requestAccounts" });
         account = a;
         await ensureChain();
-        provider.on?.("accountsChanged", (accs) => { account = accs[0] ?? null; keys = null; mine = []; onAccount(); });
+        provider.on?.("accountsChanged", onAccounts);
+        provider.on?.("chainChanged", onChain);
         onAccount();
       } catch (e) { setResult("result", e?.code === 4001 ? "Connection rejected." : e.message, true); }
     }
@@ -285,45 +304,79 @@
       if (recipientState !== "ok") { go.textContent = recipientState === "notenabled" && stealthOn ? "Recipient hasn't enabled private receiving" : "Enter the recipient's wallet"; go.disabled = true; return; }
       go.textContent = stealthOn ? "Send privately" : "Send"; go.disabled = false;
     }
+    /**
+     * The recipient's meta-address, read from the ERC-6538 registry itself.
+     * The stealth address is derived from these bytes, and whoever controls
+     * them controls the money, so they come from the chain, not from our API.
+     */
+    async function registryMetaOf(address) {
+      const data = encodeFunctionData({ abi: REGISTRY_ABI, functionName: "stealthMetaAddressOf", args: [address, SCHEME_ID] });
+      const out = String(await rpc("eth_call", [{ to: ERC6538_REGISTRY, data }, "latest"]));
+      const hex = out.slice(2);
+      if (hex.length < 128) return null;
+      const len = parseInt(hex.slice(64, 128), 16);
+      if (len !== 66) return null; // 33-byte spending key + 33-byte viewing key, or it is not scheme 1
+      return `st:rho:0x${hex.slice(128, 128 + len * 2)}`;
+    }
+    let resolveSeq = 0;
     async function resolveRecipient() {
+      const my = ++resolveSeq;
       const raw = $("to").value.trim();
-      recipientMeta = null; recipientState = "empty";
+      recipientMeta = null; recipientFor = null; recipientState = "empty";
       const h = $("to-hint"); h.className = "hint left";
       if (!raw) { h.textContent = ""; return render(); }
-      if (!isAddress(raw)) { h.textContent = "That is not an address."; h.className += " bad"; recipientState = "bad"; return render(); }
-      if (account && raw.toLowerCase() === account.toLowerCase()) { h.textContent = "That's your own wallet."; }
-      if (!stealthOn) { recipientState = "ok"; h.textContent = "Sending normally — this transfer will be visible to anyone."; return render(); }
+      if (!isAddress(raw) || isBlackhole(raw)) { h.textContent = isAddress(raw) ? "That address belongs to nobody; anything sent there is gone." : "That is not an address."; h.className += " bad"; recipientState = "bad"; return render(); }
+      const to = getAddress(raw);
+      if (account && to.toLowerCase() === account.toLowerCase()) { h.textContent = "That's your own wallet."; }
+      if (!stealthOn) { recipientState = "ok"; recipientFor = to; h.textContent = "Sending normally — this transfer will be visible to anyone."; return render(); }
       h.textContent = "Checking whether this wallet can receive privately…";
       try {
-        const d = await api(`/api/stealth/meta?address=${getAddress(raw)}`);
-        if (d.metaAddress) { recipientMeta = d.metaAddress; recipientState = "ok"; h.textContent = `${short(raw)} can receive privately.`; h.className += " ok"; }
-        else { recipientState = "notenabled"; h.innerHTML = `<b>${short(raw)} hasn't turned on private receiving.</b> Send them <a href="${location.origin}/stealth" target="_blank">this page</a> — it's one click — or switch Stealth mode off to send normally.`; h.className += " bad"; }
-      } catch (e) { recipientState = "bad"; h.textContent = `Lookup failed: ${e.message}`; h.className += " bad"; }
+        const meta = await registryMetaOf(to);
+        if (my !== resolveSeq) return; // the field changed while we were looking
+        if (meta) { recipientMeta = meta; recipientFor = to; recipientState = "ok"; h.textContent = `${short(to)} can receive privately.`; h.className += " ok"; }
+        else { recipientState = "notenabled"; h.innerHTML = `<b>${short(to)} hasn't turned on private receiving.</b> Send them <a href="${location.origin}/stealth" target="_blank">this page</a> — it's one click — or switch Stealth mode off to send normally.`; h.className += " bad"; }
+      } catch (e) { if (my !== resolveSeq) return; recipientState = "bad"; h.textContent = `Lookup failed: ${e.message}`; h.className += " bad"; }
       render();
     }
     function setResult(id, html, bad = false) { const el = $(id); el.innerHTML = html; el.className = "result" + (bad ? " bad" : ""); }
 
     async function send() {
       if (!account) return openPicker();
-      const a = asset(), gross = parseAmt(), to = getAddress($("to").value.trim());
+      const a = asset(), gross = parseAmt();
+      const rawTo = $("to").value.trim();
       $("go").disabled = true;
       try {
+        if (!isAddress(rawTo) || isBlackhole(rawTo)) throw new Error("that is not an address anyone controls — nothing was sent");
+        const to = getAddress(rawTo);
+        // The meta-address we derive from must be the one looked up for exactly
+        // this address. Typing a new recipient and clicking before the lookup
+        // finishes must never pay the previous one.
+        if (recipientState !== "ok" || !recipientFor || recipientFor.toLowerCase() !== to.toLowerCase()) {
+          setResult("result", "Still checking the recipient — try again in a moment.", true);
+          resolveRecipient();
+          return;
+        }
+        if (!gross || gross <= 0n) throw new Error("enter an amount");
+        await assertChain();
         if (!stealthOn) {
           setResult("result", "Confirm in your wallet…");
           const hash = a.address
-            ? await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: a.address, data: encodeFunctionData({ abi: ERC20, functionName: "transfer", args: [to, gross] }) }] })
-            : await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to, value: "0x" + gross.toString(16) }] });
+            ? await sendTx({ to: a.address, data: encodeFunctionData({ abi: ERC20, functionName: "transfer", args: [to, gross] }) })
+            : await sendTx({ to, value: "0x" + gross.toString(16) });
           setResult("result", `Sent ${txLink(hash)} — waiting for the block…`); await waitFor(hash);
           setResult("result", `Sent ${fmt(gross)} ${a.symbol} to ${short(to)} · ${txLink(hash)}`);
         } else {
           const payment = generateStealthAddress(recipientMeta);
+          if (isBlackhole(payment.stealthAddress)) throw new Error("derived an unusable stealth address — nothing was sent");
           const { net } = stealthSplit(gross);
           const metadata = encodeMetadata({ viewTag: payment.viewTag, token: a.address ? getAddress(a.address) : NATIVE_TOKEN, amount: net });
           if (a.address) {
             const allowance = BigInt(await rpc("eth_call", [{ to: a.address, data: encodeFunctionData({ abi: ERC20, functionName: "allowance", args: [account, sender] }) }, "latest"]));
             if (allowance < gross) {
-              setResult("result", `Approve ${a.symbol} once in your wallet…`);
-              const ah = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: a.address, data: encodeFunctionData({ abi: ERC20, functionName: "approve", args: [sender, 2n ** 256n - 1n] }) }] });
+              // Exactly this payment, never unlimited: an allowance is a claim on
+              // the whole balance for as long as it stands.
+              setResult("result", `Approve ${fmt(gross)} ${a.symbol} in your wallet…`);
+              const ah = await sendTx({ to: a.address, data: encodeFunctionData({ abi: ERC20, functionName: "approve", args: [sender, gross] }) });
               await waitFor(ah);
             }
           }
@@ -332,7 +385,7 @@
             ? encodeFunctionData({ abi: STEALTH_SEND_ABI, functionName: "sendToken", args: [getAddress(a.address), gross, payment.stealthAddress, payment.ephemeralPublicKey, metadata] })
             : encodeFunctionData({ abi: STEALTH_SEND_ABI, functionName: "sendETH", args: [payment.stealthAddress, payment.ephemeralPublicKey, metadata] });
           const value = a.address ? GAS_STIPEND : gross;
-          const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: sender, data, value: "0x" + value.toString(16) }] });
+          const hash = await sendTx({ to: sender, data, value: "0x" + value.toString(16) });
           setResult("result", `Sent ${txLink(hash)} — waiting for the block…`); await waitFor(hash);
           setResult("result", `Delivered ${fmt(net)} ${a.symbol} privately · ${txLink(hash)}<br/>Only ${short(to)} can see it's theirs.`);
         }
@@ -361,10 +414,20 @@
     async function enable() {
       $("enable").disabled = true;
       try {
-        setResult("enable-result", "Sign once to create your keys…");
-        const k = await deriveKeys();
+        await assertChain();
+        // The keys exist only as a function of this wallet's signature. A
+        // signer that is not deterministic (or a contract account) would
+        // publish keys nobody can ever reproduce, and every payment sent to
+        // them would be lost. Two signatures now, compared, is the check.
+        if ((await rpc("eth_getCode", [account, "latest"])) !== "0x") throw new Error("this is a contract account; private receiving needs a wallet whose signature can recreate the keys");
+        setResult("enable-result", "Sign to create your keys (you will be asked twice — the two signatures must match)…");
+        const sig1 = await provider.request({ method: "personal_sign", params: [UNLOCK_MESSAGE, account] });
+        const sig2 = await provider.request({ method: "personal_sign", params: [UNLOCK_MESSAGE, account] });
+        if (sig1 !== sig2) throw new Error("your wallet does not sign deterministically, so these keys could not be recovered later — private receiving was not enabled");
+        keys = keysFromSignature(sig1);
+        const k = keys;
         setResult("enable-result", "Confirm the registration in your wallet…");
-        const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: ERC6538_REGISTRY, data: encodeFunctionData({ abi: REGISTRY_ABI, functionName: "registerKeys", args: [SCHEME_ID, metaAddressBytes(k.spendingPublicKey, k.viewingPublicKey)] }) }] });
+        const hash = await sendTx({ to: ERC6538_REGISTRY, data: encodeFunctionData({ abi: REGISTRY_ABI, functionName: "registerKeys", args: [SCHEME_ID, metaAddressBytes(k.spendingPublicKey, k.viewingPublicKey)] }) });
         setResult("enable-result", `Registering ${txLink(hash)}…`); await waitFor(hash);
         setResult("enable-result", `Done · ${txLink(hash)}`); refreshReceiving();
       } catch (e) { setResult("enable-result", e?.code === 4001 ? "Rejected — nothing happened." : esc(e?.message ?? e), true); $("enable").disabled = false; }
@@ -439,7 +502,11 @@
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePicker(); });
     $("amt").addEventListener("input", render);
     $("asset").addEventListener("change", () => { render(); resolveRecipient(); });
-    $("to").addEventListener("input", () => { clearTimeout(resolveRecipient.t); resolveRecipient.t = setTimeout(resolveRecipient, 350); });
+    $("to").addEventListener("input", () => {
+      // Invalidate the previous recipient synchronously; the lookup is debounced.
+      recipientMeta = null; recipientFor = null; recipientState = "pending"; render();
+      clearTimeout(resolveRecipient.t); resolveRecipient.t = setTimeout(resolveRecipient, 350);
+    });
     $("sw").addEventListener("click", () => { stealthOn = !stealthOn; render(); resolveRecipient(); });
     $("go").addEventListener("click", send);
     $("enable").addEventListener("click", enable);
@@ -447,7 +514,16 @@
     $("sweep").addEventListener("click", () => sweepAll(account));
     $("sweep-other").addEventListener("click", () => { const to = prompt("Move everything to which address?\n\nUse a fresh address if you don't want these payments linked to your main wallet."); if (to && isAddress(to)) sweepAll(getAddress(to)); });
 
-    api("/api/trade/chain").then((c) => { CHAIN = c; return api("/api/stealth/feed"); }).then((f) => { if (f.sender) sender = f.sender; const to = new URLSearchParams(location.search).get("to"); if (to) { $("to").value = to; resolveRecipient(); } }).catch(() => setResult("result", "Could not reach the chain endpoint.", true));
+    // The API is consulted, not obeyed: a chain or contract that disagrees with
+    // what is pinned in this page is reported and ignored.
+    api("/api/trade/chain").then((c) => {
+      if (c?.idHex && c.idHex !== PINNED_CHAIN.idHex) { setResult("result", "This page is built for Robinhood Chain and the server describes another chain. Not sending anything.", true); $("go").disabled = true; }
+      return api("/api/stealth/feed");
+    }).then((f) => {
+      if (f?.sender && f.sender.toLowerCase() !== sender.toLowerCase()) console.warn(`stealth: server names ${f.sender} as the send contract; this page only pays ${sender}`);
+      const to = new URLSearchParams(location.search).get("to");
+      if (to) { $("to").value = to; resolveRecipient(); }
+    }).catch(() => { /* the page works from its pinned constants */ });
     render();
   </script>
 
