@@ -18,7 +18,7 @@ import { CHAIN, USDG, WETH, bestPool, bestPoolV4, factoryPoolsFor, poolCache, re
 import { batchCall, call } from "./rpc.mjs";
 import {
   LADDER_V4_ABI, LADDER_V4_TOPICS, MODIFY_LIQUIDITY_EVENT, MODIFY_LIQUIDITY_TOPIC, POSM_ABI,
-  holdings as v4Holdings, isPlainMoneyPool, keyArg, keyFromChain, liquidityOf as v4LiquidityOf, poolKeyOf, segmentsOf, slot0 as v4Slot0, tickProfile as v4TickProfile, tokensOf,
+  SPACING_FOR_FEE, holdings as v4Holdings, initializeCalldata, isPlainMoneyPool, keyArg, keyFromChain, liquidityOf as v4LiquidityOf, poolKeyOf, segmentsOf, slot0 as v4Slot0, tickProfile as v4TickProfile, tokensOf,
 } from "./v4.mjs";
 
 /**
@@ -645,6 +645,47 @@ export async function poolsForToken(token) {
     .map((p) => ({ ...p, quoteSymbol: p.quote === WETH ? "ETH" : "USDG" }))
     .sort(byLiq);
 }
+/**
+ * Creating a pool that does not exist yet: a plain V4 pool of native ETH and
+ * the token at the chosen fee tier, opened at the price the token already
+ * trades at (its busiest market, whatever venue or hook that has), or at a
+ * price the caller names when nothing trades. Costs gas only; the first
+ * position is placed afterwards from the same page.
+ */
+export async function poolCreatePlan({ token, fee, price = null }) {
+  token = lower(token);
+  if (isMoney(token)) throw new Error("ETH and USDG are the quote side, not a pool to create");
+  fee = Number(fee);
+  const tickSpacing = SPACING_FOR_FEE[fee];
+  if (!tickSpacing) throw new Error("fee tier must be 0.01%, 0.05%, 0.3% or 1%");
+  const existing = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId))
+    .find((k) => k && k.native0 && !k.hooked && k.fee === fee && k.tickSpacing === tickSpacing);
+  if (existing) throw new Error(`An ETH pool at ${(fee / 1e4).toFixed(2)}% already exists for this token.`);
+  const info = await tokenInfo(token);
+  // Where the price comes from: the caller, else the token's busiest market.
+  let ethPerToken = price != null ? Number(price) : null, source = price != null ? "given" : null;
+  if (ethPerToken == null) {
+    const row = (await poolsList(STORE)).all.find((r) => r.token === token);
+    const st = row?.pool ? await poolState(row.pool, token).catch(() => null) : null;
+    if (st?.price) {
+      const q = lower(st.quote.address);
+      const usd = await ethUsd().catch(() => null);
+      ethPerToken = q === WETH ? st.price : q === USDG && usd ? st.price / usd : null;
+      source = ethPerToken != null ? `${info.symbol}/${st.quote.symbol}${st.kind === "v4" ? " V4" : " V3"}${st.hooks ? " (hooked)" : ""}` : null;
+    }
+  }
+  if (!(ethPerToken > 0)) throw new Error("This token has no market to take a starting price from; enter one.");
+  // token1 (the token) per token0 (ETH), raw units: 10^(dToken−18) / (ETH per token).
+  const raw = 10 ** (info.decimals - 18) / ethPerToken;
+  const { key, sqrtPriceX96, data } = initializeCalldata(token, fee, raw);
+  const usd = await ethUsd().catch(() => null);
+  return {
+    token, symbol: info.symbol, fee, tickSpacing, key, sqrtPriceX96: sqrtPriceX96.toString(),
+    price: ethPerToken, priceUsd: usd ? ethPerToken * usd : null, priceSource: source,
+    tx: { to: getAddress(V4.poolManager), data, value: "0" },
+  };
+}
+
 // ---------------------------------------------------------------- depth
 
 /**

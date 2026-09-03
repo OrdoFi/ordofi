@@ -210,7 +210,7 @@ async function closeAll(ladders, btn, opts) {
 // ------------------------------------------------------------------ dialogs
 
 let modal;
-function dialog(title, body) {
+export function dialog(title, body) {
   ensureStyle();
   if (!modal) {
     modal = document.createElement("div"); modal.className = "ld-modal";

@@ -95,6 +95,9 @@
     .grp > button small { color: var(--muted); font-size: 11px; letter-spacing: .06em; }
     .grp > button b { font-weight: 500; }
     .grp.on > button { border-color: var(--accent); color: var(--accent); }
+    .grp.create > button { border-style: dashed; color: var(--muted); }
+    .grp.create > button:hover { border-color: var(--accent); color: var(--accent); }
+    .grp .menu button[data-create] span { color: var(--accent); }
     .grp .menu { display: none; position: absolute; top: calc(100% + 4px); left: 0; min-width: 280px; background: #fff; border: 1px solid var(--border); z-index: 20; box-shadow: 0 10px 30px rgba(0,0,0,.08); }
     .grp.open .menu { display: block; }
     .grp .menu button { display: flex; justify-content: space-between; width: 100%; font-family: var(--mono); font-size: 12px; padding: 10px 14px; border: none; border-bottom: 1px solid var(--border); background: none; cursor: pointer; color: var(--text); text-align: left; }
@@ -171,7 +174,7 @@
 
   <script type="module">
     import { wallet, rejected } from "/wallet.js";
-    import { renderLadders, esc, usd, num, fmtPx, fmtBig, formatUnits, parseUnits, SHAPE_DESC } from "/ladders.js";
+    import { renderLadders, esc, usd, num, fmtPx, fmtBig, formatUnits, parseUnits, SHAPE_DESC, dialog, closeDialog } from "/ladders.js";
     import { mountShell, skeletonRows, drawSpark, busy, tokenIcon } from "/liquidity.js";
     const $ = (id) => document.getElementById(id);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -382,15 +385,74 @@
     const fmtFee = (p) => p.fee == null ? "dyn" : `${(p.fee / 1e4).toFixed(2)}%`;
     function renderGroups() {
       const fmtLiq = (p) => { const l = Number(BigInt(p.liquidity)); return l > 0 ? "live" : "empty"; };
+      // A V4 ETH pool that can be built into is what a stake and a plain ladder need; when
+      // the token has none, the group offers to create one — a few cents of gas, and this
+      // page places the first position right after.
+      const createRow = `<button data-create="1"><span>+ Create an ETH pool at another fee</span><small>gas only</small></button>`;
       $("groups").innerHTML = GROUPS.map(([key, label, is]) => {
         const ps = pools.filter(is);
-        if (!ps.length) return key === "v4eth" ? `<div class="grp"><button disabled style="cursor:default;opacity:.55" title="No V4 ETH pool for this token yet"><small>V4 ETH</small><b>none</b></button></div>` : "";
+        if (!ps.length) return key === "v4eth" ? `<div class="grp create"><button data-create="1" title="Create a V4 ETH pool for this token"><small>V4 ETH</small><b>create</b><span>+</span></button></div>` : "";
         const cur = ps.find((p) => p.pool === pool);
         return `<div class="grp ${cur ? "on" : ""}" data-g="${key}"><button><small>${label}</small><b>${cur ? fmtFee(cur) : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
-          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}${p.hooked ? " · hook" : ""}</small>` : ""}</span><small>${p.buildable === false ? "view only" : fmtLiq(p)}</small></button>`).join("")}</div></div>`;
+          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}${p.hooked ? " · hook" : ""}</small>` : ""}</span><small>${p.buildable === false ? "view only" : fmtLiq(p)}</small></button>`).join("")}${key === "v4eth" ? createRow : ""}</div></div>`;
       }).join("");
-      $("groups").querySelectorAll(".grp > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
+      $("groups").querySelectorAll(".grp:not(.create) > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
       $("groups").querySelectorAll(".menu button[data-p]").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));
+      $("groups").querySelectorAll("button[data-create]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); createPoolDialog(); }));
+    }
+
+    // ---- create a pool: PoolManager.initialize at the price the token already trades at
+    const TIERS = [[500, "0.05%", "stable pairs, very tight"], [3000, "0.3%", "the everyday tier"], [10000, "1%", "young or volatile tokens"]];
+    async function createPoolDialog() {
+      const have = new Set(pools.filter((p) => p.kind === "v4" && p.quote === WETH && p.buildable !== false).map((p) => p.fee));
+      let fee = have.has(10000) ? (have.has(3000) ? 500 : 3000) : 10000, plan = null, seq = 0;
+      const b = dialog(`Create an ETH pool for ${esc(token.symbol)}`, `
+        <p>A Uniswap V4 pool of ETH and ${esc(token.symbol)}, no hook, at the fee you pick. Creating it costs gas only and opens it at the price ${esc(token.symbol)} trades at today; the first position is then placed on this page like any other.</p>
+        <div class="shapes" style="margin-top:12px">${TIERS.map(([f, l, d]) => `<button class="shape" data-fee="${f}" ${have.has(f) ? "disabled title=\"already exists\"" : ""}><b>${l}</b><small style="display:block;color:var(--muted);margin-top:3px">${have.has(f) ? "exists" : d}</small></button>`).join("")}</div>
+        <div class="hint" style="margin-top:14px">Starting price · USD per ${esc(token.symbol)}</div>
+        <div class="box"><input id="cp-price" inputmode="decimal" placeholder="loading…" /><span class="u" id="cp-src"></span></div>
+        <div class="hint" id="cp-hint">Taken from the busiest market. Change it only if you know better — the first swaps will pull the price to the market anyway.</div>
+        <div class="foot"><button id="cp-cancel">Cancel</button><button class="go" id="cp-go" disabled>Create pool</button></div>
+        <div class="res" id="cp-res"></div>`);
+      const res = (h, bad) => { const el = b.querySelector("#cp-res"); el.innerHTML = h; el.className = "res" + (bad ? " bad" : ""); };
+      const paint = () => b.querySelectorAll(".shape").forEach((s) => s.classList.toggle("on", Number(s.dataset.fee) === fee));
+      // The price field is in USD; the plan wants ETH per token.
+      let usdPerEth = state?.quote?.address === WETH ? state.quote.usdPerToken : null;
+      if (!usdPerEth) usdPerEth = (await api("/api/pools/platform").catch(() => null))?.ethUsd ?? null;
+      const load = async (givenUsd) => {
+        const my = ++seq; plan = null; b.querySelector("#cp-go").disabled = true;
+        try {
+          const price = givenUsd && usdPerEth ? givenUsd / usdPerEth : null;
+          const p = await api(`/api/pools/create-plan?token=${token.address}&fee=${fee}${price ? `&price=${price}` : ""}`);
+          if (my !== seq) return;
+          plan = p;
+          if (!givenUsd) { b.querySelector("#cp-price").value = p.priceUsd != null ? fmtPx(p.priceUsd) : ""; b.querySelector("#cp-src").textContent = p.priceSource ? `from ${p.priceSource}` : ""; }
+          res(`Opens at ${fmtPx(p.price)} ETH${p.priceUsd != null ? ` (${usd(p.priceUsd, 6)})` : ""} per ${esc(token.symbol)} · tick spacing ${p.tickSpacing} · sent to the Uniswap V4 PoolManager`);
+          b.querySelector("#cp-go").disabled = false;
+        } catch (e) { if (my === seq) { res(esc(e.message), true); if (!givenUsd) { b.querySelector("#cp-price").placeholder = "enter a price"; b.querySelector("#cp-src").textContent = ""; } } }
+      };
+      paint(); load();
+      b.querySelectorAll(".shape:not([disabled])").forEach((s) => s.addEventListener("click", () => { fee = Number(s.dataset.fee); paint(); load(Number(b.querySelector("#cp-price").value.replace(/,/g, "")) || null); }));
+      b.querySelector("#cp-price").addEventListener("input", () => { const v = Number(b.querySelector("#cp-price").value.replace(/,/g, "")); if (v > 0) load(v); });
+      b.querySelector("#cp-cancel").addEventListener("click", closeDialog);
+      b.querySelector("#cp-go").addEventListener("click", async () => {
+        if (!plan) return;
+        if (!wallet.account) { await wallet.openAccount(); if (!wallet.account) return; }
+        const go = b.querySelector("#cp-go"); go.disabled = true;
+        try {
+          res("Confirm in your wallet…");
+          await wallet.send(plan.tx, (h) => res(`Creating the pool ${txLink(h)} — waiting for the block…`));
+          res("Pool created. Waiting for it to show up here…");
+          // The watcher files the Initialize event within a minute; the page picks the pool up as soon as it does.
+          for (let i = 0; i < 40; i++) {
+            await new Promise((r) => setTimeout(r, 3000));
+            const list = await api(`/api/pools/token?token=${token.address}`).catch(() => null);
+            const hit = list?.pools.find((p) => p.kind === "v4" && p.quote === WETH && p.fee === fee && p.buildable !== false);
+            if (hit) { pools = list.pools; closeDialog(); renderGroups(); await selectPool(hit.pool); $("preview").textContent = `Your new pool is empty — this position will be its first liquidity.`; return; }
+          }
+          res("Created, but not indexed yet — reload the page in a minute.");
+        } catch (e) { res(esc(e.message), true); go.disabled = false; }
+      });
     }
     document.addEventListener("click", () => document.querySelectorAll(".grp.open").forEach((x) => x.classList.remove("open")));
 

@@ -11,7 +11,7 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
-import { poolsList, poolsPage, poolsRow, searchIndex, iconImage, warmPoolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
+import { poolsList, poolsPage, poolsRow, searchIndex, iconImage, warmPoolsList, poolCreatePlan, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
 import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawPlan, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
@@ -832,6 +832,7 @@ async function handle(req, res) {
       }
       else if (path === "/api/pools/search") body = await searchAll(store, q.get("q") ?? "");
       else if (path === "/api/pools/token") body = { token: q.get("token"), pools: await poolsForToken(addr("token")) };
+      else if (path === "/api/pools/create-plan") body = await poolCreatePlan({ token: addr("token"), fee: q.get("fee"), price: q.get("price") && Number(q.get("price")) > 0 ? Number(q.get("price")) : null });
       else if (path === "/api/pools/state") body = await poolState(poolKey("pool"), q.get("base") ?? undefined);
       else if (path === "/api/pools/depth") body = await poolDepth(poolKey("pool"), { spanTicks: Math.max(200, Math.min(20_000, Number(q.get("span") ?? 3000))), buckets: Math.max(10, Math.min(120, Number(q.get("buckets") ?? 60))), base: q.get("base") ? addr("base") : null });
       else if (path === "/api/pools/plan") body = await planPosition({

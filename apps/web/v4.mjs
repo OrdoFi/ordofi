@@ -1,4 +1,4 @@
-import { getAddress, parseAbiItem, toEventSelector } from "viem";
+import { encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
 import { V4, isV4PoolId } from "@ordofi/core";
 import { Q96, alignTick, amountsForLiquidity, tickToSqrtPriceX96 } from "@ordofi/core/liquidity";
 import { batchCall, call } from "./rpc.mjs";
@@ -34,6 +34,29 @@ const RUNG_TUPLE = { name: "rungs", type: "tuple[]", components: [
   { name: "amount0", type: "uint256" }, { name: "amount1", type: "uint256" },
   { name: "amount0Min", type: "uint256" }, { name: "amount1Min", type: "uint256" },
 ] };
+
+/** The singleton's one entry point a pool needs to exist: initialize(key, sqrtPriceX96). Anyone may call it. */
+export const POOL_MANAGER_ABI = [
+  { type: "function", name: "initialize", stateMutability: "nonpayable", inputs: [POOL_KEY, { name: "sqrtPriceX96", type: "uint160" }], outputs: [{ type: "int24" }] },
+];
+/** The tick spacing Uniswap pairs with each standard fee tier; V4 lets any pair be chosen, these are the ones people expect. */
+export const SPACING_FOR_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
+
+/**
+ * Calldata to create a plain (hookless, fixed-fee) V4 pool of native ETH and a
+ * token, opening at `rawPrice` — token1 per token0 in raw units — so the first
+ * position can be placed around the price the token already trades at.
+ */
+export function initializeCalldata(token, fee, rawPrice) {
+  const tickSpacing = SPACING_FOR_FEE[fee];
+  if (!tickSpacing) throw new Error("fee tier must be 0.01%, 0.05%, 0.3% or 1%");
+  if (!(rawPrice > 0) || !Number.isFinite(rawPrice)) throw new Error("a starting price is needed");
+  const key = { currency0: NATIVE0, currency1: getAddress(token), fee, tickSpacing, hooks: NATIVE0 };
+  // sqrt(price) · 2^96, built in two halves so the double's 53 bits are spent on the mantissa, not the exponent.
+  const sqrt = Math.sqrt(rawPrice);
+  const sqrtPriceX96 = BigInt(Math.floor(sqrt * 2 ** 48)) * (1n << 48n);
+  return { key, sqrtPriceX96, data: encodeFunctionData({ abi: POOL_MANAGER_ABI, functionName: "initialize", args: [key, sqrtPriceX96] }) };
+}
 
 /** OrdoLadderManagerV4: the V3 manager's surface with a PoolKey where the pool address was. */
 export const LADDER_V4_ABI = [
