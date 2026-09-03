@@ -160,6 +160,43 @@
 
     @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } .strip { grid-template-columns: 1fr 1fr; } .stats4 { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 820px) { .feat { grid-template-columns: 1fr; } .fgrid { max-width: 100%; } .fspark { display: none; } .stats4 { grid-template-columns: 1fr 1fr; } .list th:nth-child(5), .list td:nth-child(5), .list th:nth-child(7), .list td:nth-child(7) { display: none; } }
+    /* Phones. Nothing may be wider than the screen: one overflowing table makes the
+       browser zoom the whole page out, and every breakpoint above then lies. */
+    @media (max-width: 640px) {
+      .pg { padding: 14px 12px 40px; }
+      .head { gap: 12px; margin-bottom: 14px; }
+      .head h1 { font-size: 24px; }
+      .head .meta { font-size: 11px; }
+      .head .meta .mono { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; word-break: break-all; }
+      .strip { grid-template-columns: 1fr 1fr; }
+      .strip div { padding: 10px 12px; }
+      .sec, .panel { overflow-x: clip; }
+      /* The list keeps token · 24h · volume · age, as Delta's phone list does. */
+      .list th:nth-child(2), .list td:nth-child(2), .list th:nth-child(4), .list td:nth-child(4), .list th:nth-child(8), .list td:nth-child(8) { display: none; }
+      .list th:nth-child(7), .list td:nth-child(7) { display: table-cell; }
+      .list th, .list td { padding: 10px 8px; font-size: 12px; }
+      .list td:first-child { max-width: 46vw; }
+      .list td:first-child .nm, .list td:first-child small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; }
+      .tfs button { padding: 6px 7px; }
+      .tfs button:nth-child(1), .tfs button:nth-child(2), .tfs button:nth-child(9) { display: none; }
+      .panel .ph { padding: 10px 12px; }
+      .panel .pb { padding: 12px; }
+      .groups { padding: 10px 12px; }
+      .grp > button { padding: 9px 11px; font-size: 11.5px; }
+      .grp .menu { min-width: 0; width: calc(100vw - 26px); max-width: 360px; }
+      .chartwrap { height: 300px; }
+      .stats4, .stats4.five { grid-template-columns: 1fr 1fr; }
+      .stats4 div { padding: 10px 12px; }
+      .stats4 div:nth-child(2n) { border-right: none; }
+      .stats4 .v { font-size: 14px; }
+      .range2 { grid-template-columns: 1fr; }
+      .go { position: sticky; bottom: 10px; z-index: 5; box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+      /* One column, in the order a phone reads it: chart, then the builder, then your positions — as on Delta. */
+      .grid .left { display: contents; }
+      .grid .left > .panel:first-child { order: 1; }
+      .grid > .panel { order: 2; }
+      .grid .left > .panel.mine { order: 3; margin-top: 0 !important; }
+    }
   </style>
 </head>
 <body>
@@ -177,6 +214,8 @@
     import { wallet, rejected } from "/wallet.js";
     import { renderLadders, esc, usd, num, fmtPx, fmtBig, formatUnits, parseUnits, SHAPE_DESC, dialog, closeDialog } from "/ladders.js";
     import { mountShell, skeletonRows, drawSpark, busy, tokenIcon } from "/liquidity.js";
+    // Big money reads at a glance: $150.1M, not $150,148,030 — as Delta prints it.
+    const usdc = (v) => v == null || !isFinite(v) ? "—" : v >= 1e4 ? "$" + fmtBig(v) : usd(v);
     const $ = (id) => document.getElementById(id);
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const pct = (v) => v == null ? "—" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
@@ -234,13 +273,13 @@
         $("f-hero").href = `/pools/${hero.token}`;
         $("f-hero").innerHTML = `<div class="fhead">${tokenCell(hero)}</div>
           <div class="fgrid">
-            <div><div class="k">Market cap</div><div class="v">${usd(hero.marketCapUsd)}</div></div><div><div class="k">24h</div><div class="v ${cls(hero.change24)}">${pct(hero.change24)}</div></div>
-            <div><div class="k">Vol 24h</div><div class="v">${usd(hero.volume24Usd)}</div></div><div><div class="k">Fees 24h</div><div class="v">${usd(hero.fees24Usd)}</div></div>
+            <div><div class="k">Market cap</div><div class="v">${usdc(hero.marketCapUsd)}</div></div><div><div class="k">24h</div><div class="v ${cls(hero.change24)}">${pct(hero.change24)}</div></div>
+            <div><div class="k">Vol 24h</div><div class="v">${usdc(hero.volume24Usd)}</div></div><div><div class="k">Fees 24h</div><div class="v">${usdc(hero.fees24Usd)}</div></div>
             <div><div class="k">Trades 24h</div><div class="v">${num(hero.trades24, 0)}</div></div><div><div class="k">Pool age</div><div class="v">${hero.ageDays == null ? "—" : hero.ageDays + "d"}</div></div>
           </div><canvas class="fspark" width="600" height="160"></canvas>`;
         sparkInto(hero, $("f-hero").querySelector("canvas"), 3.5);
       }
-      for (const [el, t, line] of [[$("f-traded"), mt, mt ? `<b>${num(mt.trades24, 0)} trades</b><small>${usd(mt.marketCapUsd)} MC</small>` : ""], [$("f-volume"), hv, hv ? `<b>${usd(hv.volume24Usd)}</b><small>${usd(hv.marketCapUsd)} MC</small>` : ""]]) {
+      for (const [el, t, line] of [[$("f-traded"), mt, mt ? `<b>${num(mt.trades24, 0)} trades</b><small>${usdc(mt.marketCapUsd)} MC</small>` : ""], [$("f-volume"), hv, hv ? `<b>${usdc(hv.volume24Usd)}</b><small>${usdc(hv.marketCapUsd)} MC</small>` : ""]]) {
         if (!t) continue;
         el.href = `/pools/${t.token}`;
         el.innerHTML = `${el.querySelector(".k").outerHTML}<div class="fhead">${tokenCell(t)}</div><div class="fline">${line}</div><canvas class="fspark" width="600" height="110"></canvas>`;
@@ -253,7 +292,7 @@
       const tb = $(`rows-${sec}`);
       tb.innerHTML = rows.length ? rows.map((t, i) => `<tr class="row rise rise-${Math.min(i + 1, 8)}" data-t="${t.token}">
         <td>${tokenCell(t)}</td>
-        <td>${usd(t.marketCapUsd)}</td><td class="${cls(t.change24)}">${pct(t.change24)}</td><td>${usd(t.fees24Usd)}</td><td>${num(t.trades24, 0)}</td><td>${usd(t.volume24Usd)}</td><td>${t.ageDays == null ? "—" : t.ageDays + "d"}</td>
+        <td>${usdc(t.marketCapUsd)}</td><td class="${cls(t.change24)}">${pct(t.change24)}</td><td>${usdc(t.fees24Usd)}</td><td>${num(t.trades24, 0)}</td><td>${usdc(t.volume24Usd)}</td><td>${t.ageDays == null ? "—" : t.ageDays + "d"}</td>
         <td><span class="sparkwrap"><canvas class="spark" data-i="${i}" width="220" height="56"></canvas></span></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No ${q === "all" ? "" : q + " "}markets yet.</td></tr>`;
       tb.querySelectorAll("tr.row").forEach((r) => r.addEventListener("click", () => { location.href = `/pools/${r.dataset.t}`; }));
       rows.forEach((t, i) => sparkInto(t, tb.querySelector(`canvas[data-i="${i}"]`), 2.5));
@@ -261,7 +300,7 @@
     async function closes24(t) {
       if (sparkCache.has(t.token)) return sparkCache.get(t.token);
       // A V4 market's tape is its own pool's; without the PoolId the request would look for a V3 pool.
-      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quoteAddress ?? (t.quote === "ETH" ? "eth" : USDG)}&bucketSec=1800&hours=24${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
+      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
       sparkCache.set(t.token, p);
       return p;
     }
@@ -331,7 +370,7 @@
         <div class="head">${logo(token)}
           <div><h1>${esc(token.symbol)}</h1><div class="nm">${esc(token.name ?? "")} · Robinhood Chain</div><div class="meta"><span class="mono">${token.address}</span> <button id="copy-addr">copy</button> · <a href="${EXPLORER}/token/${token.address}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${token.address}">trade</a></div></div></div>
         <div class="grid">
-          <div>
+          <div class="left">
             <div class="panel">
               <div class="ph"><h3>Liquidity pools</h3><span class="chartnote" id="pool-note"></span></div>
               <div class="groups" id="groups"></div>
@@ -341,7 +380,7 @@
               <div class="chartfoot"><span>drag the guides to set your range</span><span id="axis-unit">price, USD</span></div>
               <div class="stats4 five"><div><div class="k">Market cap</div><div class="v" id="s-mc">—</div></div><div><div class="k">24h change</div><div class="v" id="s-chg">—</div></div><div><div class="k">24h volume</div><div class="v" id="s-vol">—</div></div><div><div class="k">24h fees</div><div class="v" id="s-fees">—</div></div><div><div class="k">Liquidity</div><div class="v" id="s-liq">—</div></div></div>
             </div>
-            <div class="panel" style="margin-top:22px"><div class="ph"><h3>Your positions</h3><span class="chartnote" id="pos-note">connect a wallet</span></div><div id="cards"><div class="empty">Connect a wallet to see your positions.</div></div></div>
+            <div class="panel mine" style="margin-top:22px"><div class="ph"><h3>Your positions</h3><span class="chartnote" id="pos-note">connect a wallet</span></div><div id="cards"><div class="empty">Connect a wallet to see your positions.</div></div></div>
           </div>
           <div class="panel">
             <div class="ph"><h3>Position shape</h3><span class="chartnote">one transaction</span></div>
@@ -582,10 +621,10 @@
         if (!d.candles.length) {
           const row = await tokenRow();
           if (row && row.pool !== pool && state.quote.usdPerToken) {
-            const rowQuote = row.quoteAddress ?? (row.quote === "ETH" ? "eth" : USDG);
+            const rowQuote = row.quote === "ETH" ? "eth" : USDG;
             const alt = await api(`/api/trade/candles?base=${base}&quote=${rowQuote}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}${row.kind === "v4" ? `&pool=${row.pool}` : ""}`);
             if (alt.candles.length) {
-              const rowQuoteUsd = row.quote === "USDG" ? 1 : row.quote === "ETH" ? (state.quote.address === WETH ? state.quote.usdPerToken : (await api("/api/pools/platform").catch(() => null))?.ethUsd) : null;
+              const rowQuoteUsd = row.quote === "USDG" ? 1 : state.quote.address === WETH ? state.quote.usdPerToken : (await api("/api/pools/platform").catch(() => null))?.ethUsd;
               if (rowQuoteUsd) {
                 const k = rowQuoteUsd / state.quote.usdPerToken;
                 const px = (c) => { const o = { ...c }; for (const f of ["open", "high", "low", "close"]) if (typeof o[f] === "number") o[f] *= k; return o; };

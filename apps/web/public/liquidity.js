@@ -39,7 +39,17 @@ const CSS = `
 .lq-stats .k { font-family: var(--mono); font-size: 9.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; white-space: nowrap; }
 .lq-stats .v { font-family: var(--mono); font-size: 15px; margin-top: 2px; white-space: nowrap; }
 @media (max-width: 1100px) { .lq { grid-template-columns: 1fr 1fr; } .lq-stats { grid-column: 1 / -1; overflow-x: auto; } }
-@media (max-width: 640px) { .lq { grid-template-columns: 1fr; } .lq-rail a { flex: 1; justify-content: center; padding: 11px 6px; } }
+@media (max-width: 640px) {
+  .lq { grid-template-columns: 1fr; }
+  .lq-rail a { flex: 1; justify-content: center; padding: 11px 6px; }
+  /* Four figures as a 2×2 grid: nothing on a phone should scroll sideways. */
+  .lq-stats { display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; }
+  .lq-stats div { min-width: 0; padding: 8px 12px; }
+  .lq-stats div:nth-child(2n) { border-right: none; }
+  .lq-stats div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .lq-stats .v { font-size: 14px; }
+  .lq-results { max-height: 60vh; }
+}
 
 /* motion shared by the liquidity pages */
 @keyframes lq-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }

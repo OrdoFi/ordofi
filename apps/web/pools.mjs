@@ -311,12 +311,14 @@ export async function poolsList(store) {
         venues: [kind],
         pools: 1,
       };
+      row.mainVol = row.volume24Usd; // the busiest market so far speaks for the token
       if (!cur) byToken.set(baseAddr, row);
       else {
         cur.volume24Usd += row.volume24Usd; cur.fees24Usd += row.fees24Usd; cur.trades24 += row.trades24; cur.pools++;
         if (!cur.quotes.includes(row.quote)) cur.quotes.push(row.quote);
         if (!cur.venues.includes(kind)) cur.venues.push(kind);
-        if (row.volume24Usd > (cur.mainVol ?? 0)) { cur.pool = row.pool; cur.kind = kind; cur.quote = row.quote; cur.mainVol = row.volume24Usd; }
+        // The busiest market speaks for the token: its pool, quote, price and move.
+        if (row.volume24Usd > cur.mainVol) { cur.pool = row.pool; cur.kind = kind; cur.quote = row.quote; cur.quoteAddress = row.quoteAddress; cur.priceUsd = row.priceUsd ?? cur.priceUsd; cur.change24 = row.change24 ?? cur.change24; cur.mainVol = row.volume24Usd; }
       }
     }
 

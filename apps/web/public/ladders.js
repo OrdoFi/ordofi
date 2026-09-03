@@ -71,6 +71,7 @@ export const CSS = `
 .ld p{color:var(--muted);font-size:13px;line-height:1.6;margin:0 0 14px}
 .ld h4{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:16px 0 8px}
 .ld .shapes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+@media (max-width:640px){.lg-h{flex-wrap:wrap;padding:10px 12px}.lg-h .closeall{margin-left:auto}.lc{padding:12px}.lc .kv{grid-template-columns:1fr 1fr;gap:10px 12px}.lc .acts button{flex:1 1 calc(50% - 4px);text-align:center}.ld-modal{padding:4vh 8px}.ld .shapes{grid-template-columns:1fr}.ld .b{padding:14px}}
 .ld .shape{border:1px solid var(--border);background:#fff;padding:10px;cursor:pointer}
 .ld .shape.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .ld .shape b{display:block;font-size:12.5px}.ld .shape small{display:block;color:var(--muted);font-size:10.5px;line-height:1.4;margin-top:3px}

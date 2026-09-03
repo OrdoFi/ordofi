@@ -95,6 +95,16 @@
     .sc-open:hover { background: var(--text); color: #fff; }
     .sc-detail { border-top: 1px solid var(--border); margin: 0 -16px -16px; }
     @media (max-width: 900px) { .dwrap { grid-template-columns: 1fr; } .grid3 { grid-template-columns: 1fr; } .create .grid3 { grid-template-columns: 1fr; } canvas.trend { display: none; } }
+    @media (max-width: 640px) {
+      .pg { padding: 14px 12px 40px; }
+      .list th:nth-child(4), .list td:nth-child(4) { display: none; }
+      .list th, .list td { padding: 10px 8px; }
+      .pool b { font-size: 13px; }
+      .pool small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+      .scard, .row td .sc-detail { overflow-x: clip; }
+      .box { padding: 12px; }
+      .go { position: sticky; bottom: 10px; z-index: 5; }
+    }
   </style>
 </head>
 <body>
