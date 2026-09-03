@@ -5,6 +5,7 @@
  * PnL card image to share. Used by the pool page and the Positions page.
  */
 import { wallet, rejected } from "/wallet.js";
+import { tokenIcon } from "/liquidity.js";
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 export const usd = (n, d) => n == null || !isFinite(n) ? "—" : (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: d ?? (Math.abs(n) >= 1000 ? 0 : 2), minimumFractionDigits: Math.abs(n) >= 1000 ? 0 : 2 });

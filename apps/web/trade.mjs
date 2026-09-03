@@ -271,6 +271,11 @@ const meta = new Resolver(join(DATA_DIR, "token-meta.json"), async (address) => 
   if (!goodSymbol(info.symbol)) return null;
   return { address, symbol: info.symbol, name: null, decimals: info.decimals, icon: null, usd: info.usdPerToken ?? null, holders: 0, at: Date.now() };
 }, { concurrency: 3 });
+/** What the registry remembers about a token, or null; never asks the network. */
+export function tokenMetaOf(address) {
+  const m = meta.get(String(address).toLowerCase());
+  return m && !m.miss ? m : null;
+}
 
 /** Which fee tiers a token has against ETH and USDG — i.e. whether the router can reach it. */
 const routes = new Resolver(join(DATA_DIR, "routes.json"), async (token) => {

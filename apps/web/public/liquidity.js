@@ -24,12 +24,15 @@ const CSS = `
 .lq-results h6 { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 10px 14px 6px; margin: 0; }
 .lq-results a { display: flex; align-items: center; gap: 10px; padding: 9px 14px; text-decoration: none; color: var(--text); border-top: 1px solid var(--border-light, var(--border)); }
 .lq-results a:hover, .lq-results a.sel { background: var(--bg-elev); }
-.lq-results .ic { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); font-family: var(--mono); font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
-.lq-results .ic img { width: 100%; height: 100%; object-fit: cover; }
+.lq-results .tk-ic { width: 24px; height: 24px; font-size: 10px; }
 .lq-results b { font-size: 13px; }
 .lq-results small { color: var(--muted); font-size: 11.5px; margin-left: 6px; }
 .lq-results .r { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-.lq-results .none { padding: 14px; color: var(--muted); font-size: 12.5px; }
+.lq-results .none, .lq-results .wait { padding: 14px; color: var(--muted); font-size: 12.5px; }
+
+/* Token avatar: the logo when one exists, otherwise a letter on a hue the address picks. */
+.tk-ic { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; flex: none; overflow: hidden; background: hsl(var(--h) 45% 90%); color: hsl(var(--h) 40% 32%); font-family: var(--mono); font-weight: 600; font-size: 11px; letter-spacing: 0; vertical-align: middle; }
+.tk-ic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #fff; }
 .lq-stats { display: flex; border: 1px solid var(--border); background: var(--card); }
 .lq-stats div { padding: 9px 16px; border-right: 1px solid var(--border); min-width: 118px; }
 .lq-stats div:last-child { border-right: none; }
@@ -69,6 +72,21 @@ const int = (v) => v == null ? "—" : Number(v).toLocaleString();
 let injected = false;
 function inject() { if (injected) return; injected = true; const s = document.createElement("style"); s.textContent = CSS; document.head.appendChild(s); }
 export function ensureMotionStyles() { inject(); }
+
+/**
+ * A token's avatar: its logo through /api/icon (fetched once by the server,
+ * whatever the source), and until it arrives — or if there is none — the
+ * first letter of the symbol on a colour derived from the address, so the
+ * same token always looks the same. `cls` adds classes for sizing.
+ */
+export function tokenIcon(address, symbol, cls = "") {
+  inject();
+  const a = String(address ?? "").toLowerCase();
+  const letter = (String(symbol ?? "?").replace(/[^A-Za-z0-9]/g, "")[0] ?? "?").toUpperCase();
+  const hue = (parseInt(a.slice(2, 8), 16) || 0) % 360;
+  const img = /^0x[0-9a-f]{40}$/.test(a) ? `<img src="/api/icon/${a}" alt="" loading="lazy" decoding="async" onerror="this.remove()" />` : "";
+  return `<span class="tk-ic ${esc(cls)}" style="--h:${hue}" aria-hidden="true">${esc(letter)}${img}</span>`;
+}
 
 /** Placeholder table rows while a list loads: `cols` cells, the first with a round avatar. */
 export function skeletonRows(rows, cols) {
@@ -173,23 +191,37 @@ export function mountShell(root, { page } = {}) {
   const refresh = () => api("/api/pools/platform").then(paint).catch(() => {});
   refresh(); setInterval(refresh, 60_000);
 
-  // Search: debounced, keyboard-navigable, tokens then stakes.
+  // Search: the index comes down once (prefetched after the page settles) and
+  // every keystroke is matched here, so results appear as fast as you type.
   const box = root.querySelector("#lq-search"), q = root.querySelector("#lq-q"), out = root.querySelector("#lq-results");
-  let t = null, seq = 0, sel = -1;
+  let sel = -1, index = null, indexP = null;
+  const loadIndex = () => indexP ??= api("/api/pools/search-index").then((d) => {
+    const low = (s) => String(s ?? "").toLowerCase();
+    index = {
+      tokens: d.tokens.map(([token, symbol, name, mc, vol]) => ({ token, symbol, name, mc, vol, s: low(symbol), n: low(name) })),
+      stakes: (d.stakes ?? []).map(([vault, token, symbol, name, tvl, rate7d]) => ({ vault: low(vault), token, symbol, name, tvl, rate7d, s: low(symbol), n: low(name) })),
+    };
+    return index;
+  }).catch(() => { indexP = null; return null; });
   const close = () => { box.classList.remove("open"); sel = -1; };
-  const render = (d) => {
-    const rows = [];
-    if (d.tokens.length) { rows.push(`<h6>Tokens</h6>`); for (const x of d.tokens) rows.push(`<a href="/pools/${x.token}"><div class="ic">${x.icon ? `<img src="${esc(x.icon)}" alt="" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>${esc(x.name ?? "")}</small></span><span class="r">${usd(x.marketCapUsd)} MC</span></a>`); }
-    if (d.stakes.length) { rows.push(`<h6>Stakes</h6>`); for (const x of d.stakes) rows.push(`<a href="/stakes?vault=${x.vault}"><div class="ic">${x.icon ? `<img src="${esc(x.icon)}" alt="" />` : esc((x.symbol ?? "?").slice(0, 2))}</div><span><b>${esc(x.symbol)}</b><small>stake · ${(x.rate7d * 100).toFixed(1)}% 7d</small></span><span class="r">${usd(x.tvlUsd)} TVL</span></a>`); }
-    out.innerHTML = rows.length ? rows.join("") : `<div class="none">Nothing matches “${esc(q.value.trim())}”.</div>`;
+  // Exact symbol first, then symbol prefix, name prefix, then anything containing the
+  // words; within a class the index's own order (volume, market cap, holders) holds.
+  const rank = (x, needle) => x.s === needle ? 0 : x.s.startsWith(needle) ? 1 : x.n.startsWith(needle) ? 2 : x.s.includes(needle) || x.n.includes(needle) ? 3 : (x.token ?? "").includes(needle) || (x.vault ?? "").includes(needle) ? 4 : -1;
+  const pick = (rows, needle, n) => rows.map((x) => [rank(x, needle), x]).filter(([r]) => r >= 0).sort((a, b) => a[0] - b[0]).slice(0, n).map(([, x]) => x);
+  const short = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+  const render = () => {
+    const raw = q.value.trim(), needle = raw.toLowerCase();
+    if (!needle) { close(); return; }
+    if (!index) { out.innerHTML = `<div class="wait">Loading…</div>`; box.classList.add("open"); return; }
+    const tokens = pick(index.tokens, needle, 8), stakes = pick(index.stakes, needle, 5), rows = [];
+    if (tokens.length) { rows.push(`<h6>Tokens</h6>`); for (const x of tokens) rows.push(`<a href="/pools/${x.token}" title="${x.token}">${tokenIcon(x.token, x.symbol)}<span><b>${esc(x.symbol)}</b><small>${esc(x.name)}</small></span><span class="r">${x.mc ? `${usd(x.mc)} MC` : short(x.token)}</span></a>`); }
+    if (stakes.length) { rows.push(`<h6>Stakes</h6>`); for (const x of stakes) rows.push(`<a href="/stakes?vault=${x.vault}">${tokenIcon(x.token, x.symbol)}<span><b>${esc(x.symbol)}</b><small>stake · ${(x.rate7d * 100).toFixed(1)}% 7d</small></span><span class="r">${usd(x.tvl)} TVL</span></a>`); }
+    out.innerHTML = rows.length ? rows.join("") : `<div class="none">Nothing matches “${esc(raw)}”.</div>`;
     box.classList.add("open"); sel = -1;
   };
-  q.addEventListener("input", () => {
-    clearTimeout(t);
-    const v = q.value.trim();
-    if (!v) { close(); return; }
-    t = setTimeout(async () => { const my = ++seq; try { const d = await api(`/api/pools/search?q=${encodeURIComponent(v)}`); if (my === seq) render(d); } catch { /* quiet */ } }, 160);
-  });
+  q.addEventListener("input", () => { if (!index) loadIndex().then(() => { if (q.value.trim()) render(); }); render(); });
+  q.addEventListener("focus", loadIndex, { once: true });
+  (window.requestIdleCallback ?? ((f) => setTimeout(f, 1500)))(loadIndex);
   q.addEventListener("keydown", (e) => {
     const links = [...out.querySelectorAll("a")];
     if (e.key === "Escape") { close(); q.blur(); }

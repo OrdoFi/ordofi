@@ -11,7 +11,7 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
-import { poolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
+import { poolsList, poolsPage, poolsRow, searchIndex, iconImage, warmPoolsList, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
 import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawPlan, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
@@ -782,6 +782,18 @@ async function handle(req, res) {
     return;
   }
 
+  // Token logos, fetched once from wherever they live and cached here; a miss
+  // is a 404 the page turns into a lettered avatar.
+  if (path.startsWith("/api/icon/")) {
+    const a = path.slice(10).toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(a)) { res.writeHead(400, { "cache-control": "no-store" }).end(); return; }
+    const img = await iconImage(a).catch(() => null);
+    if (!img) { res.writeHead(404, { "cache-control": "public, max-age=3600" }).end(); return; }
+    res.writeHead(200, { "content-type": img.type, "content-length": img.body.length, "cache-control": "public, max-age=86400, stale-while-revalidate=604800" });
+    res.end(img.body);
+    return;
+  }
+
   if (path.startsWith("/api/pools")) {
     if (process.env.ORDO_POOLS_ENABLED !== "1") { sendJson(req, res, 404, { error: "not found" }, { "cache-control": "no-store" }); return; }
     /** "Search tokens & stakes": every token with a market, and every stake, by symbol, name or address. */
@@ -805,7 +817,14 @@ async function handle(req, res) {
       /** Which manager a ladder lives in; V3 unless said otherwise. */
       const venue = () => (q.get("venue") === "v4" ? "v4" : "v3");
       let body;
-      if (path === "/api/pools") body = await poolsList(store);
+      if (path === "/api/pools") body = await poolsPage(store);
+      else if (path === "/api/pools/row") body = { token: q.get("token"), row: await poolsRow(store, addr("token")) };
+      else if (path === "/api/pools/search-index") {
+        const [idx, s] = await Promise.all([searchIndex(store), stakesList(null).catch(() => null)]);
+        body = { ...idx, stakes: (s?.stakes ?? []).map((x) => [x.vault, x.token, x.symbol, x.name ?? "", x.tvlUsd ?? 0, x.rate7d ?? 0]) };
+        sendJson(req, res, 200, body, { "cache-control": "public, max-age=60" });
+        return;
+      }
       else if (path === "/api/pools/platform") {
         const s = await stakesList(null).catch(() => null);
         const eth = s?.ethUsd ?? 0;
@@ -991,4 +1010,5 @@ startBlackholeWatch();
 
 warmTradeCaches(store)
   .then((list) => console.log(`web | trade: ${list.length} tokens listed; resolvers ${JSON.stringify(resolverStats())}`))
-  .catch((e) => console.warn(`web | trade warm-up failed: ${e.message}`));
+  .catch((e) => console.warn(`web | trade warm-up failed: ${e.message}`))
+  .finally(() => { if (process.env.ORDO_POOLS_ENABLED === "1") warmPoolsList(store); });

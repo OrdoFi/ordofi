@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeEventLog, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
@@ -14,7 +14,7 @@ import {
   tickToPrice,
   tickToSqrtPriceX96,
 } from "@ordofi/core/liquidity";
-import { CHAIN, USDG, WETH, bestPool, bestPoolV4, poolCache, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
+import { CHAIN, USDG, WETH, bestPool, bestPoolV4, poolCache, tokenMetaOf, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
 import { batchCall, call } from "./rpc.mjs";
 import {
   LADDER_V4_ABI, LADDER_V4_TOPICS, MODIFY_LIQUIDITY_EVENT, MODIFY_LIQUIDITY_TOPIC, POSM_ABI,
@@ -186,6 +186,8 @@ async function cachedSWR(key, ttlMs, fn) {
   if (!refreshing.has(key)) refreshing.set(key, fn().then((v) => { cache.set(key, { at: Date.now(), v }); return v; }).finally(() => refreshing.delete(key)));
   return refreshing.get(key);
 }
+/** Mark a cached value stale without dropping it: the next reader still gets it at once. */
+const soften = (key) => { const hit = cache.get(key); if (hit) hit.at = 0; };
 
 // ---------------------------------------------------------------- icons
 
@@ -249,12 +251,12 @@ function scheduleIconProbe(addresses) {
       while (i < todo.length) {
         const a = todo[i++];
         iconCache.set(a, { url: await probeIcon(a), at: Date.now() });
-        if (++since % 10 === 0) { persistIcons(); cache.delete("list"); }
+        if (++since % 10 === 0) { persistIcons(); soften("list"); }
       }
     };
     await Promise.all(Array.from({ length: 2 }, worker));
     persistIcons();
-    cache.delete("list"); // the next list carries the new logos
+    soften("list"); // the next list rebuild carries the new logos
   })().catch(() => {}).finally(() => { iconJob = null; });
 }
 
@@ -313,10 +315,15 @@ export async function poolsList(store) {
       }
     }
 
-    // Market cap: total supply × price, cached for an hour per token.
+    // Market cap: total supply × price, cached for an hour per token. The ones
+    // due go over in batches rather than a thousand single calls at once.
     const rows = [...byToken.values()];
-    const supplies = await Promise.all(rows.map((r) => cached(`supply:${r.token}`, 3_600_000, () => call(r.token, ERC20_ABI, "totalSupply").catch(() => null))));
-    rows.forEach((r, i) => { r.marketCapUsd = supplies[i] != null && r.priceUsd ? Number(supplies[i]) / 10 ** r.decimals * r.priceUsd : null; });
+    const due = rows.filter((r) => { const h = cache.get(`supply:${r.token}`); return !h || Date.now() - h.at >= 3_600_000; });
+    if (due.length) {
+      const got = await batchCall(due.map((r) => ({ to: r.token, abi: ERC20_ABI, fn: "totalSupply" })));
+      due.forEach((r, i) => { if (got[i] != null) cache.set(`supply:${r.token}`, { at: Date.now(), v: got[i] }); });
+    }
+    rows.forEach((r) => { const s = cache.get(`supply:${r.token}`)?.v; r.marketCapUsd = s != null && r.priceUsd ? Number(s) / 10 ** r.decimals * r.priceUsd : null; });
     // Age: first candle we have for its main pool.
     for (const r of rows) {
       const cov = store?.candleCoverage?.(r.pool);
@@ -332,6 +339,107 @@ export async function poolsList(store) {
     const highestVolume = all[0] ?? null;
     return { trending, established, all, featured: { mostTraded, highestVolume }, totals, manager: LADDER_MANAGER, managers: { v3: LADDER_MANAGER, v4: LADDER_MANAGER_V4 }, at: new Date().toISOString() };
   });
+}
+
+/** The list without its long tail — what the page downloads. */
+export async function poolsPage(store) {
+  const { all, ...page } = await poolsList(store);
+  return page;
+}
+/** One token's row from the ranked list, for the pool page header. */
+export async function poolsRow(store, token) {
+  const t = lower(token);
+  return (await poolsList(store)).all.find((r) => r.token === t) ?? null;
+}
+/**
+ * Build the list at boot and keep it fresh from a timer, so the first visitor
+ * after a restart — and every visitor after — gets a page, never the rebuild.
+ */
+export function warmPoolsList(store) {
+  const tick = () => poolsList(store).catch(() => {});
+  tick();
+  setInterval(tick, 20_000).unref?.();
+  setInterval(() => searchIndex(store).catch(() => {}), 60_000).unref?.();
+}
+
+// --------------------------------------------------------------- search
+
+/**
+ * The search box's index: every token with a pool against ETH or USDG — the
+ * ones a position can be built on — with the ranking the list already knows
+ * (24h volume, then market cap, then holders). Compact rows, fetched once by
+ * the page and matched in the browser, so typing costs no round trip.
+ */
+export async function searchIndex(store) {
+  return cachedSWR("search-index", 60_000, async () => {
+    const [list, tokens] = await Promise.all([poolsList(store), tradeTokens(store)]);
+    const ranked = new Map(list.all.map((r) => [r.token, r]));
+    const known = new Map(tokens.map((t) => [t.address, t]));
+    const universe = new Set(ranked.keys());
+    for (const p of poolCache.cache.values()) {
+      if (!p || p.miss || !p.v3) continue;
+      if (isMoney(p.token0) && !isMoney(p.token1)) universe.add(p.token1);
+      else if (isMoney(p.token1) && !isMoney(p.token0)) universe.add(p.token0);
+    }
+    for (const p of store?.v4PoolsFor?.(V4.nativeCurrency) ?? []) {
+      const other = p.currency0 === V4.nativeCurrency ? p.currency1 : p.currency0;
+      if (!isMoney(other)) universe.add(lower(other));
+    }
+    const rows = [];
+    for (const a of universe) {
+      const r = ranked.get(a), k = known.get(a), m = r ?? k ?? tokenMetaOf(a);
+      const symbol = m?.symbol ?? k?.symbol;
+      if (!symbol) continue;
+      rows.push([a, symbol, (r?.name ?? k?.name ?? m?.name ?? "").slice(0, 40), r?.marketCapUsd ?? null, r?.volume24Usd ?? 0, k?.holders ?? m?.holders ?? 0]);
+    }
+    rows.sort((x, y) => (y[4] - x[4]) || ((y[3] ?? 0) - (x[3] ?? 0)) || (y[5] - x[5]));
+    return { tokens: rows.map((r) => r.slice(0, 5)), at: new Date().toISOString() };
+  });
+}
+
+/**
+ * Token logos served from here rather than hot-linked: the sources block or
+ * rate-limit browsers, and one fetch cached on disk serves everyone after.
+ * Source order is the curated map, the probe cache, the explorer's registry,
+ * the ranked list, then DexScreener's per-address image. A token nothing knows
+ * is remembered as such for a day so the page stops asking.
+ */
+const ICON_DIR = join(dirname(ICON_CACHE_FILE), "icons");
+const iconMiss = new Map(); // address → at
+const iconInflight = new Map();
+const IMAGE_TYPES = /^image\/(png|jpe?g|gif|webp|svg\+xml|avif)/;
+export async function iconImage(address) {
+  const a = lower(address);
+  if (!/^0x[0-9a-f]{40}$/.test(a)) return null;
+  const file = join(ICON_DIR, a);
+  try {
+    const type = readFileSync(`${file}.type`, "utf8");
+    return { type, body: readFileSync(file) };
+  } catch { /* not on disk yet */ }
+  const missAt = iconMiss.get(a);
+  if (missAt && Date.now() - missAt < NEG_ICON_TTL) return null;
+  if (iconInflight.has(a)) return iconInflight.get(a);
+  const job = (async () => {
+    const meta = tokenMetaOf(a);
+    const listed = cache.get("list")?.v?.all?.find((r) => r.token === a);
+    const sources = [...new Set([ICON_SEED[a], iconCache.get(a)?.url, meta?.icon, listed?.icon, `https://dd.dexscreener.com/ds-data/tokens/robinhood/${a}.png?size=lg`].filter((u) => typeof u === "string" && /^https?:\/\//.test(u)))];
+    for (const u of sources) {
+      try {
+        const r = await fetch(u, { signal: AbortSignal.timeout(8_000), headers: { "user-agent": UA["user-agent"], accept: "image/*" }, redirect: "follow" });
+        const type = (r.headers.get("content-type") ?? "").split(";")[0].trim();
+        if (!r.ok || !IMAGE_TYPES.test(type)) { try { await r.body?.cancel(); } catch { /* drained */ } continue; }
+        const body = Buffer.from(await r.arrayBuffer());
+        if (!body.length || body.length > 2_000_000) continue;
+        try { mkdirSync(ICON_DIR, { recursive: true }); writeFileSync(file, body); writeFileSync(`${file}.type`, type); } catch { /* read-only data dir: memory only */ }
+        if (!iconCache.get(a)?.url) { iconCache.set(a, { url: u, at: Date.now() }); persistIcons(); }
+        return { type, body };
+      } catch { /* next source */ }
+    }
+    iconMiss.set(a, Date.now());
+    return null;
+  })().finally(() => iconInflight.delete(a));
+  iconInflight.set(a, job);
+  return job;
 }
 
 // ----------------------------------------------------------------- pool

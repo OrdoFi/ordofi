@@ -400,8 +400,7 @@
     }
     async function loadStats() {
       try {
-        const m = await api("/api/pools");
-        const row = (m.all ?? [...m.trending, ...m.established]).find((t) => t.token === token.address);
+        const { row } = await api(`/api/pools/row?token=${token.address}`);
         if (!supply && row?.marketCapUsd && row?.priceUsd) { supply = row.marketCapUsd / row.priceUsd; $("mode").querySelector("[data-m=mc]").style.opacity = 1; }
         if (!state?.marketCapUsd && row?.marketCapUsd) $("s-mc").textContent = usd(row.marketCapUsd);
         $("s-chg").textContent = pct(row?.change24); $("s-chg").className = "v " + cls(row?.change24);
