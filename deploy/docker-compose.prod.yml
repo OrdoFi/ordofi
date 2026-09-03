@@ -138,6 +138,8 @@ services:
     image: deploy-web
     working_dir: /app/apps/web
     command: ["node", "--inspect=127.0.0.1:9229", "serve.mjs"]
+    # Loopback only: the same preview path (ssh -L 3005) as before, on the real service.
+    ports: ["127.0.0.1:3005:3000"]
     environment:
       <<: *web-env
       ORDO_POOLS_ENABLED: "1"
