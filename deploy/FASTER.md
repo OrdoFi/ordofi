@@ -110,6 +110,49 @@ client, and inheriting that would be worse than the latency it saves.
    Cloudflare's ranges outright, now that traffic is confirmed to flow through
    the edge, so the origin cannot be hit directly at all.
 
+## The edge Worker and Argo: done (3 Sep, 13:09 CEST)
+
+`deploy/edge-worker` runs in every Cloudflare city on `rpc.ordofi.network/*`
+(`npx wrangler deploy` from that directory). It answers what the gateway's own
+fast path answers — `eth_chainId`, `net_version`, and for one window each the
+head, gas and fee data, mined receipts and transactions — from the city the
+wallet is in, and forwards everything else to Chicago in the request the client
+made, headers included, returning the origin's answer untouched. The
+`x-ordo-edge` response header says which happened: `hit`, `pass` or `mixed`
+(a batch answered partly here). Verified live: `eth_chainId` `hit` from `CDG`,
+`eth_getBalance` and a send `pass`, a malformed send comes back with the
+origin's exact error, a three-method batch merges, `/` and `/health` untouched.
+Argo Smart Routing was switched on at 13:04 the same day.
+
+Measured from Europe, 20 warm requests each, before → after, against the two
+public endpoints:
+
+| method | ordo before | **ordo now** | rpc.mainnet.chain.robinhood.com | robinhood-rpc.publicnode.com |
+| --- | --- | --- | --- | --- |
+| `eth_chainId` p50 | 130 ms | **41 ms** | 147 ms | 41 ms |
+| `eth_gasPrice` p50 | ~180 ms | **42 ms** | 140 ms | 50 ms |
+| `eth_blockNumber` p50 | ~180 ms | **68 ms** | 147 ms | 42 ms |
+| `eth_getBalance` p50 (never cached) | ~180 ms | 184 ms | 144 ms | 46 ms |
+| cold `eth_chainId` (new TLS) | 250 ms | **118 ms** | 213 ms | 127 ms |
+
+So on the calls a wallet makes most, the RPC is now 3–4× faster than
+Robinhood's own endpoint and level with publicnode, from Europe, with the
+origin still in Chicago. The `eth_blockNumber` figure is between the two
+because the window is one block (100 ms) and sequential requests mostly miss
+it; under real polling from many wallets in a city the hit rate is far higher.
+
+What the table also says: an uncacheable read (`eth_call`, balances, nonces)
+is Europe → edge (~15 ms) → Chicago (~100 ms) → Robinhood's RPC (46 ms measured
+from the box) and back, ~184 ms, and publicnode answers the same call in 46 ms
+because it has a node in Europe. No routing product changes that; Argo's
+effect on the pass-through path was not measurable today (the Chicago hop was
+already on a warm connection), and it can be switched off again if its
+analytics show nothing after a day. The only thing that beats publicnode on
+`eth_call` from Europe is a node in Europe: the pending Frankfurt box should
+carry the Nitro node as a read replica, with the gateway in edge mode
+(`ORDO_EDGE_ORIGIN`) in front of it, so that European reads never cross the
+Atlantic and only sends do — and those must, because the sequencer is in the US.
+
 ## The Nitro node: what is actually there
 
 `deploy/nitro-node/README.md` was written for Vultr bare metal in Chicago. The
