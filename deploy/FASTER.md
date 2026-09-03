@@ -37,17 +37,22 @@ network round trip itself (ping 135 ms) — the gateway now adds nothing; before
 168 ms. Inside the box: `eth_chainId` and a cached `eth_blockNumber` answer in
 4–7 ms against ~31 ms before.
 
-### One-time step that causes a ~1–2 s blip
+### HTTP/3: done (3 Sep, 10:45 CEST)
 
-HTTP/3 needs Caddy to own 443/udp, which means recreating the Caddy container
-once. Certificates are on a volume, so it is back in about a second, but every
-host (app, rpc, auction) blips. Do it at a quiet hour:
+HTTP/3 needed Caddy to own 443/udp, which meant recreating the Caddy container
+once; the same recreate also refreshed the Caddyfile bind mount. Measured from
+Europe with a 100 ms probe: 0.8 s unavailable (4 probes of 72), certificates
+untouched, back with `alt-svc: h3=":443"` on every host. If it ever has to be
+repeated, the command is
 
 ```bash
 ssh ordofi 'cd /opt/ordofi && docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d --no-deps caddy'
 ```
 
-Until then everything else in the Caddyfile is live through a graceful reload.
+and it is safe as long as `docker compose ... up -d --dry-run` first shows the
+gateway replicas as `Running`, not `Recreate`: that dry run is what caught the
+compose file having been overwritten by a commit made against a stale copy
+(restored in `aa1c8a4`). Read the dry run before any `up -d` on this box.
 
 ## Cloudflare in front (needs the Cloudflare account)
 
