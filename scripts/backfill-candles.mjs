@@ -156,6 +156,17 @@ async function blockTime(bn) {
 
 const started = Date.now();
 
+/** The watcher writes the same database; when it holds the lock, wait and try again rather than die. */
+async function withDb(fn) {
+  for (let attempt = 0; ; attempt++) {
+    try { return fn(); } catch (e) {
+      if (!/locked|busy/i.test(e.message) || attempt >= 30) throw e;
+      await sleep(500 + attempt * 500);
+    }
+  }
+}
+const writeCandles = (points) => withDb(() => store.upsertCandles(points));
+
 /** Where a pool's walk resumes: its checkpoint, else just before the recorder's tape. */
 function resumeBlock(pool) {
   const saved = Number(store.getMeta(`backfill:${pool}`) ?? NaN);
@@ -238,7 +249,7 @@ async function backfillAll(pools) {
           points.push({ pool, bucket: Math.floor(ts / 60) * 60, price, vol0: Number(absInt256(data.slice(0, 64))), vol1: Number(absInt256(data.slice(64, 128))), block: bn });
         }
         logs.length = 0;
-        store.upsertCandles(points);
+        await writeCandles(points);
         minutes += new Set(points.map((x) => x.pool + ":" + x.bucket)).size;
         logsTotal += points.length;
       }));
@@ -255,20 +266,22 @@ async function backfillAll(pools) {
 
     // Checkpoint every pool, but never move one backwards: a pool walked
     // further by an earlier run keeps the progress it already has.
-    for (const pool of active) {
-      const key = `backfill:${pool}`;
-      const cur = Number(store.getMeta(key) ?? NaN);
-      if (!Number.isFinite(cur) || hi < cur) store.setMeta(key, String(hi));
-    }
-    if (v4Active) {
-      const cur = Number(store.getMeta("backfill:v4") ?? NaN);
-      if (!Number.isFinite(cur) || hi < cur) store.setMeta("backfill:v4", String(hi));
-    }
+    await withDb(() => {
+      for (const pool of active) {
+        const key = `backfill:${pool}`;
+        const cur = Number(store.getMeta(key) ?? NaN);
+        if (!Number.isFinite(cur) || hi < cur) store.setMeta(key, String(hi));
+      }
+      if (v4Active) {
+        const cur = Number(store.getMeta("backfill:v4") ?? NaN);
+        if (!Number.isFinite(cur) || hi < cur) store.setMeta("backfill:v4", String(hi));
+      }
+    });
 
     const roof = Math.max(100, spanCeiling - 1);
     if (widest < MAX_LOGS / 2 && span < roof) span = Math.min(roof, Math.ceil(span * 1.5));
     else if (widest > MAX_LOGS) span = Math.max(100, Math.floor(span / 2));
-    store.setMeta("backfill:span", String(span));
+    await withDb(() => store.setMeta("backfill:span", String(span)));
 
     if (Date.now() - lastReport > 60_000) {
       lastReport = Date.now();
