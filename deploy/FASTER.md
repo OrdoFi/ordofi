@@ -54,12 +54,29 @@ gateway replicas as `Running`, not `Recreate`: that dry run is what caught the
 compose file having been overwritten by a commit made against a stale copy
 (restored in `aa1c8a4`). Read the dry run before any `up -d` on this box.
 
-## Cloudflare in front (needs the Cloudflare account)
+## Cloudflare in front: done (3 Sep, active 11:31 CEST)
 
 What it buys: TLS terminates near the user and Cloudflare keeps warm
-connections to Chicago. For the European wallet above, a cold request goes
-from ~530 ms to ~250 ms; HTTP/2 and HTTP/3 are automatic; and the origin is
-hidden behind anycast.
+connections to Chicago. Measured from Berlin once the zone went active: a
+cold `eth_chainId` 0.25 s against 0.40 s an hour earlier, the TLS handshake
+80 ms instead of 260 ms (it now happens at the `TXL` edge); HTTP/2 negotiated,
+`alt-svc: h3` advertised; `cf-cache-status: DYNAMIC` on every JSON-RPC
+response. Foundry (`cast block-number`, `chain-id`, `balance`), curl with an
+empty, Python and Go user agent, and a minute of MetaMask-style polling
+(60 calls across six methods) all answered 200 with no challenge. The zone is
+`ordofi.network` on the Free plan, nameservers `hans`/`selah.ns.cloudflare.com`;
+only `rpc` is proxied, `app`, `auction`, the apex and `www` are DNS-only and
+resolve exactly as they did at Namecheap; the MX and SPF records came across.
+
+One thing point 8 below got wrong, caught by capturing what reached the
+gateway: Caddy does not trust `x-forwarded-for` from a peer it does not know,
+so behind Cloudflare that header named the edge node, and every wallet on one
+edge would have shared a single anonymous budget. The gateway now keys on
+`Cf-Connecting-Ip`, which Cloudflare overwrites on the way in, and Caddy strips
+that header from any request whose peer is outside Cloudflare's published
+ranges, so a direct hit on the origin cannot choose its own key (`bb4ed78`;
+verified both ways with tcpdump on port 8547). The steps as they were written,
+for the record:
 
 What it must not do: challenge JSON-RPC. The public Robinhood endpoint's bot
 check is exactly what makes it unusable for Foundry and for any non-browser
@@ -87,10 +104,11 @@ client, and inheriting that would be worse than the latency it saves.
    to cache and `/health` is not; bypass is the safe default.
 7. Network → **WebSockets** on (harmless here, required if `auction` is
    proxied later).
-8. Gateway: nothing to change. `clientIp()` already reads the first
-   `x-forwarded-for` hop, which Cloudflare sets to the real client, so the
-   per-IP limits keep working. Optionally restrict Caddy's `rpc` host to
-   Cloudflare's IP ranges once traffic is confirmed to flow through the edge.
+8. Gateway: ~~nothing to change~~ — see above; `clientIp()` in
+   `apps/gateway/src/fastpath.ts` and the `@not_cloudflare` matcher in the
+   Caddyfile are the fix. Still open: restrict Caddy's `rpc` host to
+   Cloudflare's ranges outright, now that traffic is confirmed to flow through
+   the edge, so the origin cannot be hit directly at all.
 
 ## The Nitro node: what is actually there
 
