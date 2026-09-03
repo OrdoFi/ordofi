@@ -55,6 +55,15 @@ let spanCeiling = Number(args.maxSpan ?? 200_000);
 const MAX_LOGS = Number(args.maxLogs ?? 12_000);
 const DB = process.env.ORDO_DB ?? join(import.meta.dirname, "../data/ordo.db");
 const V3_SWAP_TOPIC = toEventSelector("Swap(address,address,int256,int256,uint160,uint128,int24)");
+// Uniswap V4: every pool's swaps are one event stream on the singleton, keyed by
+// PoolId in the first topic. The data words line up with V3's (amount0, amount1,
+// sqrtPriceX96, …), so the same parser reads both.
+const V4_POOL_MANAGER = "0x8366a39cc670b4001a1121b8f6a443a643e40951";
+const V4_SWAP_TOPIC = toEventSelector("Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)");
+// --v4 all   walk the singleton too and keep every pool's swaps (default when any V4 pool is listed)
+// --v4 only  walk the singleton alone (V3 pools already have their history)
+// --v4 none  V3 only
+const V4_MODE = args.v4 ?? "auto";
 const BLOCKS_PER_DAY = 864_000; // 0.1 s blocks
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -118,13 +127,18 @@ const floorBlock = ALL ? 0 : Math.max(0, head - DAYS * BLOCKS_PER_DAY);
 console.log(`backfill | rpc=${RPCS.map((u) => new URL(u).host).join(",")} head=${head} floor=${floorBlock} (${ALL ? "all history" : DAYS + "d"}) pace=${PACE_MS}ms parallel=${PARALLEL} db=${DB}`);
 
 // Which pools: the busiest by recorded swaps, plus anything explicitly named.
-let pools = [];
-if (args.pool) pools = args.pool.toLowerCase().split(",").map((x) => x.trim()).filter(Boolean);
+// A 20-byte address is a V3 pool; a 32-byte PoolId is a V4 pool and means the
+// singleton gets walked (every V4 pool's swaps come along; none is dearer than the rest).
+let listed = [];
+if (args.pool) listed = args.pool.toLowerCase().split(",").map((x) => x.trim()).filter(Boolean);
 else {
   const since = Math.floor(Date.now() / 1000) - 7 * 86_400;
-  pools = store.marketStats(since).slice(0, MAX_POOLS).map((r) => r.pool.toLowerCase());
+  listed = store.marketStats(since).map((r) => r.pool.toLowerCase());
 }
-console.log(`backfill | ${pools.length} pool(s)`);
+const v4Listed = listed.filter((p) => p.length === 66);
+const pools = V4_MODE === "only" ? [] : listed.filter((p) => p.length === 42).slice(0, MAX_POOLS);
+const WALK_V4 = V4_MODE === "all" || V4_MODE === "only" || (V4_MODE === "auto" && v4Listed.length > 0);
+console.log(`backfill | ${pools.length} V3 pool(s)${WALK_V4 ? ` · V4 singleton (${v4Listed.length} pools seen trading)` : ""}`);
 
 const TWO_96 = 2 ** 96;
 const TWO_255 = 1n << 255n;
@@ -151,6 +165,15 @@ function resumeBlock(pool) {
   const nowTs = Math.floor(Date.now() / 1000);
   return head - Math.ceil((nowTs - cov.from) * 10) - 600; // ~10 blocks/s, a minute of slack
 }
+/** The singleton's walk resumes at its own checkpoint, else just before the oldest V4 tape the recorder has. */
+function resumeV4() {
+  const saved = Number(store.getMeta("backfill:v4") ?? NaN);
+  if (Number.isFinite(saved)) return saved;
+  let oldest = Infinity;
+  for (const p of v4Listed) { const cov = store.candleCoverage(p); if (cov) oldest = Math.min(oldest, cov.from); }
+  if (!Number.isFinite(oldest)) return head;
+  return head - Math.ceil((Math.floor(Date.now() / 1000) - oldest) * 10) - 600;
+}
 
 /**
  * One walk for every pool at once.
@@ -163,8 +186,10 @@ function resumeBlock(pool) {
  */
 async function backfillAll(pools) {
   const active = pools.filter((p) => resumeBlock(p) > floorBlock);
-  if (!active.length) return { logs: 0, minutes: 0 };
-  let hi = Math.max(...active.map(resumeBlock));
+  const v4From = WALK_V4 ? resumeV4() : -1;
+  const v4Active = v4From > floorBlock;
+  if (!active.length && !v4Active) return { logs: 0, minutes: 0 };
+  let hi = Math.max(...active.map(resumeBlock), v4Active ? v4From : -1);
   let span = Number(store.getMeta("backfill:span") ?? 2_000);
   let logsTotal = 0, minutes = 0, windows = 0, lastReport = Date.now(), reachedTs = 0;
 
@@ -189,14 +214,20 @@ async function backfillAll(pools) {
     try {
       windows += ranges.length;
       await Promise.all(ranges.map(async ({ lo, hi: rHi }) => {
-        const logs = await rpc("eth_getLogs", [{ address: active, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + lo.toString(16), toBlock: "0x" + rHi.toString(16) }]);
+        const range = { fromBlock: "0x" + lo.toString(16), toBlock: "0x" + rHi.toString(16) };
+        // Each venue's swaps this window; a venue whose resume point is below the window is skipped.
+        const asks = [];
+        if (active.length && rHi <= Math.max(...active.map(resumeBlock))) asks.push(rpc("eth_getLogs", [{ address: active, topics: [V3_SWAP_TOPIC], ...range }]).then((ls) => ls.map((l) => [l.address.toLowerCase(), l])));
+        if (v4Active && rHi <= v4From) asks.push(rpc("eth_getLogs", [{ address: V4_POOL_MANAGER, topics: [V4_SWAP_TOPIC], ...range }]).then((ls) => ls.map((l) => [l.topics[1]?.toLowerCase(), l])));
+        const logs = (await Promise.all(asks)).flat();
         widest = Math.max(widest, logs.length);
         if (!logs.length) return;
         const [tLo, tHi] = await Promise.all([blockTime(lo), blockTime(rHi)]);
         reachedTs = tLo;
         const perBlock = rHi > lo ? (tHi - tLo) / (rHi - lo) : 0;
         const points = [];
-        for (const l of logs) {
+        for (const [pool, l] of logs) {
+          if (!pool) continue;
           const data = l.data.slice(2);
           if (data.length < 5 * 64) continue;
           const sqrt = Number(BigInt("0x" + data.slice(128, 192)));
@@ -204,7 +235,7 @@ async function backfillAll(pools) {
           if (!Number.isFinite(price) || price <= 0) continue;
           const bn = Number(BigInt(l.blockNumber));
           const ts = Math.round(tLo + (bn - lo) * perBlock);
-          points.push({ pool: l.address.toLowerCase(), bucket: Math.floor(ts / 60) * 60, price, vol0: Number(absInt256(data.slice(0, 64))), vol1: Number(absInt256(data.slice(64, 128))), block: bn });
+          points.push({ pool, bucket: Math.floor(ts / 60) * 60, price, vol0: Number(absInt256(data.slice(0, 64))), vol1: Number(absInt256(data.slice(64, 128))), block: bn });
         }
         logs.length = 0;
         store.upsertCandles(points);
@@ -228,6 +259,10 @@ async function backfillAll(pools) {
       const key = `backfill:${pool}`;
       const cur = Number(store.getMeta(key) ?? NaN);
       if (!Number.isFinite(cur) || hi < cur) store.setMeta(key, String(hi));
+    }
+    if (v4Active) {
+      const cur = Number(store.getMeta("backfill:v4") ?? NaN);
+      if (!Number.isFinite(cur) || hi < cur) store.setMeta("backfill:v4", String(hi));
     }
 
     const roof = Math.max(100, spanCeiling - 1);

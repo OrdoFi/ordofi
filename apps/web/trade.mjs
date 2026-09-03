@@ -934,7 +934,8 @@ export async function tradeCandles({ base, quote, pool = null, bucketSec = 60, s
   // Where the history backfill has reached for this pool, so the chart can say
   // "history is still being loaded" instead of looking like the market began
   // yesterday. The checkpoint is the lowest block already walked.
-  const bfBlock = Number(store?.getMeta?.(`backfill:${found.pool}`) ?? NaN);
+  // V4 pools are backfilled together, from the singleton's one event stream.
+  const bfBlock = Number(store?.getMeta?.(`backfill:${found.pool}`) ?? (found.kind === "v4" ? store?.getMeta?.("backfill:v4") : null) ?? NaN);
   const backfill = Number.isFinite(bfBlock) ? { reachedBlock: bfBlock, done: bfBlock <= 0 } : null;
   // Inverting swaps the extremes: yesterday's high is today's low.
   const recCandles = recorded.map((c) => ({

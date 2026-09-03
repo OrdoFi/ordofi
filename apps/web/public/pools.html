@@ -512,7 +512,8 @@
         // An untraded pool's price is wherever its creator left it; the gap to the market is worth knowing before a range is set around it.
         const gap = borrowed && candlesQ.at(-1)?.close ? state.price / candlesQ.at(-1).close - 1 : 0;
         const gapNote = Math.abs(gap) >= 0.05 ? ` · this pool's price sits ${Math.abs(gap * 100).toFixed(0)}% ${gap > 0 ? "above" : "below"} the market` : "";
-        $("chart-note").textContent = borrowed ? `no trades in this pool yet · chart from ${borrowed}${gapNote}` : `${d.candles.length} candles · ${d.swaps.toLocaleString()} swaps${d.source === "tape" ? " · live tape" : ""}`;
+        const loading = d.backfill && !d.backfill.done ? " · older history still loading" : "";
+        $("chart-note").textContent = borrowed ? `no trades in this pool yet · chart from ${borrowed}${gapNote}` : `${d.candles.length} candles · ${d.swaps.toLocaleString()} swaps${d.source === "tape" ? " · live tape" : ""}${loading}`;
       } catch (e) { $("chart-note").textContent = e.message; }
     }
     function setSeriesData() {
