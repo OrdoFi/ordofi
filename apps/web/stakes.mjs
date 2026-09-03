@@ -331,7 +331,8 @@ export const harvestCalldata = (vault) => ({ to: getAddress(vault), data: encode
  */
 export async function stakeCreatePlan(token, venue = null) {
   token = lower(token);
-  const all = (await poolsForToken(token)).filter((p) => p.quote === WETH);
+  // A stake needs a hookless, fixed-fee ETH pool: the vault's tick observation and swaps assume one.
+  const all = (await poolsForToken(token)).filter((p) => p.quote === WETH && p.buildable);
   const options = { v3: all.filter((p) => p.kind === "v3")[0] ?? null, v4: all.filter((p) => p.kind === "v4")[0] ?? null };
   // No venue asked for: the one holding the deeper ETH pool — a token often has
   // an empty pool in one version and all its liquidity in the other. V3 on a tie.

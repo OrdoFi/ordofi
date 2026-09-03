@@ -224,7 +224,8 @@
       renderRows("trending"); renderRows("established");
     }
     function renderFeatured() {
-      const hero = listData.trending[0], mt = listData.featured?.mostTraded, hv = listData.featured?.highestVolume;
+      // The lead card is always $ORDO, our own token; the two beside it are the day's busiest.
+      const hero = listData.hero ?? listData.trending[0], mt = listData.featured?.mostTraded, hv = listData.featured?.highestVolume;
       if (hero) {
         $("f-hero").href = `/pools/${hero.token}`;
         $("f-hero").innerHTML = `<div class="fhead">${tokenCell(hero)}</div>
@@ -255,7 +256,8 @@
     }
     async function closes24(t) {
       if (sparkCache.has(t.token)) return sparkCache.get(t.token);
-      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
+      // A V4 market's tape is its own pool's; without the PoolId the request would look for a V3 pool.
+      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
       sparkCache.set(t.token, p);
       return p;
     }
@@ -300,8 +302,11 @@
         const st = await api(`/api/pools/state?pool=${pools[0].pool}&base=${tokenParam}`);
         token = { address: tokenParam, symbol: st.base.symbol, name: st.base.name, icon: st.base.icon, decimals: st.base.decimals };
       }
+      // Open on the pool asked for; else the token's busiest market if it is offered
+      // (even view-only — it is the price people mean); else the deepest pool that can be built into.
       const want = new URLSearchParams(location.search).get("pool");
-      pool = pools.find((p) => p.pool === want)?.pool ?? pools[0].pool;
+      const main = (await tokenRow())?.pool;
+      pool = pools.find((p) => p.pool === want)?.pool ?? pools.find((p) => p.pool === main)?.pool ?? (pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools[0]).pool;
 
       $("root").innerHTML = `
         <div id="lq-shell"></div>
@@ -382,7 +387,7 @@
         if (!ps.length) return key === "v4eth" ? `<div class="grp"><button disabled style="cursor:default;opacity:.55" title="No V4 ETH pool for this token yet"><small>V4 ETH</small><b>none</b></button></div>` : "";
         const cur = ps.find((p) => p.pool === pool);
         return `<div class="grp ${cur ? "on" : ""}" data-g="${key}"><button><small>${label}</small><b>${cur ? fmtFee(cur) : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
-          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}</small>` : ""}</span><small>${fmtLiq(p)}</small></button>`).join("")}</div></div>`;
+          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}${p.hooked ? " · hook" : ""}</small>` : ""}</span><small>${p.buildable === false ? "view only" : fmtLiq(p)}</small></button>`).join("")}</div></div>`;
       }).join("");
       $("groups").querySelectorAll(".grp > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
       $("groups").querySelectorAll(".menu button[data-p]").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));
@@ -402,7 +407,15 @@
       $("go").disabled = false;
       renderGroups();
       $("quote-sym").textContent = state.quote.symbol;
-      $("pool-note").textContent = `${state.kind === "v4" ? "Uniswap V4 · " : ""}${(state.fee / 1e4).toFixed(2)}% fee · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
+      $("pool-note").textContent = `${state.kind === "v4" ? "Uniswap V4 · " : ""}${(state.fee / 1e4).toFixed(2)}% fee${state.dynamicFee ? " (set by its hook)" : ""} · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
+      // A hooked or hook-priced pool is a market to watch, not one the manager can mint into.
+      $("go").disabled = !canBuild();
+      if (!canBuild()) {
+        const other = pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools.find((p) => p.buildable !== false);
+        $("preview").innerHTML = `This pool runs a V4 hook${state.dynamicFee ? " that sets its own fee" : ""}. A hook can change or refuse what happens on a mint, so OrdoFi shows this market but does not build into it.${other ? ` <a href="#" id="pick-buildable" style="color:var(--accent)">Build in ${esc(token.symbol)}/${other.quoteSymbol} ${fmtFee(other)}${other.kind === "v4" ? " V4" : ""} instead →</a>` : " None of this token's other pools can be built into yet."}`;
+        $("pick-buildable")?.addEventListener("click", (e) => { e.preventDefault(); selectPool(other.pool); });
+        $("go").textContent = "View only";
+      } else if ($("go").textContent === "View only") $("go").textContent = wallet.account ? "Build position" : "Connect wallet";
       $("mgr-name").textContent = state.kind === "v4" ? "OrdoLadderManagerV4" : "OrdoLadderManager";
       // Supply comes with the pool state, so the MC toggle never depends on the list.
       supply = state.base.totalSupply ?? supply;
@@ -598,8 +611,9 @@
 
     // ---- planner
     let planSeq = 0;
+    const canBuild = () => !!state && !state.hooks && !state.dynamicFee;
     async function replan() {
-      if (!state) return;
+      if (!state || !canBuild()) return;
       const seq = ++planSeq;
       const baseAmt = parseUnits($("amt-base").value, state.base.decimals), quoteAmt = parseUnits($("amt-quote").value, state.quote.decimals);
       const go = $("go");

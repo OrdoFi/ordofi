@@ -284,6 +284,9 @@ export async function poolsList(store) {
     for (const m of markets.markets ?? []) {
       const baseAddr = m.base.address === NATIVE ? WETH : m.base.address;
       if (isMoney(baseAddr)) continue;
+      // A zero-fee pool pays its LPs nothing and is where bots cycle notional
+      // volume for free (one printed $34B in a day); it is not a market to rank.
+      if (m.fee === 0) continue;
       // Fee tier in percent. A V4 hook that sets its own fee reports none;
       // its LP take is unknown here and counted as nothing rather than guessed.
       const feePct = m.fee != null ? m.fee / 1e4 : m.kind === "v4" ? 0 : 0.3;
@@ -342,10 +345,33 @@ export async function poolsList(store) {
   });
 }
 
-/** The list without its long tail — what the page downloads. */
+/** OrdoFi's own token: the page's lead card is always its market. */
+export const ORDO_TOKEN = "0xfe2f0fb0c00d19786a8abf98d4b1f1ac8763b167";
+
+/** The list without its long tail — what the page downloads — led by $ORDO. */
 export async function poolsPage(store) {
   const { all, ...page } = await poolsList(store);
-  return page;
+  return { ...page, hero: await heroRow(store, all) };
+}
+/**
+ * $ORDO's row for the lead card: from the ranked list when it traded today,
+ * otherwise built from its deepest pool so the card never goes blank.
+ */
+async function heroRow(store, all) {
+  const ranked = all.find((r) => r.token === ORDO_TOKEN);
+  if (ranked) return ranked;
+  return cachedSWR("hero:ordo", 60_000, async () => {
+    const pools = await poolsForToken(ORDO_TOKEN);
+    const main = pools.find((p) => BigInt(p.liquidity) > 0n) ?? pools[0];
+    const st = main ? await poolState(main.pool, ORDO_TOKEN).catch(() => null) : null;
+    const t = tokenMetaOf(ORDO_TOKEN);
+    return {
+      token: ORDO_TOKEN, symbol: st?.base.symbol ?? t?.symbol ?? "ORDO", name: st?.base.name ?? t?.name ?? "OrdoFi", icon: iconFor(ORDO_TOKEN), decimals: st?.base.decimals ?? 18,
+      priceUsd: st?.priceUsd ?? null, change24: null, volume24Usd: 0, fees24Usd: 0, trades24: 0,
+      pool: main?.pool ?? null, kind: main?.kind ?? "v4", quote: main?.quoteSymbol ?? "ETH", quotes: main ? [main.quoteSymbol] : [], venues: main ? [main.kind] : [], pools: pools.length,
+      marketCapUsd: st?.marketCapUsd ?? null, ageDays: store?.candleCoverage?.(main?.pool)?.from ? Math.floor((Date.now() / 1000 - store.candleCoverage(main.pool).from) / 86_400) : null,
+    };
+  });
 }
 /** One token's row from the ranked list, for the pool page header. */
 export async function poolsRow(store, token) {
@@ -574,7 +600,10 @@ export async function poolsForToken(token) {
   const seen = new Map(poolCache.cache.entries());
   for (const p of await factoryPoolsFor(token).catch(() => [])) seen.set(p.pool, p);
   const mine = [...seen.entries()].filter(([, p]) => p && !p.miss && p.v3 && (p.token0 === token || p.token1 === token) && isMoney(p.token0 === token ? p.token1 : p.token0));
-  const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && isPlainMoneyPool(k, USDG) && (lower(k.currency0) === token || lower(k.currency1) === token) && !isMoney(token));
+  // Every V4 pool against ETH or USDG. A hooked or hook-priced pool comes along
+  // as view-only: its market is real, but a hook may veto or tax what the manager
+  // does, and the page cannot promise what it cannot see.
+  const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && (k.native0 || lower(k.currency0) === USDG || lower(k.currency1) === USDG) && (lower(k.currency0) === token || lower(k.currency1) === token) && !isMoney(token));
   const [liq, liq4] = await Promise.all([
     batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "liquidity" }))),
     v4.length ? v4LiquidityOf(v4.map((k) => k.poolId)) : [],
@@ -589,7 +618,9 @@ export async function poolsForToken(token) {
   // A fee above 10% is a trap, not a market (V4 lets anyone set 93%); dust parked in one
   // does not make it worth offering.
   const v4Quote = (k) => { const { token0, token1 } = tokensOf(k); return token0 === token ? token1 : token0; };
-  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.fee, tickSpacing: k.tickSpacing, quote: v4Quote(k), liquidity: liq4[i].toString() })).filter((p) => p.fee <= 100_000).sort(byLiq);
+  // A zero-fee pool pays LPs nothing; a hook-set fee is unknown here and reported as null.
+  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.dynamicFee ? null : k.fee, tickSpacing: k.tickSpacing, quote: v4Quote(k), liquidity: liq4[i].toString(), buildable: isPlainMoneyPool(k, USDG), hooked: k.hooked, dynamicFee: k.dynamicFee }))
+    .filter((p) => p.fee == null || (p.fee > 0 && p.fee <= 100_000)).sort(byLiq);
   // Per quote asset: the live ones (at most eight), then up to three empty ones
   // at the sanest fees, so a tier nobody has seeded can still be the first.
   const v4Shown = [];
@@ -600,14 +631,13 @@ export async function poolsForToken(token) {
     v4Shown.push(...live, ...empty);
   }
   const rows = [
-    ...mine.map(([addr, p], i) => ({ pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i].toString() })),
+    ...mine.map(([addr, p], i) => ({ pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i].toString(), buildable: true, hooked: false, dynamicFee: false })),
     ...v4Shown,
   ];
   return rows
     .map((p) => ({ ...p, quoteSymbol: p.quote === WETH ? "ETH" : "USDG" }))
     .sort(byLiq);
 }
-
 // ---------------------------------------------------------------- depth
 
 /**
