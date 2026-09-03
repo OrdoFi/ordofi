@@ -93,6 +93,11 @@ export const CONFIG = {
    * including a revert-protected send. Wallets cannot attach an API key
    * header, so without this the endpoint would be read-only for exactly the
    * users it exists for. Auction routing, bundles and the bundler stay keyed.
+   * The list is every standard read of the eth_ and net_ namespaces that an
+   * Arbitrum node answers (the uncle and proof methods included, so a library
+   * that probes them gets the node's answer and not ours); what it leaves out
+   * is debug_/trace_, filters and subscriptions, and eth_simulateV1, which are
+   * expensive on the upstream and belong to keyed callers.
    */
   anonMethods: new Set([
     "eth_chainId",
@@ -116,6 +121,16 @@ export const CONFIG = {
     "eth_getTransactionReceipt",
     "eth_getTransactionByHash",
     "eth_getTransactionByBlockNumberAndIndex",
+    "eth_getTransactionByBlockHashAndIndex",
+    "eth_getBlockTransactionCountByNumber",
+    "eth_getBlockTransactionCountByHash",
+    "eth_getUncleCountByBlockNumber",
+    "eth_getUncleCountByBlockHash",
+    "eth_getProof",
+    "eth_createAccessList",
+    "eth_accounts",
+    "eth_protocolVersion",
+    "net_listening",
     "eth_sendRawTransaction",
     "ordo_simulate",
   ]),

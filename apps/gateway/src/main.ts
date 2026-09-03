@@ -346,10 +346,21 @@ const server = createServer((req, res) => {
         const auth = authenticate({ headers: req.headers }, method);
         if (!auth) {
           metrics.inc("rpc_unauthorized_total", { method });
+          // Two different situations share this branch and deserve different
+          // words: a key was presented and is wrong, or no key was presented
+          // and the method is one of the few not open to anonymous callers.
+          // The second must not read like "this RPC needs a key", because to
+          // a wallet user who found it on Chainlist it does not.
+          const presented = req.headers["x-api-key"] || req.headers.authorization;
           return {
             jsonrpc: "2.0",
             id: msg.id,
-            error: { code: -32001, message: "unauthorized: valid x-api-key required" },
+            error: presented
+              ? { code: -32001, message: "unauthorized: the x-api-key presented is not valid" }
+              : {
+                  code: -32601,
+                  message: `${method} is not available without an API key on this endpoint (standard eth_/net_ reads and eth_sendRawTransaction are open); keys at https://app.ordofi.network/docs`,
+                },
           };
         }
 
