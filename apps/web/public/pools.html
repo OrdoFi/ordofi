@@ -279,7 +279,7 @@
       mountShell($("lq-shell"), { page: "pools" });
       document.querySelectorAll(".wf button").forEach((b) => b.addEventListener("click", async () => {
         const w = Number(b.dataset.w); if (w === win) return;
-        win = w; localStorage.setItem("ordo.pools.window", String(w)); sparkCache.clear();
+        win = w; localStorage.setItem("ordo.pools.window", String(w)); sparkCache.clear(); sparksP = null;
         document.querySelectorAll(".wf button").forEach((x) => x.classList.toggle("on", Number(x.dataset.w) === w));
         document.querySelectorAll(".wl").forEach((e) => (e.textContent = WIN_LABEL[w]));
         document.querySelectorAll(".sec tbody").forEach((tb) => { tb.style.opacity = ".45"; });
@@ -329,7 +329,12 @@
       tb.querySelectorAll("tr.row").forEach((r) => r.addEventListener("click", () => { location.href = `/pools/${r.dataset.t}`; }));
       rows.forEach((t, i) => sparkInto(t, tb.querySelector(`canvas[data-i="${i}"]`), 2.5));
     }
+    // One request carries every row's sparkline; a row missing from it falls back to its own tape.
+    let sparksP = null;
+    const sparks = () => sparksP ??= api(`/api/pools/sparks?window=${win}`).catch(() => ({}));
     async function closes24(t) {
+      const all = await sparks();
+      if (all[t.token]?.length) return all[t.token];
       if (sparkCache.has(t.token)) return sparkCache.get(t.token);
       // A V4 market's tape is its own pool's; without the PoolId the request would look for a V3 pool.
       const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quoteAddress ?? (t.quote === "ETH" ? "eth" : USDG)}&bucketSec=${win >= 86400 ? 1800 : win >= 21600 ? 300 : 60}&hours=${win / 3600}${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);

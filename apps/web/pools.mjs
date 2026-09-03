@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { sparkCloses } from "./market-stats.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeEventLog, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
@@ -389,6 +390,30 @@ async function heroRow(store, all) {
     };
   });
 }
+/**
+ * Sparklines for every row the list shows, in one pass: closes per step over
+ * the window, oriented so the line rises when the token does. One request and
+ * one query per visitor instead of one of each per row.
+ */
+export async function poolsSparks(store, windowSec = 86_400) {
+  if (!MARKET_WINDOWS.includes(windowSec)) windowSec = 86_400;
+  return cachedSWR(`sparks:${windowSec}`, 60_000, async () => {
+    const list = await poolsList(store, windowSec);
+    const rows = [...new Map([...list.trending, ...list.established, list.featured?.mostTraded, list.featured?.highestVolume, list.all.find((r) => r.token === ORDO_TOKEN)].filter((r) => r?.pool).map((r) => [r.token, r])).values()];
+    const step = windowSec >= 86_400 ? 1800 : windowSec >= 21_600 ? 300 : 60;
+    const closes = await sparkCloses(rows.map((r) => r.pool), Math.floor(Date.now() / 1000) - windowSec, step);
+    const out = {};
+    for (const r of rows) {
+      const c = closes[r.pool];
+      if (!c?.length) continue;
+      // Raw closes are token1 per token0; a token that is token1 reads inverted.
+      const token0 = r.kind === "v4" ? tokensOf(poolKeyOf(store, r.pool) ?? { currency0: "", native0: false })?.token0 : poolCache.get(r.pool)?.token0;
+      const base0 = token0 ? lower(token0) === r.token : true;
+      out[r.token] = base0 ? c : c.map((x) => (x > 0 ? 1 / x : x));
+    }
+    return out;
+  });
+}
 /** One token's row from the ranked list, for the pool page header. */
 export async function poolsRow(store, token) {
   const t = lower(token);
@@ -399,7 +424,7 @@ export async function poolsRow(store, token) {
  * after a restart — and every visitor after — gets a page, never the rebuild.
  */
 export function warmPoolsList(store) {
-  const tick = () => poolsList(store).catch(() => {});
+  const tick = () => poolsList(store).then(() => poolsSparks(store)).catch(() => {});
   const index = () => searchIndex(store).catch(() => {});
   // The list is stale-while-revalidate, so a visitor never waits on a rebuild; once a
   // minute is as fresh as a 24h ranking needs, and the market query runs on the

@@ -12,7 +12,7 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
-import { poolsList, poolsPage, poolsRow, searchIndex, iconImage, warmPoolsList, poolCreatePlan, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
+import { poolsList, poolsPage, poolsRow, poolsSparks, searchIndex, iconImage, warmPoolsList, poolCreatePlan, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
 import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawPlan, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
@@ -881,6 +881,7 @@ async function handle(req, res) {
       const venue = () => (q.get("venue") === "v4" ? "v4" : "v3");
       let body;
       if (path === "/api/pools") body = await poolsPage(store, Number(q.get("window")) || 86_400);
+      else if (path === "/api/pools/sparks") body = await poolsSparks(store, Number(q.get("window")) || 86_400);
       else if (path === "/api/pools/row") body = { token: q.get("token"), row: await poolsRow(store, addr("token")) };
       else if (path === "/api/pools/search-index") {
         const [idx, s] = await Promise.all([searchIndex(store, { all: q.get("all") === "1" }), stakesList(null).catch(() => null)]);

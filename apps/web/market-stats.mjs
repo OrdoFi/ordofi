@@ -24,13 +24,18 @@ function ensure() {
   return worker;
 }
 
+function ask(msg) {
+  const w = ensure();
+  if (!w) return Promise.reject(new Error("no market worker"));
+  return new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); w.ref(); w.postMessage({ id, ...msg }); }).finally(() => { if (!pending.size) worker?.unref(); });
+}
+
 /** Same rows as `store.marketStats(since)`, without blocking. */
 export async function marketStats(store, since) {
-  const w = ensure();
-  if (!w) return store?.marketStats?.(since) ?? [];
-  try {
-    return await new Promise((resolve, reject) => { const id = ++seq; pending.set(id, { resolve, reject }); w.ref(); w.postMessage({ id, since }); }).finally(() => { if (!pending.size) worker?.unref(); });
-  } catch {
-    return store?.marketStats?.(since) ?? [];
-  }
+  try { return await ask({ since }); } catch { return store?.marketStats?.(since) ?? []; }
+}
+
+/** `{ pool: [close, close, …] }` — the last close per `step` seconds since `since`, for many pools in one pass. */
+export async function sparkCloses(pools, since, step) {
+  try { return await ask({ kind: "sparks", pools: pools.map((p) => p.toLowerCase()), since, step }); } catch { return {}; }
 }
