@@ -11,10 +11,27 @@
 #   app.ordofi.network       explorer, docs, dashboard, /api/*
 #   rpc.ordofi.network       the gateway
 #   auction.ordofi.network   order-flow auction and searcher WebSocket
+#   ordoliquidity.app        pools, stakes, positions (the `liquidity` service)
+#   www.ordoliquidity.app    redirects to the apex
 
 app.ordofi.network {
 	reverse_proxy web:3000
 	encode gzip
+}
+
+# The liquidity product on its own domain. Same code as app.ordofi.network,
+# a separate process with the pools pages enabled; the root is the pools list.
+# Until the A record points here, Caddy retries the certificate in the
+# background and nothing else on this box is affected.
+ordoliquidity.app {
+	@root path /
+	redir @root /pools 302
+	reverse_proxy liquidity:3000
+	encode zstd gzip
+}
+
+www.ordoliquidity.app {
+	redir https://ordoliquidity.app{uri} permanent
 }
 
 rpc.ordofi.network {

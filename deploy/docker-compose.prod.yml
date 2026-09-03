@@ -45,6 +45,30 @@ x-gateway: &gateway
   depends_on: [auction]
   restart: unless-stopped
 
+# The web app's environment, shared with the liquidity host below so the two
+# can never drift apart.
+x-web-env: &web-env
+    SERVICE: web
+    ORDO_WEB_PORT: 3000
+    ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+    ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
+    ORDO_SETTLEMENT_ADDRESS: ${ORDO_SETTLEMENT_ADDRESS:-}
+    # Same reason as the gateway: the explorer's auction panel goes blank
+    # without it.
+    ORDO_AUCTION_URL: http://auction:8548
+    ORDO_ARB_URL: http://arb:8549
+    ORDO_STEALTH_SEND_ADDRESS: ${ORDO_STEALTH_SEND_ADDRESS:-}
+    ORDO_LADDER_ADDRESS: ${ORDO_LADDER_ADDRESS:-}
+    ORDO_LADDER_BLOCK: ${ORDO_LADDER_BLOCK:-}
+    ORDO_STAKE_FACTORY: ${ORDO_STAKE_FACTORY:-}
+    ORDO_STAKE_ZAP: ${ORDO_STAKE_ZAP:-}
+    # V4 twins default to the addresses in @ordofi/core; set these only to point at a redeploy.
+    ORDO_LADDER_V4_ADDRESS: ${ORDO_LADDER_V4_ADDRESS:-}
+    ORDO_LADDER_V4_BLOCK: ${ORDO_LADDER_V4_BLOCK:-}
+    ORDO_STAKE_FACTORY_V4: ${ORDO_STAKE_FACTORY_V4:-}
+    ORDO_STAKE_ZAP_V4: ${ORDO_STAKE_ZAP_V4:-}
+    ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-}
+
 services:
   caddy:
     image: caddy:2
@@ -55,7 +79,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    depends_on: [web, gateway-a, gateway-b, auction]
+    depends_on: [web, liquidity, gateway-a, gateway-b, auction]
 
   # The gateway is two replicas, gateway-a and gateway-b, so a deploy is a
   # rolling restart (deploy/rollout.sh) and a crash leaves one answering. They
@@ -99,27 +123,22 @@ services:
     # 9229 is bound inside the container only.
     working_dir: /app/apps/web
     command: ["node", "--inspect=127.0.0.1:9229", "serve.mjs"]
+    environment: *web-env
+    depends_on: [auction]
+    volumes: ["ordo-data:/app/data"]
+    restart: unless-stopped
+
+  # The liquidity product on its own host, ordoliquidity.app: the same image,
+  # data and environment as `web`, with the pools, stakes and positions pages
+  # switched on. A process of its own so app.ordofi.network never shares a
+  # thread with a market rebuild, and so either can be restarted alone.
+  liquidity:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    working_dir: /app/apps/web
+    command: ["node", "--inspect=127.0.0.1:9229", "serve.mjs"]
     environment:
-      SERVICE: web
-      ORDO_WEB_PORT: 3000
-      ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
-      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
-      ORDO_SETTLEMENT_ADDRESS: ${ORDO_SETTLEMENT_ADDRESS:-}
-      # Same reason as the gateway: the explorer's auction panel goes blank
-      # without it.
-      ORDO_AUCTION_URL: http://auction:8548
-      ORDO_ARB_URL: http://arb:8549
-      ORDO_STEALTH_SEND_ADDRESS: ${ORDO_STEALTH_SEND_ADDRESS:-}
-      ORDO_LADDER_ADDRESS: ${ORDO_LADDER_ADDRESS:-}
-      ORDO_LADDER_BLOCK: ${ORDO_LADDER_BLOCK:-}
-      ORDO_STAKE_FACTORY: ${ORDO_STAKE_FACTORY:-}
-      ORDO_STAKE_ZAP: ${ORDO_STAKE_ZAP:-}
-      # V4 twins default to the addresses in @ordofi/core; set these only to point at a redeploy.
-      ORDO_LADDER_V4_ADDRESS: ${ORDO_LADDER_V4_ADDRESS:-}
-      ORDO_LADDER_V4_BLOCK: ${ORDO_LADDER_V4_BLOCK:-}
-      ORDO_STAKE_FACTORY_V4: ${ORDO_STAKE_FACTORY_V4:-}
-      ORDO_STAKE_ZAP_V4: ${ORDO_STAKE_ZAP_V4:-}
-      ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-}
+      <<: *web-env
+      ORDO_POOLS_ENABLED: "1"
     depends_on: [auction]
     volumes: ["ordo-data:/app/data"]
     restart: unless-stopped
