@@ -384,7 +384,8 @@
     const GROUPS = [["usdg", "USDG", (p) => p.quote === USDG], ["v3eth", "V3 ETH", (p) => p.quote === WETH && (p.kind ?? "v3") === "v3"], ["v4eth", "V4 ETH", (p) => p.quote === WETH && p.kind === "v4"]];
     const fmtFee = (p) => p.fee == null ? "dyn" : `${(p.fee / 1e4).toFixed(2)}%`;
     function renderGroups() {
-      const fmtLiq = (p) => p.offMarket ? "off market" : p.depthEth >= 0.005 ? `${p.depthEth >= 100 ? p.depthEth.toFixed(0) : p.depthEth >= 1 ? p.depthEth.toFixed(1) : p.depthEth.toFixed(3)} ETH` : Number(BigInt(p.liquidity)) > 0 ? "dust" : "empty";
+      // Depth is the ETH a 10% move would take out of the liquidity active at the price — what a trade meets, not a balance.
+      const fmtLiq = (p) => p.offMarket ? "off market" : p.depthEth >= 0.005 ? `≈${p.depthEth >= 100 ? p.depthEth.toFixed(0) : p.depthEth >= 1 ? p.depthEth.toFixed(1) : p.depthEth.toFixed(3)} ETH deep` : Number(BigInt(p.liquidity)) > 0 ? "dust" : "empty";
       // A V4 ETH pool that can be built into is what a stake and a plain ladder need; when
       // the token has none, the group offers to create one — a few cents of gas, and this
       // page places the first position right after.

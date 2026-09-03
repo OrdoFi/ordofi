@@ -629,14 +629,16 @@ export async function poolsForToken(token) {
   if ([...liq, ...slots, ...liq4, ...sqrt4].some((x) => x == null)) throw new Error("The RPC did not answer for every pool; try again in a moment.");
   const quoteUsd = (quote) => (quote === WETH ? usd : 1);
   // Raw liquidity is not comparable across fee tiers or prices, so pools are ranked
-  // by what the quote side is worth at the current price, in ETH: L/√P of the
-  // currency0 side or L·√P of currency1, whichever is the money. A pool holding
-  // less than a few dollars is treated as empty — anyone can park dust in a 10%
-  // pool, and it must not become the page's default over an unseeded 1% one.
+  // by depth near the price, in ETH: the money a 10% move would pull out of the
+  // liquidity active right now — L/√P·(1−1/√1.1) when the money is currency0,
+  // L·√P·(1−√0.9) when it is currency1. Full-range arithmetic on active liquidity
+  // would credit a tight position with a balance it does not hold. A pool with
+  // less than a few dollars in reach is treated as empty — anyone can park dust
+  // in a 10% pool, and it must not become the page's default over an unseeded 1% one.
   const depthOf = (L, sqrtPriceX96, quote, quoteIs0) => {
     const s = Number(sqrtPriceX96) / 2 ** 96;
     if (!(s > 0) || L === 0n) return 0;
-    const q = quoteIs0 ? Number(L) / s : Number(L) * s;
+    const q = quoteIs0 ? (Number(L) / s) * (1 - 1 / Math.sqrt(1.1)) : Number(L) * s * (1 - Math.sqrt(0.9));
     return quote === WETH ? q / 1e18 : usd ? q / 1e6 / usd : q / 1e6 / 4000;
   };
   // The pool's own price in USD per token, from its sqrtPrice and the two decimals.
