@@ -111,7 +111,7 @@
     .seg { display: flex; border: 1px solid var(--border); padding: 2px; background: #fff; }
     .seg button { font-family: var(--mono); font-size: 11px; padding: 6px 12px; border: none; background: none; color: var(--muted); cursor: pointer; }
     .seg button.on { background: var(--text); color: #fff; }
-    .chartwrap { position: relative; height: 400px; }
+    .chartwrap { position: relative; height: 440px; }
     #candles { position: absolute; inset: 0; }
     #overlay { position: absolute; inset: 0; pointer-events: none; }
     .guide { position: absolute; left: 8px; font-family: var(--mono); font-size: 10.5px; padding: 3px 8px; border: 1px solid var(--accent); background: #fff; color: var(--accent); pointer-events: none; z-index: 3; white-space: nowrap; }
@@ -268,7 +268,7 @@
     // ================= DETAIL =================
     const TFS = [[5, "5s"], [30, "30s"], [60, "1m"], [300, "5m"], [900, "15m"], [1800, "30m"], [3600, "1h"], [14400, "4h"], [43200, "12h"], [86400, "24h"]];
     const HOURS = { 5: 1, 30: 2, 60: 8, 300: 48, 900: 168, 1800: 336, 3600: 720, 14400: 2880, 43200: 6000, 86400: 9600 };
-    let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfSec = 900, chart, series, minLine, maxLine;
+    let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfSec = 900, chart, series, volume, minLine, maxLine;
     let shape = "bidask", bins = 40, slippageBps = 100, minPct = -30, maxPct = 40, balances = null, replanT = null, supply = null, mode = "price", candlesQ = [], portfolio = null;
     // Everything on the chart is in display units: USD per token, or USD market cap.
     const factor = () => (state?.quote.usdPerToken ?? 0) * (mode === "mc" && supply ? supply : 1);
@@ -461,13 +461,15 @@
       chart = LightweightCharts.createChart($("candles"), {
         layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "Fira Code, monospace", fontSize: 10 },
         grid: { vertLines: { color: "rgba(0,0,0,0.04)" }, horzLines: { color: "rgba(0,0,0,0.04)" } },
-        rightPriceScale: { borderColor: "#dedad1", scaleMargins: { top: 0.08, bottom: 0.08 } },
+        rightPriceScale: { borderColor: "#dedad1", scaleMargins: { top: 0.06, bottom: 0.24 } },
         timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: tfSec < 60, rightOffset: 4, barSpacing: 7 },
-        crosshair: { mode: 0 }, autoSize: true,
+        crosshair: { mode: 0, vertLine: { color: "rgba(29,22,22,.25)", labelBackgroundColor: "#1d1616" }, horzLine: { color: "rgba(29,22,22,.25)", labelBackgroundColor: "#1d1616" } },
+        autoSize: true,
       });
-      // A price line, as on Delta: one close per bucket. Candle wicks on thin
-      // pools are dominated by single stray prints and hide the shape of the tape.
-      series = chart.addAreaSeries({ lineColor: "#1d1616", lineWidth: 1.5, topColor: "rgba(255,100,20,.16)", bottomColor: "rgba(255,100,20,0)", priceLineVisible: true, priceLineColor: "#1e9e6a", lastValueVisible: true, crosshairMarkerVisible: true });
+      // Candles with the volume of each bucket underneath, as a trader expects.
+      series = chart.addCandlestickSeries({ upColor: "#1e9e6a", downColor: "#c0392b", borderVisible: false, wickUpColor: "#1e9e6a", wickDownColor: "#c0392b", priceLineVisible: true, priceLineColor: "#1e9e6a", priceLineWidth: 1, priceLineStyle: 2, lastValueVisible: true });
+      volume = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol", lastValueVisible: false, priceLineVisible: false });
+      chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, visible: false });
       // The range guides must always be on screen, whatever the candles span.
       series.applyOptions({ autoscaleInfoProvider: (orig) => { const r = orig(); if (!r || !state) return r; const lo = disp(rangeLo()), hi = disp(rangeHi()); return { priceRange: { minValue: Math.min(r.priceRange.minValue, lo), maxValue: Math.max(r.priceRange.maxValue, hi) }, margins: r.margins }; } });
       chart.timeScale().subscribeVisibleLogicalRangeChange(() => requestAnimationFrame(drawOverlay));
@@ -516,14 +518,15 @@
       const f = factor(); if (!f) return;
       const last = (candlesQ.at(-1)?.close ?? state.price) * f;
       series.applyOptions({ priceFormat: { type: "custom", minMove: mode === "mc" ? 1 : last >= 100 ? 0.01 : last >= 1 ? 0.0001 : 0.000001, formatter: (v) => fmtDisp(v) } });
-      series.setData(candlesQ.map((c) => ({ time: c.time, value: c.close * f })));
+      series.setData(candlesQ.map((c) => ({ time: c.time, open: (c.open ?? c.close) * f, high: (c.high ?? c.close) * f, low: (c.low ?? c.close) * f, close: c.close * f })));
+      volume.setData(candlesQ.map((c) => ({ time: c.time, value: c.vol ?? 0, color: c.close >= (c.open ?? c.close) ? "rgba(30,158,106,.28)" : "rgba(192,57,43,.28)" })));
       $("axis-unit").textContent = mode === "mc" ? "market cap, USD" : "price, USD";
       updateLines();
     }
     function updateLines() {
       if (!state || !factor()) return;
       const lo = disp(rangeLo()), hi = disp(rangeHi());
-      const opts = (p, t) => ({ price: p, color: "#ff6414", lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: t });
+      const opts = (p, t) => ({ price: p, color: "#ff6414", lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: t });
       if (!minLine) { minLine = series.createPriceLine(opts(lo, "min")); maxLine = series.createPriceLine(opts(hi, "max")); }
       else { minLine.applyOptions({ price: lo }); maxLine.applyOptions({ price: hi }); }
       requestAnimationFrame(drawOverlay);
@@ -537,16 +540,18 @@
       const axisW = chart.priceScale("right").width(), plotW = W - axisW, timeH = chart.timeScale().height();
       const yOf = (quotePrice) => series.priceToCoordinate(disp(quotePrice));
       const yLo = yOf(rangeLo()), yHi = yOf(rangeHi());
-      if (yLo != null && yHi != null) { ctx.fillStyle = "rgba(255,100,20,.07)"; ctx.fillRect(0, Math.min(yLo, yHi), plotW, Math.abs(yLo - yHi)); }
+      // The selected band: a faint wash between the guides, the chart still readable through it.
+      if (yLo != null && yHi != null) { ctx.fillStyle = "rgba(255,100,20,.045)"; ctx.fillRect(0, Math.min(yLo, yHi), plotW, Math.abs(yLo - yHi)); }
+      // Where liquidity sits today, drawn against the right edge: light where it is outside the band, warm where a rung would join it.
       if (depth?.bars?.length) {
-        const max = Math.max(...depth.bars.map((b) => b.usd), 1), bw = plotW * 0.28;
+        const max = Math.max(...depth.bars.map((b) => b.usd), 1), bw = plotW * 0.2;
         const sc = 10 ** (state.base.decimals - state.quote.decimals);
         for (const b of depth.bars) {
-          const pr = [b.tickLower, b.tickUpper].map((t) => { const r = Math.pow(1.0001, t); return state.base.isToken0 ? r * sc : 1 / (r * sc); });
+          const pr = [b.tickLower, b.tickUpper].map((t) => { const r = Math.pow(1.0001, t); return state.base.isToken0 ? r * sc : sc / r; });
           const y1 = yOf(Math.max(...pr)), y2 = yOf(Math.min(...pr)); if (y1 == null || y2 == null) continue;
           const inBand = Math.min(...pr) >= rangeLo() && Math.max(...pr) <= rangeHi();
-          ctx.fillStyle = inBand ? "rgba(255,100,20,.5)" : "rgba(29,22,22,.13)";
-          const w = (b.usd / max) * bw, h = Math.max(1, Math.abs(y2 - y1) - 1);
+          ctx.fillStyle = inBand ? "rgba(255,100,20,.32)" : "rgba(29,22,22,.09)";
+          const w = Math.max(b.usd > 0 ? 1 : 0, (b.usd / max) * bw), h = Math.max(1, Math.abs(y2 - y1) - 1);
           if (y1 < H - timeH) ctx.fillRect(plotW - w, Math.min(y1, y2), w, Math.min(h, H - timeH - Math.min(y1, y2)));
         }
       }
