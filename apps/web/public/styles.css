@@ -68,6 +68,10 @@ nav .wrap { display: flex; align-items: center; justify-content: space-between; 
   color: var(--text); display: flex; align-items: baseline; gap: 7px; text-transform: lowercase;
 }
 .logo .mark { display: none; }
+/* The liquidity product's own mark: "ordo" black, "liquidity" on the accent block. Height sets the size; the PNG is 680×154. */
+.logo-liq img { display: block; height: 28px; width: auto; }
+.footer-brand .logo-liq img { height: 26px; }
+@media (max-width: 640px) { .logo-liq img { height: 24px; } }
 .logo .logo-app {
   font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--accent);
   letter-spacing: 0.14em; text-transform: uppercase; border: 1px solid var(--accent);
