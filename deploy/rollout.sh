@@ -80,13 +80,17 @@ if [ "${1:-}" != "--no-build" ]; then
   "${COMPOSE[@]}" build "${REPLICAS[0]}"
 fi
 
-CONFIG_JSON="$("${COMPOSE[@]}" config --format json 2>/dev/null)"
-IMAGE_REF="$(printf '%s' "$CONFIG_JSON" | node -e '
-  const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
-  process.stdout.write(c.services[process.argv[1]].image ?? "");
-' "${REPLICAS[0]}")"
+# No node or jq on the host: the image name comes from `config --images`
+# (which also lists dependencies' images, hence the filter) and the project
+# name from the label on any running container of this stack.
+IMAGE_REF="$("${COMPOSE[@]}" config --images "${REPLICAS[0]}" 2>/dev/null | grep -E '(^|[-_/])gateway(:|$)' | head -n1 || true)"
 IMAGE_NEW="$([ -n "$IMAGE_REF" ] && docker image inspect -f '{{.Id}}' "$IMAGE_REF" 2>/dev/null || true)"
-PROJECT="$(printf '%s' "$CONFIG_JSON" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).name ?? "")')"
+any="$("${COMPOSE[@]}" ps -q 2>/dev/null | head -n1 || true)"
+if [ -n "$any" ]; then
+  PROJECT="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$any")"
+else
+  PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$(dirname "$(realpath deploy/docker-compose.prod.yml)")")}"
+fi
 # Containers of the pre-replica layout (service `gateway`), which compose no
 # longer knows by name.
 legacy_ids() {
