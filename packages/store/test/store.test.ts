@@ -78,6 +78,27 @@ test("activeSearchers counts distinct senders inside the window only", () => {
   s.close();
 });
 
+test("pricedProfit windows the quote-denominated floor by time", () => {
+  const s = new OrdoStore(":memory:");
+  s.insertArbs([
+    { ...arb("0x1", 0, "0xold", ["0xp"]), profitIsQuote: true, profitToken: "0xweth", profitWei: "5000000000000000000" },
+    { ...arb("0x2", 90_000, "0xa", ["0xp"]), profitIsQuote: true, profitToken: "0xWETH", profitWei: "1000000000000000000" },
+    { ...arb("0x3", 90_100, "0xb", ["0xp"]), profitIsQuote: true, profitToken: "0xusdg", profitWei: "2000000" },
+    { ...arb("0x4", 90_200, "0xc", ["0xp"]), profitIsQuote: false, profitToken: "0xlongtail", profitWei: "999999999999" },
+  ]);
+  const day = s.pricedProfit(1_700_000_000 + 90_200 - 86_400);
+  assert.equal(day.arbs, 3, "three arbs in the window, the day-old one is out");
+  assert.equal(day.pricedArbs, 2, "the long-tail arb counts but is not priced");
+  assert.deepEqual(day.profitByToken, [
+    { token: "0xweth", wei: 1_000_000_000_000_000_000n, arbs: 1 },
+    { token: "0xusdg", wei: 2_000_000n, arbs: 1 },
+  ]);
+  const all = s.pricedProfit();
+  assert.equal(all.arbs, 4);
+  assert.equal(all.profitByToken.find((p) => p.token === "0xweth")?.wei, 6_000_000_000_000_000_000n, "case-folded and summed as bigint");
+  s.close();
+});
+
 test("swaps are counted, not stored", () => {
   const s = new OrdoStore(":memory:");
   s.addSwaps(120);

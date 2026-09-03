@@ -106,8 +106,8 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
   <div class="status protocol" aria-label="What has gone through OrdoFi">
     <div><div class="k">Protected volume</div><div class="v" id="st-vol">—<small>through rpc.ordofi.network</small></div></div>
     <div><div class="k">Transactions</div><div class="v" id="st-tx">—<small>simulated, delivered privately</small></div></div>
-    <div><div class="k">MEV captured</div><div class="v" id="st-mev">—<small>settled on-chain</small></div></div>
-    <div><div class="k">Rebates returned</div><div class="v" id="st-reb">—<small>to users and apps</small></div></div>
+    <div><div class="k">MEV observed</div><div class="v" id="st-mev">—<small>on-chain, last 24h · not yet captured</small></div></div>
+    <div><div class="k">Rebate share</div><div class="v" id="st-reb">90%<small>to users · 5% apps · 5% protocol</small></div></div>
     <div><div class="k">Active searchers</div><div class="v" id="st-srch">—<small>last 24h on-chain</small></div></div>
   </div>
 </div>
@@ -187,13 +187,15 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
       const h = (await (await fetch("${app}/api/stats")).json()).headline;
       if (!h) return;
       const usd = (n) => "$" + Number(n).toLocaleString(undefined, n >= 1000 ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const eth = (n) => Number(n).toLocaleString(undefined, { maximumSignificantDigits: 4 }) + " ETH";
       const int = (n) => Number(n).toLocaleString();
-      const money = (usdV, ethV) => (usdV == null ? eth(ethV) : usd(usdV));
+      const pct = (f) => Math.round(Number(f) * 100) + "%";
       $("st-vol").innerHTML = usd(h.protectedVolumeUsd) + "<small>" + usd(h.protectedVolume24hUsd) + " in 24h</small>";
       $("st-tx").innerHTML = int(h.transactions) + "<small>" + int(h.transactions24h) + " in 24h · delivered privately</small>";
-      $("st-mev").innerHTML = money(h.mevCapturedUsd, h.mevCapturedEth) + "<small>" + eth(h.mevCapturedEth) + " settled <span style='white-space:nowrap'>on-chain</span></small>";
-      $("st-reb").innerHTML = money(h.rebatesReturnedUsd, h.rebatesReturnedEth) + "<small>" + eth(h.rebatesReturnedEth) + " to users and apps</small>";
+      // Observed is the market, not the revenue: arbitrage the watcher saw
+      // land on-chain, priced in quote assets only. Settlement figures are on
+      // the app's /dashboard.
+      $("st-mev").innerHTML = usd(h.mevObservedUsd24h) + "<small>" + int(h.mevObservedArbs24h) + " arbs on-chain in 24h · not yet captured</small>";
+      if (h.rebateSplit) $("st-reb").innerHTML = pct(h.rebateSplit.user) + "<small>to users · " + pct(h.rebateSplit.app) + " apps · " + pct(h.rebateSplit.protocol) + " protocol</small>";
       $("st-srch").innerHTML = int(h.activeSearchers24h) + "<small>last 24h · " + int(h.searchersAllTime) + " all time</small>";
     } catch { /* cosmetic */ }
   }

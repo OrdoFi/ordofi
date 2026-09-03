@@ -4,7 +4,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { createPublicClient, fallback, http, parseAbiItem, formatEther, encodeFunctionData, decodeFunctionResult, decodeEventLog, toEventSelector } from "viem";
 import { RPC_HEADERS, rpcUrls, rpcFetch } from "@ordofi/core";
-import { ethUsd } from "@ordofi/core/pricing";
+import { ethUsd, usdValue } from "@ordofi/core/pricing";
 import { startBlackholeWatch } from "@ordofi/core/blackhole-watch";
 import { OrdoStore } from "@ordofi/store";
 import { gzipSync } from "node:zlib";
@@ -144,6 +144,40 @@ function activeSearchers24h() {
     /* index optional */
   }
   activeMemo = { at: Date.now(), v };
+  return v;
+}
+
+/**
+ * Arbitrage the watcher has seen land on-chain, in USD — the market OrdoFi
+ * exists to capture, as distinct from what the auction has captured so far.
+ * Only profit booked in quote assets is priced (long-tail inventory is counted,
+ * not valued), so both figures are floors. Two windows, one memo.
+ */
+let observedMemo = null;
+async function observedMev() {
+  const empty = { usd24h: 0, arbs24h: 0, pricedArbs24h: 0, usdAllTime: 0, arbsAllTime: 0, pricedArbsAllTime: 0 };
+  if (!store?.pricedProfit) return empty;
+  if (observedMemo && Date.now() - observedMemo.at < 60_000) return observedMemo.v;
+  const price = async (byToken) => {
+    let usd = 0;
+    for (const p of byToken) {
+      const v = await usdValue(p.token, p.wei).catch(() => null);
+      if (v != null) usd += v;
+    }
+    return Math.round(usd * 100) / 100;
+  };
+  let v = empty;
+  try {
+    const day = store.pricedProfit(Date.now() / 1000 - 86_400);
+    const all = store.pricedProfit(0);
+    v = {
+      usd24h: await price(day.profitByToken), arbs24h: day.arbs, pricedArbs24h: day.pricedArbs,
+      usdAllTime: await price(all.profitByToken), arbsAllTime: all.arbs, pricedArbsAllTime: all.pricedArbs,
+    };
+  } catch {
+    /* index optional */
+  }
+  observedMemo = { at: Date.now(), v };
   return v;
 }
 
@@ -461,6 +495,12 @@ async function handle(req, res) {
     // and a much larger one.
     const capturedEth = onchain.deployed ? num(onchain.totals.totalSettledEth) : 0;
     const returnedEth = onchain.deployed ? num(onchain.totals.rebatesToUsersEth) + num(onchain.totals.rebatesToAppsEth) : 0;
+    const observed = await observedMev();
+    // The split the contract enforces; displayed from configuration, as the
+    // settlement figures are.
+    const rebateUser = Number(process.env.ORDO_REBATE_USER ?? 0.9);
+    const rebateApp = Number(process.env.ORDO_REBATE_APP ?? 0.05);
+    const rebateSplit = { user: rebateUser, app: rebateApp, protocol: Math.round(Math.max(0, 1 - rebateUser - rebateApp) * 1e6) / 1e6 };
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
@@ -489,6 +529,10 @@ async function handle(req, res) {
               stale: Boolean(onchain.stale),
             }
           : { deployed: false },
+        // Arbitrage seen landing on-chain, priced in quote assets only (a floor).
+        // Observed is not captured: it is the market, not the revenue.
+        mevObserved: { ...observed, floor: true },
+        rebateSplit,
         // The five figures the dashboards lead with, precomputed so an
         // embedding site does not repeat the arithmetic or the caveats.
         headline: {
@@ -496,6 +540,11 @@ async function handle(req, res) {
           protectedVolume24hUsd: routed.available ? routed.volume24hUsd : 0,
           transactions: routed.available ? routed.transactions.confirmed : 0,
           transactions24h: routed.available ? routed.transactions.confirmed24h : 0,
+          mevObservedUsd24h: observed.usd24h,
+          mevObservedArbs24h: observed.arbs24h,
+          mevObservedUsd: observed.usdAllTime,
+          mevObservedArbs: observed.arbsAllTime,
+          rebateSplit,
           mevCapturedEth: capturedEth,
           mevCapturedUsd: toUsd(capturedEth),
           settlements: onchain.deployed ? onchain.totals.settlements : 0,

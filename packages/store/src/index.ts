@@ -917,6 +917,37 @@ export class OrdoStore {
     return Number(r?.n ?? 0);
   }
 
+  /**
+   * Arbitrage profit booked in quote assets since `sinceSec`, grouped by
+   * token, plus how many arbs the window holds and how many of those were
+   * priceable. Same floor semantics as poolLeakage — long-tail profit is
+   * counted in `arbs` but absent from `profitByToken` — with a time window
+   * instead of a pool filter, so a page can say "observed in the last 24h".
+   */
+  pricedProfit(sinceSec = 0): { arbs: number; pricedArbs: number; profitByToken: { token: string; wei: bigint; arbs: number }[] } {
+    const since = Math.floor(sinceSec);
+    const head = this.db
+      .prepare(`SELECT COUNT(*) arbs, COALESCE(SUM(profit_is_quote), 0) priced FROM arbs WHERE timestamp >= ?`)
+      .get(since) as { arbs: number; priced: number };
+    const rows = this.db
+      .prepare(`SELECT profit_token t, profit_wei w FROM arbs WHERE timestamp >= ? AND profit_is_quote = 1`)
+      .all(since) as { t: string | null; w: string | null }[];
+    const byToken = new Map<string, { wei: bigint; arbs: number }>();
+    for (const row of rows) {
+      if (!row.t || !row.w) continue;
+      const key = row.t.toLowerCase();
+      const cur = byToken.get(key) ?? { wei: 0n, arbs: 0 };
+      cur.wei += BigInt(row.w);
+      cur.arbs++;
+      byToken.set(key, cur);
+    }
+    return {
+      arbs: Number(head.arbs ?? 0),
+      pricedArbs: Number(head.priced ?? 0),
+      profitByToken: [...byToken.entries()].map(([token, v]) => ({ token, wei: v.wei, arbs: v.arbs })).sort((a, b) => b.arbs - a.arbs),
+    };
+  }
+
   recentArbs(limit = 40): ArbRow[] {
     const rows = this.db
       .prepare(`SELECT * FROM arbs ORDER BY block DESC LIMIT ?`)

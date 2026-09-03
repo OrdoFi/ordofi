@@ -303,12 +303,17 @@ const s = await fetch("https://app.ordofi.network/api/stats").then(r => r.json()
 // { arbs, searchers, activeSearchers24h, pools, swaps, arbsPerDay, ethUsd,
 //   routed: { transactions, transactions24h, volumeUsd, volume24hUsd, since },
 //   settlement: { deployed, settlements, totalSettledEth, rebatesToUsersEth, rebatesToAppsEth, ... },
-//   headline: { protectedVolumeUsd, transactions, mevCapturedEth, mevCapturedUsd,
-//               rebatesReturnedEth, rebatesReturnedUsd, activeSearchers24h, ... } }
+//   mevObserved: { usd24h, arbs24h, usdAllTime, arbsAllTime, floor: true },
+//   rebateSplit: { user: 0.9, app: 0.05, protocol: 0.05 },
+//   headline: { protectedVolumeUsd, transactions, mevObservedUsd24h, rebateSplit,
+//               mevCapturedEth, rebatesReturnedEth, activeSearchers24h, ... } }
 // `headline` is the five-figure strip on the home and RPC pages: protected volume
-// and transactions are what went through rpc.ordofi.network; MEV captured and
-// rebates returned are what OrdoSettlement charged and credited on-chain, not the
-// arbitrage merely observed; active searchers landed an arb in the last 24h.
+// and transactions are what went through rpc.ordofi.network; MEV observed is the
+// arbitrage the watcher saw land on-chain, priced in quote assets only (a floor)
+// and explicitly not what OrdoFi captured; the rebate split is the one the
+// contract enforces; active searchers landed an arb in the last 24h. What the
+// auction has actually settled (mevCaptured*, rebatesReturned*) stays in the
+// payload and on /dashboard.
 ```
 
 | Endpoint | Returns |
