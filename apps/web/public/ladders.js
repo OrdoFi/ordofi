@@ -80,6 +80,8 @@ export const CSS = `
 .ld .hint{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:4px}
 .ld .binrow{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer}
 .ld .binrow:last-child{border-bottom:none}
+.ld .quickpick{font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:#fff;cursor:pointer}
+.ld .quickpick:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
 .ld .binrow input{accent-color:var(--accent);width:16px;height:16px}
 .ld .binrow .r{font-family:var(--mono);font-size:12px;flex:1}.ld .binrow .r small{display:block;color:var(--muted);font-size:10.5px}
 .ld .binrow .a{font-family:var(--mono);font-size:12px;text-align:right}.ld .binrow .a small{display:block;color:var(--muted);font-size:10.5px}
@@ -301,14 +303,20 @@ async function partialDialog(l, opts) {
   const open = l.bins.filter((b) => b.open).sort((a, b) => b.priceLower - a.priceLower);
   const b = dialog("Withdraw part of this position", `
     <p>This position is ${l.openBins} bins. Take any of them out and the rest stay open and keep earning. Whatever you take comes out with its fees, and the bins you leave keep theirs.</p>
-    <div style="display:flex;justify-content:flex-end"><button id="ld-clear" style="font:inherit;font-size:11px;background:none;border:none;color:var(--accent);cursor:pointer">clear</button></div>
-    ${open.map((bn) => `<label class="binrow"><input type="checkbox" data-i="${bn.index}" /><span class="r">${fmtPx(bn.priceLower)} – ${fmtPx(bn.priceUpper)} ${esc(l.quote.symbol)}<small>${l.quote.usdPerToken ? `${usd(bn.priceLower * l.quote.usdPerToken)} – ${usd(bn.priceUpper * l.quote.usdPerToken)}` : ""}${bn.inRange ? " · at the price" : ""}</small></span><span class="a">${bn.side === "both" ? "both" : bn.side === (l.base.isToken0 ? "token0" : "token1") ? `all ${esc(l.base.symbol)}` : `all ${esc(l.quote.symbol)}`}<small>${usd(bn.usd, 2)} · ${bn.side === (l.base.isToken0 ? "token0" : "token1") ? fmtBase(l, bn.amount0, bn.amount1, 5) : fmtQuote(l, bn.amount0, bn.amount1, 6)}</small></span></label>`).join("")}
+    <div class="quick" style="display:flex;gap:8px;align-items:center;margin:2px 0 8px"><button id="ld-all-quote" class="quickpick">All the ${esc(l.quote.symbol)}</button><button id="ld-all-base" class="quickpick">All the ${esc(l.base.symbol)}</button><span style="flex:1"></span><button id="ld-clear" style="font:inherit;font-size:11px;background:none;border:none;color:var(--accent);cursor:pointer">clear</button></div>
+    ${open.map((bn) => `<label class="binrow"><input type="checkbox" data-i="${bn.index}" data-side="${bn.side === "both" ? "both" : bn.side === (l.base.isToken0 ? "token0" : "token1") ? "base" : "quote"}" /><span class="r">${fmtPx(bn.priceLower)} – ${fmtPx(bn.priceUpper)} ${esc(l.quote.symbol)}<small>${l.quote.usdPerToken ? `${usd(bn.priceLower * l.quote.usdPerToken)} – ${usd(bn.priceUpper * l.quote.usdPerToken)}` : ""}${bn.inRange ? " · at the price" : ""}</small></span><span class="a">${bn.side === "both" ? "both" : bn.side === (l.base.isToken0 ? "token0" : "token1") ? `all ${esc(l.base.symbol)}` : `all ${esc(l.quote.symbol)}`}<small>${usd(bn.usd, 2)} · ${bn.side === (l.base.isToken0 ? "token0" : "token1") ? fmtBase(l, bn.amount0, bn.amount1, 5) : fmtQuote(l, bn.amount0, bn.amount1, 6)}</small></span></label>`).join("")}
     <div class="foot"><button id="ld-cancel">Cancel</button><button class="go" id="ld-go" disabled>Partial withdraw</button></div><div class="res" id="ld-res"></div>`);
   const $ = (id) => b.querySelector("#" + id);
   const chosen = () => [...b.querySelectorAll("input[type=checkbox]:checked")].map((x) => x.dataset.i);
   const sync = () => { const n = chosen().length; $("ld-go").disabled = n === 0 || n >= open.length; $("ld-go").textContent = n >= open.length ? "That is everything — use Close" : n ? `Withdraw ${n} bin${n > 1 ? "s" : ""}` : "Partial withdraw"; };
   b.querySelectorAll("input[type=checkbox]").forEach((c) => c.addEventListener("change", sync));
   $("ld-clear").addEventListener("click", () => { b.querySelectorAll("input[type=checkbox]").forEach((c) => (c.checked = false)); sync(); });
+  // One click takes every bin that holds only that coin — the side the price has left behind.
+  for (const [id, side] of [["ld-all-quote", "quote"], ["ld-all-base", "base"]]) {
+    const btn = $(id), mine = [...b.querySelectorAll(`input[type=checkbox][data-side="${side}"]`)];
+    if (!mine.length) { btn.disabled = true; btn.style.opacity = ".45"; }
+    btn.addEventListener("click", () => { b.querySelectorAll("input[type=checkbox]").forEach((c) => (c.checked = false)); mine.forEach((c) => (c.checked = true)); sync(); });
+  }
   $("ld-cancel").addEventListener("click", closeDialog);
   $("ld-go").addEventListener("click", async () => {
     const idx = chosen(); if (!idx.length) return;

@@ -98,7 +98,10 @@
     mountShell($("lq-shell"), { page: "positions" });
     async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
     let portfolio = null, lastSig = null, unit = "usd", cur = new Date(); cur = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth(), 1));
-    const fmt = (raw) => { const v = Math.abs(raw) < (unit === "usd" ? 0.005 : 0.000005) ? 0 : raw; return unit === "usd" ? (v < 0 ? "-" : "") + usd(Math.abs(v)) : (v < 0 ? "-" : "") + num(Math.abs(v), 5) + " Ξ"; };
+    // Below half a cent (or a hundred-thousandth of an ETH) the figure prints as zero, so it
+    // must colour as zero too — a red "$0.00" is a rounding artefact, not a loss.
+    const shown = (raw) => Math.abs(raw) < (unit === "usd" ? 0.005 : 0.000005) ? 0 : raw;
+    const fmt = (raw) => { const v = shown(raw); return unit === "usd" ? (v < 0 ? "-" : "") + usd(Math.abs(v)) : (v < 0 ? "-" : "") + num(Math.abs(v), 5) + " Ξ"; };
     const pick = (d) => unit === "usd" ? d.pnlUsd : d.pnlEth;
 
     function renderCal() {
@@ -116,21 +119,21 @@
         const row = days[key];
         const v = row ? pick(row) : null;
         if (row) { total += v; count += row.closes; best = best == null || v > best.v ? { v, d } : best; worst = worst == null || v < worst.v ? { v, d } : worst; }
-        html += `<div class="day ${row ? (v >= 0 ? "win" : "loss") : ""} ${key === today ? "today" : ""}"><span>${d}</span>${row ? `<span class="p">${fmt(v)}</span><span class="n">${row.closes} close${row.closes === 1 ? "" : "s"}${row.collects ? ` · ${row.collects} claim${row.collects === 1 ? "" : "s"}` : ""}</span>` : ""}</div>`;
+        html += `<div class="day ${row ? (shown(v) >= 0 ? "win" : "loss") : ""} ${key === today ? "today" : ""}"><span>${d}</span>${row ? `<span class="p">${fmt(v)}</span><span class="n">${row.closes} close${row.closes === 1 ? "" : "s"}${row.collects ? ` · ${row.collects} claim${row.collects === 1 ? "" : "s"}` : ""}</span>` : ""}</div>`;
       }
       $("days").innerHTML = html;
       const closedThisMonth = (portfolio?.ladders ?? []).filter((l) => l.closed && new Date(l.closedAt * 1000).getUTCFullYear() === y && new Date(l.closedAt * 1000).getUTCMonth() === m);
       const wins = closedThisMonth.filter((l) => l.realizedUsd >= -0.005).length;
-      $("m-total").textContent = fmt(total); $("m-total").className = "v " + (total >= 0 ? "up" : "dn");
+      $("m-total").textContent = fmt(total); $("m-total").className = "v " + (shown(total) >= 0 ? "up" : "dn");
       $("m-closed").textContent = closedThisMonth.length;
       $("m-win").textContent = closedThisMonth.length ? `${Math.round((wins / closedThisMonth.length) * 100)}%` : "—";
-      $("m-best").textContent = best ? `${fmt(best.v)}` : "—"; $("m-best").className = "v " + (best && best.v >= 0 ? "up" : "");
-      $("m-worst").textContent = worst ? `${fmt(worst.v)}` : "—"; $("m-worst").className = "v " + (worst && worst.v < 0 ? "dn" : "");
+      $("m-best").textContent = best ? `${fmt(best.v)}` : "—"; $("m-best").className = "v " + (best && shown(best.v) >= 0 ? "up" : "");
+      $("m-worst").textContent = worst ? `${fmt(worst.v)}` : "—"; $("m-worst").className = "v " + (worst && shown(worst.v) < 0 ? "dn" : "");
       const open = (portfolio?.ladders ?? []).filter((l) => !l.closed);
       const unreal = open.reduce((s, l) => s + l.unrealizedUsd, 0);
       const eth = portfolio?.ethUsd ?? null;
       $("u-k").textContent = `Unrealized · ${open.length} open`;
-      $("u-v").textContent = unit === "usd" ? fmt(unreal) : eth ? fmt(unreal / eth) : "—"; $("u-v").className = "v " + (unreal >= 0 ? "up" : "dn");
+      $("u-v").textContent = unit === "usd" ? fmt(unreal) : eth ? fmt(unreal / eth) : "—"; $("u-v").className = "v " + (shown(unreal) >= 0 ? "up" : "dn");
       const gas = (portfolio?.ladders ?? []).reduce((s, l) => s + l.gasUsd, 0);
       $("calnote").textContent = !wallet.account ? "Connect a wallet to see your PnL." : Object.keys(days).length ? `Close a position and its PnL lands on the day it closed. Fees claimed land on the day claimed. Gas paid across all positions: ${usd(gas)} — shown on each card, kept out of PnL.` : "No closed positions yet. Close a position and its PnL lands on the day it closed.";
     }

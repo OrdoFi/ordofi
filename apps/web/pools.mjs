@@ -457,9 +457,11 @@ export async function poolsForToken(token) {
   // Anyone can initialise a V4 pool for a few cents, so a token collects dozens
   // of empty ones at absurd fee tiers. Offer the ones holding liquidity (at most
   // eight); with none live, the sanest three so the first position can still be built.
-  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.fee, tickSpacing: k.tickSpacing, quote: WETH, liquidity: liq4[i].toString() })).sort(byLiq);
+  // A fee above 10% is a trap, not a market (V4 lets anyone set 93%); dust parked in one
+  // does not make it worth offering.
+  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.fee, tickSpacing: k.tickSpacing, quote: WETH, liquidity: liq4[i].toString() })).filter((p) => p.fee <= 100_000).sort(byLiq);
   const live4 = v4Rows.filter((p) => BigInt(p.liquidity) > 0n).slice(0, 8);
-  const v4Shown = live4.length ? live4 : v4Rows.filter((p) => p.fee <= 100_000).sort((a, b) => a.fee - b.fee).slice(0, 3);
+  const v4Shown = live4.length ? live4 : v4Rows.sort((a, b) => a.fee - b.fee).slice(0, 3);
   const rows = [
     ...mine.map(([addr, p], i) => ({ pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i].toString() })),
     ...v4Shown,

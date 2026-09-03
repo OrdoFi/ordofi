@@ -348,7 +348,7 @@
       document.querySelectorAll(".hint button[data-r]").forEach((b) => b.addEventListener("click", () => { [minPct, maxPct] = b.dataset.r.split(",").map(Number); syncRange(); }));
       $("bins").addEventListener("input", () => { bins = Math.max(1, Math.min(40, Number($("bins").value) || 1)); replan(); });
       $("slip").addEventListener("input", () => { const v = Number($("slip").value); if (isFinite(v) && v >= 0) { slippageBps = Math.round(Math.min(20, v) * 100); replan(); } });
-      for (const ev of ["input", "change", "keyup"]) { $("amt-base").addEventListener(ev, replan); $("amt-quote").addEventListener(ev, replan); }
+      for (const ev of ["input", "change", "keyup"]) { $("amt-base").addEventListener(ev, () => { snapRangeToSide(); replan(); }); $("amt-quote").addEventListener(ev, () => { snapRangeToSide(); replan(); }); }
       $("max-base").addEventListener("click", () => { if (balances?.base != null) { $("amt-base").value = balances.base; replan(); } });
       $("max-quote").addEventListener("click", () => { if (balances?.quote != null) { $("amt-quote").value = Math.max(0, balances.quote - (state.quote.address === WETH ? 0.003 : 0)).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); replan(); } });
       $("go").addEventListener("click", build);
@@ -410,6 +410,22 @@
     }
 
     // ---- range: percent ⇄ value, guides, inputs
+    // With one coin entered, a range straddling the price would leave most bins unfunded,
+    // so it slides to that coin's side (ETH below, the token above) and comes back when
+    // the second coin is entered. A range already on one side is left as set.
+    let straddle = null, sidesBefore = 0;
+    function snapRangeToSide() {
+      if (!state) return;
+      const b = Number($("amt-base").value) > 0, q = Number($("amt-quote").value) > 0, sides = (b ? 1 : 0) + (q ? 1 : 0);
+      const wasEmpty = sidesBefore === 0; sidesBefore = sides;
+      if (sides === 2) { if (straddle) { [minPct, maxPct] = straddle; straddle = null; syncRange(); } return; }
+      // Only the first coin typed moves the range; a range the user then reshapes stays theirs.
+      if (sides === 1 && wasEmpty && minPct < 0 && maxPct > 0) {
+        straddle = [minPct, maxPct];
+        if (q) { minPct = Math.min(minPct, -50); maxPct = 0; } else { minPct = 0; maxPct = Math.max(maxPct, 50); }
+        syncRange();
+      }
+    }
     function syncRange(from) {
       if (!state) return;
       if (from !== "pct") { $("minpct").value = (minPct >= 0 ? "+" : "") + minPct.toFixed(1).replace(/\.0$/, ""); $("maxpct").value = (maxPct >= 0 ? "+" : "") + maxPct.toFixed(1).replace(/\.0$/, ""); }
