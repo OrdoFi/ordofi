@@ -57,11 +57,27 @@ export const CONFIG = {
   port: Number(process.env.ORDO_PORT ?? 8547),
   allowAnon: process.env.ORDO_ALLOW_ANON === "1",
   /**
-   * Requests per minute an anonymous IP may make. Wallets poll aggressively
-   * (block number, balances, receipts every few seconds), so this is sized
-   * for a person with a wallet open, not for a bot.
+   * Upstream-bound requests per minute an anonymous IP may make. Requests the
+   * gateway answers itself (chain id, cached head, mined receipts) cost nothing
+   * and are not counted, so this bounds real upstream load, not wallet
+   * chattiness. Sized for a dapp's users behind one office or carrier NAT
+   * rather than a single wallet — a 429 to a legitimate user reads as "the RPC
+   * is slow", and that costs more than the upstream calls it saves.
    */
-  anonRateLimit: Number(process.env.ORDO_ANON_RATE_LIMIT ?? 600),
+  anonRateLimit: Number(process.env.ORDO_ANON_RATE_LIMIT ?? 3_000),
+  /**
+   * Sends per minute an anonymous IP may make. Each one costs a simulation
+   * and a sequencer submission, and nobody legitimately signs more than one
+   * transaction a second from one address for a minute straight.
+   */
+  anonSendRateLimit: Number(process.env.ORDO_ANON_SEND_RATE_LIMIT ?? 60),
+  /**
+   * How long an idempotent read may wait on the primary upstream before the
+   * same request is hedged to the next one. The median upstream answer is
+   * ~80 ms; this only ever fires on the slow tail.
+   */
+  hedgeAfterMs: Number(process.env.ORDO_HEDGE_AFTER_MS ?? 150),
+  chainId: Number(process.env.ORDO_CHAIN_ID ?? 4663),
   /**
    * Methods anonymous callers may use when allowAnon is on: everything a
    * wallet needs to function once the endpoint is added as its network RPC,

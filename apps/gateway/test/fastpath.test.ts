@@ -1,0 +1,190 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, hedged, staticAnswer } from "../src/fastpath.ts";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test("chain id and network id are answered without an upstream", () => {
+  assert.equal(staticAnswer("eth_chainId", 4663), "0x1237");
+  assert.equal(staticAnswer("net_version", 4663), "4663");
+  assert.equal(staticAnswer("eth_blockNumber", 4663), undefined, "the head is not a constant");
+});
+
+test("cache windows: a block for the head, a second for fees, nothing for state reads", () => {
+  assert.equal(cacheTtlMs("eth_blockNumber", []), BLOCK_MS);
+  assert.equal(cacheTtlMs("eth_gasPrice", []), 1_000);
+  assert.equal(cacheTtlMs("eth_feeHistory", ["0x5", "latest", []]), 1_000);
+  assert.equal(cacheTtlMs("eth_call", [{}, "latest"]), 0, "eth_call is never cached");
+  assert.equal(cacheTtlMs("eth_getBalance", ["0xabc", "latest"]), 0);
+  assert.equal(cacheTtlMs("eth_getTransactionCount", ["0xabc", "pending"]), 0, "nonces must be live");
+});
+
+test("a mined receipt is cached, a pending one is asked for again", () => {
+  assert.equal(cacheTtlMs("eth_getTransactionReceipt", ["0xh"], null), 0);
+  assert.ok(cacheTtlMs("eth_getTransactionReceipt", ["0xh"], { status: "0x1" }) >= 60_000);
+  assert.equal(cacheTtlMs("eth_getTransactionByHash", ["0xh"], null), 0);
+  assert.ok(cacheTtlMs("eth_getTransactionByHash", ["0xh"], { hash: "0xh" }) >= 60_000);
+});
+
+test("blocks: the head tag moves every block, a numbered block is immutable", () => {
+  assert.equal(cacheTtlMs("eth_getBlockByNumber", ["latest", false], { number: "0x1" }), BLOCK_MS);
+  assert.equal(cacheTtlMs("eth_getBlockByNumber", ["pending", false], { number: "0x1" }), BLOCK_MS);
+  assert.ok(cacheTtlMs("eth_getBlockByNumber", ["0x10", false], { number: "0x10" }) >= 60_000);
+  assert.equal(cacheTtlMs("eth_getBlockByNumber", ["0x10", false], null), 0, "not yet produced: ask again");
+  assert.ok(cacheTtlMs("eth_getBlockByHash", ["0xb", false], { number: "0x10" }) >= 60_000);
+});
+
+test("the cache key distinguishes params, so a receipt for one hash never answers for another", () => {
+  assert.notEqual(cacheKey("eth_getTransactionReceipt", ["0xa"]), cacheKey("eth_getTransactionReceipt", ["0xb"]));
+  assert.equal(cacheKey("eth_blockNumber", []), cacheKey("eth_blockNumber", undefined as unknown as unknown[]));
+});
+
+test("sends are not idempotent reads", () => {
+  assert.ok(!IDEMPOTENT_READS.has("eth_sendRawTransaction"));
+  assert.ok(!IDEMPOTENT_READS.has("ordo_sendBundle"));
+  assert.ok(IDEMPOTENT_READS.has("eth_call"));
+});
+
+test("micro-cache: entries expire on their own clock", () => {
+  let now = 1_000;
+  const c = new MicroCache(10, () => now);
+  c.set("k", "v", 100);
+  assert.equal(c.get("k"), "v");
+  now += 99;
+  assert.equal(c.get("k"), "v");
+  now += 1;
+  assert.equal(c.get("k"), undefined, "gone at exactly the TTL");
+  c.set("never", "v", 0);
+  assert.equal(c.get("never"), undefined, "ttl 0 stores nothing");
+});
+
+test("micro-cache is bounded: the oldest entry makes room", () => {
+  const c = new MicroCache(2, () => 0);
+  c.set("a", 1, 1000);
+  c.set("b", 2, 1000);
+  c.set("c", 3, 1000);
+  assert.equal(c.size, 2);
+  assert.equal(c.get("a"), undefined);
+  assert.equal(c.get("c"), 3);
+});
+
+test("coalescing: ten concurrent identical reads cost one upstream call", async () => {
+  const c = new MicroCache();
+  let calls = 0;
+  const load = async () => {
+    calls++;
+    await sleep(20);
+    return "0x10";
+  };
+  const results = await Promise.all(Array.from({ length: 10 }, () => c.through("eth_blockNumber:[]", load, () => 0)));
+  assert.deepEqual(results, Array(10).fill("0x10"));
+  assert.equal(calls, 1);
+  // ttl 0: nothing was kept, the next caller pays again.
+  await c.through("eth_blockNumber:[]", load, () => 0);
+  assert.equal(calls, 2);
+});
+
+test("coalescing: a failure is shared with every waiter and cached by nobody", async () => {
+  const c = new MicroCache();
+  let calls = 0;
+  const load = async () => {
+    calls++;
+    await sleep(5);
+    throw new Error("upstream down");
+  };
+  const settled = await Promise.allSettled([c.through("k", load, () => 1000), c.through("k", load, () => 1000)]);
+  assert.equal(calls, 1);
+  assert.ok(settled.every((s) => s.status === "rejected"));
+  assert.equal(c.get("k"), undefined);
+  await assert.rejects(c.through("k", load, () => 1000));
+  assert.equal(calls, 2, "retried, not served a cached failure");
+});
+
+test("through(): the ttl is decided by the result, so a null receipt is not kept", async () => {
+  const c = new MicroCache();
+  const ttl = (r: unknown) => cacheTtlMs("eth_getTransactionReceipt", ["0xh"], r);
+  await c.through("r", async () => null, ttl);
+  assert.equal(c.get("r"), undefined);
+  await c.through("r", async () => ({ status: "0x1" }), ttl);
+  assert.deepEqual(c.get("r"), { status: "0x1" });
+});
+
+test("hedge: a fast primary never fires the hedge", async () => {
+  const events: string[] = [];
+  let hedgeCalls = 0;
+  const v = await hedged(
+    async () => "primary",
+    async () => {
+      hedgeCalls++;
+      return "hedge";
+    },
+    50,
+    (e) => events.push(e),
+  );
+  await sleep(70);
+  assert.equal(v, "primary");
+  assert.equal(hedgeCalls, 0);
+  assert.deepEqual(events, []);
+});
+
+test("hedge: a slow primary is overtaken by the hedge, and the first answer wins", async () => {
+  const events: string[] = [];
+  const started = Date.now();
+  const v = await hedged(
+    () => sleep(300).then(() => "primary"),
+    () => sleep(10).then(() => "hedge"),
+    30,
+    (e) => events.push(e),
+  );
+  assert.equal(v, "hedge");
+  assert.ok(Date.now() - started < 200, "did not wait for the slow primary");
+  assert.deepEqual(events, ["fired", "won"]);
+});
+
+test("hedge: a slow-but-first primary still wins when the hedge is slower", async () => {
+  const v = await hedged(
+    () => sleep(60).then(() => "primary"),
+    () => sleep(200).then(() => "hedge"),
+    30,
+  );
+  assert.equal(v, "primary");
+});
+
+test("hedge: a failing primary is rescued by the hedge", async () => {
+  const v = await hedged(
+    () => sleep(40).then(() => Promise.reject(new Error("primary 502"))),
+    () => sleep(10).then(() => "hedge"),
+    20,
+  );
+  assert.equal(v, "hedge");
+});
+
+test("hedge: a fast failure before the hedge fires is reported at once, and the hedge never starts", async () => {
+  let hedgeCalls = 0;
+  await assert.rejects(
+    hedged(
+      async () => {
+        throw new Error("bad request");
+      },
+      async () => {
+        hedgeCalls++;
+        return "hedge";
+      },
+      50,
+    ),
+    /bad request/,
+  );
+  await sleep(70);
+  assert.equal(hedgeCalls, 0);
+});
+
+test("hedge: when both fail, the primary's error is the one the caller sees", async () => {
+  await assert.rejects(
+    hedged(
+      () => sleep(30).then(() => Promise.reject(new Error("primary failed"))),
+      () => sleep(30).then(() => Promise.reject(new Error("hedge failed"))),
+      10,
+    ),
+    /primary failed/,
+  );
+});

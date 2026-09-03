@@ -25,12 +25,23 @@ interface SimResult {
  * Limitation (inherent to Phase 1): state can change between simulation and
  * inclusion, so success here is a strong signal, not a guarantee.
  */
-export async function simulateRaw(upstream: Upstream, rawTx: string): Promise<SimResult> {
+/** A raw transaction parsed and its sender recovered — once, shared by every check. */
+export interface ParsedRaw {
+  tx: ReturnType<typeof parseTransaction>;
+  from: Hex;
+}
+
+export async function parseRaw(rawTx: string): Promise<ParsedRaw> {
   if (!rawTx?.startsWith("0x")) throw new RpcError(-32602, "expected raw signed tx hex");
   const tx = parseTransaction(rawTx as TransactionSerialized);
-  const from = await recoverTransactionAddress({
-    serializedTransaction: rawTx as TransactionSerialized,
-  });
+  // ECDSA recovery is the one CPU-heavy step on the send path; the checks
+  // below used to each do their own.
+  const from = await recoverTransactionAddress({ serializedTransaction: rawTx as TransactionSerialized });
+  return { tx, from };
+}
+
+export async function simulateRaw(upstream: Upstream, rawTx: string, parsed?: ParsedRaw): Promise<SimResult> {
+  const { tx, from } = parsed ?? (await parseRaw(rawTx));
 
   const call: Record<string, string> = { from };
   if (tx.to) call.to = tx.to;
@@ -70,10 +81,9 @@ export async function simulateRaw(upstream: Upstream, rawTx: string): Promise<Si
  * every send whenever one method is unavailable would be a worse outcome than
  * one that only refuses what it can prove is a loss.
  */
-export async function burnCheck(upstream: Upstream, rawTx: string): Promise<DeliveryProof | null> {
-  const tx = parseTransaction(rawTx as TransactionSerialized);
+export async function burnCheck(upstream: Upstream, rawTx: string, parsed?: ParsedRaw): Promise<DeliveryProof | null> {
+  const { tx, from } = parsed ?? (await parseRaw(rawTx));
   if (!tx.to) return null; // contract creation: nothing to misdirect
-  const from = await recoverTransactionAddress({ serializedTransaction: rawTx as TransactionSerialized });
   const proof = await proveDelivery(
     { from, tx: { to: tx.to, data: (tx.data ?? "0x") as Hex, value: tx.value ?? 0n } },
     { simulate: (params) => upstream("eth_simulateV1", params) },
@@ -82,16 +92,33 @@ export async function burnCheck(upstream: Upstream, rawTx: string): Promise<Deli
   return proof;
 }
 
+/**
+ * One simulation answers both questions. eth_simulateV1 executes the
+ * transaction and reports its status, so the separate eth_call that used to
+ * run first was a second round trip for information the delivery check
+ * already had. The send path is now simulate → send, two upstream calls
+ * instead of three; eth_call remains as the fallback for an upstream that
+ * cannot simulate, so revert protection never goes away.
+ */
 export async function protectAndSend(upstream: Upstream, rawTx: string): Promise<string> {
-  const sim = await simulateRaw(upstream, rawTx);
-  if (!sim.ok) {
+  const parsed = await parseRaw(rawTx);
+  const burn = await burnCheck(upstream, rawTx, parsed).catch(() => null);
+  if (burn === null) {
+    const sim = await simulateRaw(upstream, rawTx, parsed);
+    if (!sim.ok) {
+      throw new RpcError(
+        -32000,
+        `ordo: transaction would revert, not submitted: ${sim.revertReason}`,
+        { ordoProtected: true },
+      );
+    }
+  } else if (burn.reverted !== undefined) {
     throw new RpcError(
       -32000,
-      `ordo: transaction would revert, not submitted: ${sim.revertReason}`,
+      `ordo: transaction would revert, not submitted: ${burn.reverted}`,
       { ordoProtected: true },
     );
   }
-  const burn = await burnCheck(upstream, rawTx).catch(() => null);
   if (burn && burn.leaks.length) {
     throw new RpcError(
       -32000,

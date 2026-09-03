@@ -1,18 +1,21 @@
 import { createServer } from "node:http";
 import { landingHtml } from "./landing.ts";
 import { join } from "node:path";
-import { ENDPOINTS, rpcFetch, sendRawTransaction, sequencerUrl } from "@ordofi/core";
+import { ENDPOINTS, rpcFetch, rpcOnce, rpcUrls, sendRawTransaction, sequencerUrl } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
+import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, hedged, staticAnswer } from "./fastpath.js";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 
 const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
 const limiter = new RateLimiter();
+const sendLimiter = new RateLimiter();
+const cache = new MicroCache();
 
 // Self-serve keys minted by the portal live in the shared index, hashed. The
 // env list stays authoritative for operator-configured keys; the store is the
@@ -45,6 +48,43 @@ function storeBackedKey(presented: string): ApiKey | null {
 }
 const metrics = new Metrics();
 
+/**
+ * What the gateway can answer without leaving the process: constants of the
+ * deployment and reads still inside their cache window. Consulted before the
+ * rate limiter, so a wallet's polling never counts against its owner.
+ */
+function localAnswer(method: string, params: unknown[]): unknown | undefined {
+  const fixed = staticAnswer(method, CONFIG.chainId);
+  if (fixed !== undefined) {
+    metrics.inc("rpc_local_total", { method, source: "static" });
+    return fixed;
+  }
+  const hit = cache.get(cacheKey(method, params));
+  if (hit !== undefined) metrics.inc("rpc_local_total", { method, source: "cache" });
+  return hit;
+}
+
+/**
+ * One read, actually sent. rpcFetch rotates across ORDO_RPC_URLS on transport
+ * failures (403 challenge pages, timeouts) and rethrows genuine JSON-RPC
+ * errors with their code — those come from a healthy upstream and must not
+ * rotate. When there is a second upstream, a slow answer from the first is
+ * hedged to it and whichever replies first wins. Reads only: a send hedged
+ * twice is a transaction submitted twice.
+ */
+async function fetchUpstream(method: string, params: unknown[]): Promise<unknown> {
+  const urls = rpcUrls();
+  if (!IDEMPOTENT_READS.has(method) || urls.length < 2 || CONFIG.hedgeAfterMs <= 0) {
+    return rpcFetch(method, params);
+  }
+  return hedged(
+    () => rpcFetch(method, params),
+    () => rpcOnce(urls[1], method, params),
+    CONFIG.hedgeAfterMs,
+    (ev) => metrics.inc(ev === "fired" ? "hedge_fired_total" : "hedge_won_total"),
+  );
+}
+
 async function upstream(method: string, params: unknown[]): Promise<any> {
   const started = Date.now();
   try {
@@ -58,10 +98,17 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
         },
       });
     }
-    // rpcFetch rotates across ORDO_RPC_URLS on transport failures (403
-    // challenge pages, timeouts) and rethrows genuine JSON-RPC errors with
-    // their code — those come from a healthy upstream and must not rotate.
-    return await rpcFetch(method, params);
+    const local = localAnswer(method, params);
+    if (local !== undefined) return local;
+    if (!IDEMPOTENT_READS.has(method)) return await fetchUpstream(method, params);
+    // Identical concurrent reads share one upstream call, and the answer is
+    // kept for as long as it can be exact (a block for the head, forever for
+    // a mined receipt, not at all for eth_call).
+    return await cache.through(
+      cacheKey(method, params),
+      () => fetchUpstream(method, params),
+      (result) => cacheTtlMs(method, params, result),
+    );
   } catch (e) {
     const code = (e as { code?: number }).code;
     if (typeof code === "number") throw new RpcError(code, (e as Error).message);
@@ -162,12 +209,14 @@ function clientIp(req: { headers: Record<string, string | string[] | undefined>;
 }
 
 const LANDING = landingHtml({
-  chainId: 4663,
+  chainId: CONFIG.chainId,
   explorer: "https://robinhoodchain.blockscout.com",
   docs: "https://app.ordofi.network/docs",
   portal: "https://app.ordofi.network/portal",
   app: "https://app.ordofi.network",
 });
+
+let stopping = false;
 
 const server = createServer((req, res) => {
   const url = req.url ?? "/";
@@ -188,8 +237,18 @@ const server = createServer((req, res) => {
     return;
   }
   if (req.method === "GET" && url === "/health") {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", upstream: UPSTREAM, sequencer: sequencerUrl(), uptimeSeconds: metrics.json().uptimeSeconds }));
+    // 503 while draining: the edge's health check drops this replica before
+    // the listener closes, so nothing is routed here in its last seconds.
+    res.writeHead(stopping ? 503 : 200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: stopping ? "draining" : "ok",
+        upstream: UPSTREAM,
+        sequencer: sequencerUrl(),
+        uptimeSeconds: metrics.json().uptimeSeconds,
+        cacheEntries: cache.size,
+      }),
+    );
     return;
   }
   if (req.method === "GET" && url === "/metrics") {
@@ -237,20 +296,40 @@ const server = createServer((req, res) => {
           };
         }
 
+        const params: unknown[] = Array.isArray(msg.params) ? msg.params : [];
+
+        // Anything answered from memory is free: no upstream, no limiter.
+        // Only plain reads take this exit — the ordo_* methods and sends have
+        // their own handling in dispatch.
+        if (!method.startsWith("ordo_") && method !== "eth_sendRawTransaction") {
+          const local = localAnswer(method, params);
+          if (local !== undefined) return { jsonrpc: "2.0", id: msg.id, result: local };
+        }
+
         // Keys are limited per key; anonymous callers per source IP (the
         // first x-forwarded-for hop is the client when Caddy fronts us).
+        // Anonymous sends have a second, stricter budget: each one costs a
+        // simulation and a sequencer submission.
+        const ip = clientIp(req);
         const rl =
           auth === "anon"
-            ? limiter.check(`anon:${clientIp(req)}`, CONFIG.anonRateLimit)
+            ? limiter.check(`anon:${ip}`, CONFIG.anonRateLimit)
             : limiter.check(auth.key, auth.rateLimit);
-        if (!rl.ok) {
-          metrics.inc("rpc_rate_limited_total", { key: auth === "anon" ? "anon" : auth.label });
+        const sendRl =
+          auth === "anon" && method === "eth_sendRawTransaction"
+            ? sendLimiter.check(`anon-send:${ip}`, CONFIG.anonSendRateLimit)
+            : { ok: true, retryAfterMs: 0 };
+        if (!rl.ok || !sendRl.ok) {
+          metrics.inc(sendRl.ok ? "rpc_rate_limited_total" : "rpc_send_rate_limited_total", {
+            key: auth === "anon" ? "anon" : auth.label,
+          });
+          const retryAfterMs = Math.max(rl.retryAfterMs, sendRl.retryAfterMs);
           return {
             jsonrpc: "2.0",
             id: msg.id,
             error: {
               code: -32005,
-              message: `rate limit exceeded, retry in ${Math.ceil(rl.retryAfterMs / 1000)}s`,
+              message: `${sendRl.ok ? "rate" : "send rate"} limit exceeded, retry in ${Math.ceil(retryAfterMs / 1000)}s`,
             },
           };
         }
@@ -258,7 +337,7 @@ const server = createServer((req, res) => {
         try {
           const result = await dispatch(
             method,
-            msg.params ?? [],
+            params,
             auth === "anon" ? { key: "anon", label: "anon", rateLimit: 0, mode: "direct" } : auth,
           );
           return { jsonrpc: "2.0", id: msg.id, result };
@@ -279,10 +358,43 @@ const server = createServer((req, res) => {
   });
 });
 
+/**
+ * A rolling restart only works if the instance being replaced finishes what it
+ * is doing. On SIGTERM: answer /health with 503 while still serving, long
+ * enough for the edge's active check (every 2 s) to route around us — this
+ * has to be comfortably more than one check interval, or the edge can write a
+ * request onto a kept-alive connection in the same instant we close it, which
+ * it cannot retry; then stop accepting, let in-flight requests (a protected
+ * send is two upstream round trips) complete, and exit. A hard deadline covers
+ * a wedged upstream. The whole sequence fits inside the compose
+ * stop_grace_period.
+ */
+function shutdown(signal: string): void {
+  if (stopping) return;
+  stopping = true;
+  const grace = Number(process.env.ORDO_DRAIN_GRACE_MS ?? 5_000);
+  const drain = Number(process.env.ORDO_DRAIN_MS ?? 10_000);
+  console.log(`OrdoFi gateway | ${signal}: unhealthy for ${grace}ms, then draining`);
+  setTimeout(() => {
+    const deadline = setTimeout(() => {
+      console.warn("OrdoFi gateway | drain deadline reached, exiting with requests in flight");
+      process.exit(0);
+    }, drain);
+    deadline.unref();
+    server.close(() => process.exit(0));
+    server.closeIdleConnections();
+  }, grace).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
 server.listen(CONFIG.port, () => {
   console.log(`OrdoFi gateway | listening on :${CONFIG.port} | upstream=${UPSTREAM}`);
   console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon}`);
   console.log(`OrdoFi gateway | GET /health /metrics /metrics.json`);
+  console.log(
+    `OrdoFi gateway | fast path: chainId/net_version local, head cached ${BLOCK_MS}ms, fees 1s, mined receipts 10m; hedged reads after ${CONFIG.hedgeAfterMs}ms across ${rpcUrls().length} upstream(s); anon ${CONFIG.anonRateLimit} upstream reads + ${CONFIG.anonSendRateLimit} sends /min/IP`,
+  );
   console.log(
     `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo`,
   );

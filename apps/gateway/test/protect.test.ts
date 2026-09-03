@@ -33,7 +33,10 @@ function upstreamWith(opts: { burned?: bigint; noSimulate?: boolean; revert?: bo
       const txIndex = sim.findIndex((c) => c.from);
       return [{
         calls: sim.map((c, i) => {
-          if (i === txIndex) return { status: "0x1", gasUsed: "0x1e848", logs: [] };
+          if (i === txIndex) {
+            if (opts.revert) return { status: "0x0", gasUsed: "0x5208", returnData: "0x", error: { message: "execution reverted: Too little received" }, logs: [] };
+            return { status: "0x1", gasUsed: "0x1e848", logs: [] };
+          }
           const holder = "0x" + c.data.slice(-40);
           const afterTx = i > txIndex;
           let bal = 0n;
@@ -60,22 +63,35 @@ test("a transaction that pays address(1) is refused with the leak spelled out", 
   assert.ok(!calls.includes("eth_sendRawTransaction"), "never reached the sequencer");
 });
 
-test("a clean transaction is forwarded after both checks", async () => {
+test("a clean transaction is forwarded after one simulation: two upstream calls, not three", async () => {
   const raw = await rawTo(ROUTER, "0x5ae401dc");
   const { upstream, calls } = upstreamWith({});
   assert.equal(await protectAndSend(upstream, raw), "0xhash");
-  assert.deepEqual(calls, ["eth_call", "eth_simulateV1", "eth_sendRawTransaction"]);
+  assert.deepEqual(calls, ["eth_simulateV1", "eth_sendRawTransaction"]);
 });
 
-test("an upstream without eth_simulateV1 still gets revert protection and the send goes through", async () => {
+test("an upstream without eth_simulateV1 falls back to eth_call for revert protection and the send goes through", async () => {
   const raw = await rawTo(ROUTER, "0x5ae401dc");
-  const { upstream } = upstreamWith({ noSimulate: true });
+  const { upstream, calls } = upstreamWith({ noSimulate: true });
   assert.equal(await protectAndSend(upstream, raw), "0xhash");
+  assert.deepEqual(calls, ["eth_simulateV1", "eth_call", "eth_sendRawTransaction"]);
 });
 
-test("a revert is still refused first", async () => {
+test("a revert is refused by the same simulation, before anything reaches the sequencer", async () => {
   const raw = await rawTo(ROUTER, "0x5ae401dc");
   const { upstream, calls } = upstreamWith({ revert: true });
+  await assert.rejects(protectAndSend(upstream, raw), (e: any) => {
+    assert.equal(e.code, -32000);
+    assert.match(e.message, /would revert.*Too little received/);
+    assert.equal(e.data.ordoProtected, true);
+    return true;
+  });
+  assert.deepEqual(calls, ["eth_simulateV1"]);
+});
+
+test("a revert on an upstream that cannot simulate is still caught by eth_call", async () => {
+  const raw = await rawTo(ROUTER, "0x5ae401dc");
+  const { upstream, calls } = upstreamWith({ noSimulate: true, revert: true });
   await assert.rejects(protectAndSend(upstream, raw), /would revert/);
-  assert.deepEqual(calls, ["eth_call"]);
+  assert.deepEqual(calls, ["eth_simulateV1", "eth_call"]);
 });

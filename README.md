@@ -122,6 +122,30 @@ curl localhost:8548/stats     # throughput + accrued rebates
 
 See `apps/web/public/docs.html` (served at `/docs`) for the full API.
 
+### What the gateway answers itself
+
+Wallets spend most of their calls on things that never change or change every
+block, and one upstream round trip from the gateway's host costs ~50 ms at the
+median and close to a second at p99. `apps/gateway/src/fastpath.ts` keeps as
+much as possible in-process (`ORDO_*` overrides in `config.ts`):
+
+- `eth_chainId` and `net_version` are constants of the deployment: answered
+  from memory, never forwarded.
+- `eth_blockNumber` and `eth_getBlockByNumber("latest")` are cached for one
+  block (100 ms); `eth_gasPrice`/`eth_feeHistory` for a second; a mined
+  receipt or transaction for ten minutes (it cannot change). `eth_call`,
+  balances and nonces are never cached.
+- Identical concurrent reads share one upstream call.
+- With two upstreams configured, an idempotent read the primary has not
+  answered in 150 ms is hedged to the second and the first answer wins.
+  Sends are never hedged: a send issued twice is a transaction submitted twice.
+- A protected send is one `eth_simulateV1` (revert *and* delivery check) and
+  one submission — two round trips, not three.
+
+Locally answered reads do not count against the anonymous rate limit
+(3,000 upstream reads/min/IP); anonymous sends have their own 60/min budget.
+`/metrics` reports `rpc_local_total`, `hedge_fired_total`, `hedge_won_total`.
+
 ## Verifiable auction outcomes
 
 A sealed-bid auction asks searchers to take the operator's word for the bids
@@ -261,6 +285,14 @@ service unconfigured — no settlement key, no contract addresses:
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.prod.yml up -d
 ```
+
+The gateway runs as two replicas, `gateway-a` and `gateway-b`, behind Caddy
+with active health checks, so its deploys are rolling and nobody
+mid-transaction sees a 502. Ship a gateway change with `bash deploy/rollout.sh`
+(build, then for each replica: confirm the other is healthy, recreate, wait for
+`/health`) rather than `up -d`; it ends with a graceful Caddyfile reload, which
+is also available alone as `bash deploy/rollout.sh caddy`. `deploy/FASTER.md`
+has the measurements and what is left for the Cloudflare and node accounts.
 
 ## Tests & CI
 

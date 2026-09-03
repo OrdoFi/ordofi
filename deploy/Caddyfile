@@ -18,9 +18,35 @@ app.ordofi.network {
 }
 
 rpc.ordofi.network {
-	reverse_proxy gateway:8547
 	# gateway enforces API keys + per-key rate limits itself.
-	encode gzip
+	#
+	# Two replicas (docker-compose.prod.yml), named so they can be static
+	# upstreams: Caddy only runs active health checks against static upstreams,
+	# and the health check is what makes a deploy invisible. A replica being
+	# retired answers /health with 503 for a few seconds before its listener
+	# closes, so it is out of rotation before anything could fail; one that is
+	# gone fails to dial and the request is retried on the other. Caddy only
+	# retries when nothing was sent upstream yet, so a transaction is never
+	# submitted twice. deploy/rollout.sh drives the sequence.
+	reverse_proxy gateway-a:8547 gateway-b:8547 {
+		lb_policy least_conn
+		lb_try_duration 4s
+		lb_try_interval 250ms
+		health_uri /health
+		health_interval 2s
+		health_timeout 1s
+		fail_duration 5s
+		transport http {
+			# Warm connections into the replicas; a wallet's polling should
+			# not pay a handshake per call.
+			keepalive 2m
+			keepalive_idle_conns_per_host 64
+		}
+	}
+	# zstd first: every modern wallet and browser accepts it and it is cheaper
+	# for the same ratio. JSON-RPC bodies are small, but block and log
+	# responses are not.
+	encode zstd gzip
 }
 
 auction.ordofi.network {

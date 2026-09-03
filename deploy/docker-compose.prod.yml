@@ -9,38 +9,68 @@
 # .env must carry the addresses written by contracts/deploy.sh
 # (ORDO_SETTLEMENT_ADDRESS, ORDO_BUNDLER_ADDRESS), the auctioneer hot key, and
 # the API keys. Set ORDO_RPC_URL=http://nitro:8547 once the node is up.
+x-gateway: &gateway
+  build: { context: .., dockerfile: deploy/Dockerfile }
+  # One image for both replicas; rollout.sh builds it once and compares the
+  # running containers against it.
+  image: ordofi-gateway
+  # node directly, not through `npm run` and `sh -c`: SIGTERM has to reach the
+  # process that owns the listener for the drain to happen, and the grace
+  # period must outlast a slow protected send.
+  command: ["node", "--import", "tsx", "apps/gateway/src/main.ts"]
+  init: true
+  stop_grace_period: 20s
+  # The box is two shared vCPUs. This is a weight, not a cap: under
+  # contention the gateway gets first call on a core over the indexer and
+  # the bots, whose latency nobody is waiting on. When idle, everything runs.
+  cpu_shares: 2048
+  environment:
+    SERVICE: gateway
+    ORDO_PORT: 8547
+    ORDO_CHAIN_ID: 4663
+    ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+    # Light traffic rides the authenticated quota-limited upstream first
+    # (ORDO_RPC_URLS_LIGHT); the watcher's bulk volume stays on the public
+    # list so it cannot burn through that quota.
+    ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
+    ORDO_API_KEYS: ${ORDO_API_KEYS:-}
+    ORDO_ALLOW_ANON: ${ORDO_ALLOW_ANON:-1}
+    # Without this the gateway looks for the auction on its own localhost,
+    # fails, and silently falls back to unauctioned direct sends — protection
+    # without rebates. It is the difference between earning and not.
+    ORDO_AUCTION_URL: http://auction:8548
+    ORDO_BUNDLER_ADDRESS: ${ORDO_BUNDLER_ADDRESS:-}
+  # Shared index: the portal writes hashed API keys, the gateway reads them.
+  volumes: ["ordo-data:/app/data"]
+  depends_on: [auction]
+  restart: unless-stopped
+
 services:
   caddy:
     image: caddy:2
     restart: unless-stopped
-    ports: ["80:80", "443:443"]
+    # 443/udp is HTTP/3. Caddy serves it by default; it just needs the port.
+    ports: ["80:80", "443:443", "443:443/udp"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    depends_on: [web, gateway, auction]
+    depends_on: [web, gateway-a, gateway-b, auction]
 
-  gateway:
-    build: { context: .., dockerfile: deploy/Dockerfile }
-    environment:
-      SERVICE: gateway
-      ORDO_PORT: 8547
-      ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
-      # Light traffic rides the authenticated quota-limited upstream first
-      # (ORDO_RPC_URLS_LIGHT); the watcher's bulk volume stays on the public
-      # list so it cannot burn through that quota.
-      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
-      ORDO_API_KEYS: ${ORDO_API_KEYS:-}
-      ORDO_ALLOW_ANON: ${ORDO_ALLOW_ANON:-1}
-      # Without this the gateway looks for the auction on its own localhost,
-      # fails, and silently falls back to unauctioned direct sends — protection
-      # without rebates. It is the difference between earning and not.
-      ORDO_AUCTION_URL: http://auction:8548
-      ORDO_BUNDLER_ADDRESS: ${ORDO_BUNDLER_ADDRESS:-}
-    # Shared index: the portal writes hashed API keys, the gateway reads them.
-    volumes: ["ordo-data:/app/data"]
-    depends_on: [auction]
-    restart: unless-stopped
+  # The gateway is two replicas, gateway-a and gateway-b, so a deploy is a
+  # rolling restart (deploy/rollout.sh) and a crash leaves one answering. They
+  # are two named services rather than one scaled service because Caddy only
+  # runs active health checks against static upstreams: a draining replica
+  # answers /health with 503 and is pulled out of rotation before its listener
+  # closes, which is what makes the rollout invisible. Both also answer to the
+  # alias `gateway`. No host port is published, which is what makes two of
+  # them possible.
+  gateway-a:
+    <<: *gateway
+    networks: { default: { aliases: [gateway] } }
+  gateway-b:
+    <<: *gateway
+    networks: { default: { aliases: [gateway] } }
 
   auction:
     build: { context: .., dockerfile: deploy/Dockerfile }
@@ -133,6 +163,9 @@ services:
 
   watcher:
     build: { context: .., dockerfile: deploy/Dockerfile }
+    # The heaviest process on the box and the one nobody is waiting on:
+    # it yields to the gateway (2048) and the rest (1024) under contention.
+    cpu_shares: 512
     environment:
       SERVICE: watcher
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
@@ -163,6 +196,7 @@ services:
     # The app server has 3 GB and also runs the indexer; keep the backfill from
     # crowding it out even when a window comes back unexpectedly large.
     mem_limit: 1g
+    cpu_shares: 256
     environment:
       ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-https://rpc.mainnet.chain.robinhood.com}
       ORDO_DB: /app/data/ordo.db
