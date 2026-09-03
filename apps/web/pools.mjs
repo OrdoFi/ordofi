@@ -359,7 +359,14 @@ export async function poolsPage(store) {
  */
 async function heroRow(store, all) {
   const ranked = all.find((r) => r.token === ORDO_TOKEN);
-  if (ranked) return ranked;
+  if (ranked) {
+    // Its market runs a hook-set fee, which the list counts as nothing; the pool itself knows the rate in force.
+    if (ranked.kind === "v4" && !ranked.fees24Usd && ranked.volume24Usd > 0 && ranked.pool) {
+      const st = await cachedSWR(`hero:fee:${ranked.pool}`, 60_000, () => poolState(ranked.pool, ORDO_TOKEN)).catch(() => null);
+      if (st?.fee) return { ...ranked, fees24Usd: ranked.volume24Usd * (st.fee / 1e6) };
+    }
+    return ranked;
+  }
   return cachedSWR("hero:ordo", 60_000, async () => {
     const pools = await poolsForToken(ORDO_TOKEN);
     const main = pools.find((p) => BigInt(p.liquidity) > 0n) ?? pools[0];

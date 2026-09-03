@@ -407,7 +407,8 @@
       $("go").disabled = false;
       renderGroups();
       $("quote-sym").textContent = state.quote.symbol;
-      $("pool-note").textContent = `${state.kind === "v4" ? "Uniswap V4 · " : ""}${(state.fee / 1e4).toFixed(2)}% fee${state.dynamicFee ? " (set by its hook)" : ""} · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
+      const feeNote = state.dynamicFee ? (state.fee ? `${(state.fee / 1e4).toFixed(2)}% fee, set by its hook` : "fee set by its hook") : `${(state.fee / 1e4).toFixed(2)}% fee`;
+      $("pool-note").textContent = `${state.kind === "v4" ? "Uniswap V4 · " : ""}${feeNote} · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
       // A hooked or hook-priced pool is a market to watch, not one the manager can mint into.
       $("go").disabled = !canBuild();
       if (!canBuild()) {
