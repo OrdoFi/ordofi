@@ -84,6 +84,7 @@
     .head .meta a, .head .meta button { color: var(--accent); background: none; border: none; font: inherit; cursor: pointer; }
     .grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 22px; align-items: start; }
     .panel { border: 1px solid var(--border); background: var(--card); }
+    .panel.skeleton { background: linear-gradient(90deg, var(--card) 25%, rgba(0,0,0,.035) 50%, var(--card) 75%); background-size: 800px 100%; animation: lq-shimmer 1.3s linear infinite; }
     .panel .ph { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
     .panel .ph h3 { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; }
     .panel .pb { padding: 16px; }
@@ -260,7 +261,7 @@
     async function closes24(t) {
       if (sparkCache.has(t.token)) return sparkCache.get(t.token);
       // A V4 market's tape is its own pool's; without the PoolId the request would look for a V3 pool.
-      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
+      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quoteAddress ?? (t.quote === "ETH" ? "eth" : USDG)}&bucketSec=1800&hours=24${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
       sparkCache.set(t.token, p);
       return p;
     }
@@ -283,10 +284,24 @@
     const rangeLo = () => state.price * (1 + minPct / 100), rangeHi = () => state.price * (1 + maxPct / 100);
 
     async function renderDetail() {
-      $("root").innerHTML = `<div class="empty">Loading ${esc(tokenParam)}…</div>`;
-      const tokens = await api("/api/trade/tokens");
-      token = tokens.find((t) => t.address === tokenParam || t.symbol.toLowerCase() === tokenParam);
-      if (!token && !/^0x[0-9a-f]{40}$/.test(tokenParam)) { $("root").innerHTML = `<div class="empty">Unknown token. <a href="/pools" style="color:var(--accent)">Back to pools</a></div>`; return; }
+      // The header comes up from the ranked row (one small read) while the pools are
+      // still being found, so the page is recognisably the token's within a moment.
+      const header = (t) => `<div id="lq-shell"></div>
+        <div class="head">${logo(t)}<div><h1>${esc(t.symbol ?? "")}</h1><div class="nm">${esc(t.name ?? "")}${t.name ? " · " : ""}Robinhood Chain</div><div class="meta"><span class="mono">${esc(t.address)}</span> · <a href="${EXPLORER}/token/${esc(t.address)}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${esc(t.address)}">trade</a></div></div></div>`;
+      if (/^0x[0-9a-f]{40}$/.test(tokenParam)) {
+        $("root").innerHTML = `${header({ address: tokenParam, symbol: tokenParam.slice(2, 6).toUpperCase() })}<div class="panel skeleton" style="height:420px"></div>`;
+        mountShell($("lq-shell"), { page: "pools" });
+        const row = await api(`/api/pools/row?token=${tokenParam}`).then((d) => d.row).catch(() => null);
+        if (row) {
+          token = { address: tokenParam, symbol: row.symbol, name: row.name, icon: row.icon, decimals: row.decimals };
+          $("root").querySelector(".head")?.replaceWith(Object.assign(document.createElement("div"), { innerHTML: header(token) }).querySelector(".head"));
+        }
+      } else {
+        $("root").innerHTML = `<div class="empty">Loading ${esc(tokenParam)}…</div>`;
+        const tokens = await api("/api/trade/tokens");
+        token = tokens.find((t) => t.symbol.toLowerCase() === tokenParam);
+        if (!token) { $("root").innerHTML = `<div class="empty">Unknown token. <a href="/pools" style="color:var(--accent)">Back to pools</a></div>`; return; }
+      }
       const list = await api(`/api/pools/token?token=${token?.address ?? tokenParam}`);
       pools = list.pools;
       if (!pools.length) {
@@ -309,7 +324,7 @@
       // (even view-only — it is the price people mean); else the deepest pool that can be built into.
       const want = new URLSearchParams(location.search).get("pool");
       const main = (await tokenRow())?.pool;
-      pool = pools.find((p) => p.pool === want)?.pool ?? pools.find((p) => p.pool === main)?.pool ?? (pools.find((p) => p.buildable !== false) ?? pools[0]).pool; // the list comes deepest first, dust and off-market pools last
+      pool = pools.find((p) => p.pool === want)?.pool ?? pools.find((p) => p.pool === main)?.pool ?? (pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools[0]).pool;
 
       $("root").innerHTML = `
         <div id="lq-shell"></div>
@@ -384,8 +399,7 @@
     const GROUPS = [["usdg", "USDG", (p) => p.quote === USDG], ["v3eth", "V3 ETH", (p) => p.quote === WETH && (p.kind ?? "v3") === "v3"], ["v4eth", "V4 ETH", (p) => p.quote === WETH && p.kind === "v4"]];
     const fmtFee = (p) => p.fee == null ? "dyn" : `${(p.fee / 1e4).toFixed(2)}%`;
     function renderGroups() {
-      // Depth is the ETH a 10% move would take out of the liquidity active at the price — what a trade meets, not a balance.
-      const fmtLiq = (p) => p.offMarket ? "off market" : p.depthEth >= 0.005 ? `≈${p.depthEth >= 100 ? p.depthEth.toFixed(0) : p.depthEth >= 1 ? p.depthEth.toFixed(1) : p.depthEth.toFixed(3)} ETH deep` : Number(BigInt(p.liquidity)) > 0 ? "dust" : "empty";
+      const fmtLiq = (p) => { const l = Number(BigInt(p.liquidity)); return l > 0 ? "live" : "empty"; };
       // A V4 ETH pool that can be built into is what a stake and a plain ladder need; when
       // the token has none, the group offers to create one — a few cents of gas, and this
       // page places the first position right after.
@@ -394,8 +408,8 @@
         const ps = pools.filter(is);
         if (!ps.length) return key === "v4eth" ? `<div class="grp create"><button data-create="1" title="Create a V4 ETH pool for this token"><small>V4 ETH</small><b>create</b><span>+</span></button></div>` : "";
         const cur = ps.find((p) => p.pool === pool);
-        return `<div class="grp ${cur ? "on" : ""}" data-g="${key}"><button><small>${label}</small><b>${cur ? `${fmtFee(cur)}${cur.depthEth >= 0.005 && !cur.offMarket ? ` · ${fmtLiq(cur)}` : ""}` : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
-          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}${p.hooked ? " · hook" : ""}</small>` : ""}</span><small>${p.offMarket ? "off market" : p.buildable === false ? "view only" : fmtLiq(p)}</small></button>`).join("")}${key === "v4eth" ? createRow : ""}</div></div>`;
+        return `<div class="grp ${cur ? "on" : ""}" data-g="${key}"><button><small>${label}</small><b>${cur ? fmtFee(cur) : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
+          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}${p.hooked ? " · hook" : ""}</small>` : ""}</span><small>${p.buildable === false ? "view only" : fmtLiq(p)}</small></button>`).join("")}${key === "v4eth" ? createRow : ""}</div></div>`;
       }).join("");
       $("groups").querySelectorAll(".grp:not(.create) > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
       $("groups").querySelectorAll(".menu button[data-p]").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));
@@ -411,8 +425,8 @@
         <p>A Uniswap V4 pool of ETH and ${esc(token.symbol)}, no hook, at the fee you pick. Creating it costs gas only and opens it at the price ${esc(token.symbol)} trades at today; the first position is then placed on this page like any other.</p>
         <div class="shapes" style="margin-top:12px">${TIERS.map(([f, l, d]) => `<button class="shape" data-fee="${f}" ${have.has(f) ? "disabled title=\"already exists\"" : ""}><b>${l}</b><small style="display:block;color:var(--muted);margin-top:3px">${have.has(f) ? "exists" : d}</small></button>`).join("")}</div>
         <div class="hint" style="margin-top:14px">Starting price · USD per ${esc(token.symbol)}</div>
-        <div class="box"><input id="cp-price" inputmode="decimal" placeholder="loading…" /><span class="u">USD</span></div>
-        <div class="hint" id="cp-src">Taken from the busiest market. Change it only if you know better — the first swaps pull the price to the market anyway.</div>
+        <div class="box"><input id="cp-price" inputmode="decimal" placeholder="loading…" /><span class="u" id="cp-src"></span></div>
+        <div class="hint" id="cp-hint">Taken from the busiest market. Change it only if you know better — the first swaps will pull the price to the market anyway.</div>
         <div class="foot"><button id="cp-cancel">Cancel</button><button class="go" id="cp-go" disabled>Create pool</button></div>
         <div class="res" id="cp-res"></div>`);
       const res = (h, bad) => { const el = b.querySelector("#cp-res"); el.innerHTML = h; el.className = "res" + (bad ? " bad" : ""); };
@@ -427,10 +441,10 @@
           const p = await api(`/api/pools/create-plan?token=${token.address}&fee=${fee}${price ? `&price=${price}` : ""}`);
           if (my !== seq) return;
           plan = p;
-          if (!givenUsd) { b.querySelector("#cp-price").value = p.priceUsd != null ? fmtPx(p.priceUsd) : ""; if (p.priceSource) b.querySelector("#cp-src").textContent = `Taken from ${p.priceSource}. Change it only if you know better — the first swaps pull the price to the market anyway.`; }
+          if (!givenUsd) { b.querySelector("#cp-price").value = p.priceUsd != null ? fmtPx(p.priceUsd) : ""; b.querySelector("#cp-src").textContent = p.priceSource ? `from ${p.priceSource}` : ""; }
           res(`Opens at ${fmtPx(p.price)} ETH${p.priceUsd != null ? ` (${usd(p.priceUsd, 6)})` : ""} per ${esc(token.symbol)} · tick spacing ${p.tickSpacing} · sent to the Uniswap V4 PoolManager`);
           b.querySelector("#cp-go").disabled = false;
-        } catch (e) { if (my === seq) { res(esc(e.message), true); if (!givenUsd) { b.querySelector("#cp-price").placeholder = "enter a price"; b.querySelector("#cp-src").textContent = "Nothing trades this token yet, so name the opening price yourself."; } } }
+        } catch (e) { if (my === seq) { res(esc(e.message), true); if (!givenUsd) { b.querySelector("#cp-price").placeholder = "enter a price"; b.querySelector("#cp-src").textContent = ""; } } }
       };
       paint(); load();
       b.querySelectorAll(".shape:not([disabled])").forEach((s) => s.addEventListener("click", () => { fee = Number(s.dataset.fee); paint(); load(Number(b.querySelector("#cp-price").value.replace(/,/g, "")) || null); }));
@@ -475,9 +489,8 @@
       // A hooked or hook-priced pool is a market to watch, not one the manager can mint into.
       $("go").disabled = !canBuild();
       if (!canBuild()) {
-        const other = pools.find((p) => p.buildable !== false);
-        const why = pools.find((p) => p.pool === pool)?.offMarket ? `This pool is priced ${state.priceUsd ? usd(state.priceUsd, 4) : "far"} per ${esc(token.symbol)}, nowhere near where ${esc(token.symbol)} trades, and it has no liquidity to bring it back. A position built here would be filled at that price by the first arbitrageur, so OrdoFi does not build into it.` : `This pool runs a V4 hook${state.dynamicFee ? " that sets its own fee" : ""}. A hook can change or refuse what happens on a mint, so OrdoFi shows this market but does not build into it.`;
-        $("preview").innerHTML = `${why}${other ? ` <a href="#" id="pick-buildable" style="color:var(--accent)">Build in ${esc(token.symbol)}/${other.quoteSymbol} ${fmtFee(other)}${other.kind === "v4" ? " V4" : ""} instead →</a>` : " None of this token's other pools can be built into yet."}`;
+        const other = pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools.find((p) => p.buildable !== false);
+        $("preview").innerHTML = `This pool runs a V4 hook${state.dynamicFee ? " that sets its own fee" : ""}. A hook can change or refuse what happens on a mint, so OrdoFi shows this market but does not build into it.${other ? ` <a href="#" id="pick-buildable" style="color:var(--accent)">Build in ${esc(token.symbol)}/${other.quoteSymbol} ${fmtFee(other)}${other.kind === "v4" ? " V4" : ""} instead →</a>` : " None of this token's other pools can be built into yet."}`;
         $("pick-buildable")?.addEventListener("click", (e) => { e.preventDefault(); selectPool(other.pool); });
         $("go").textContent = "View only";
       } else if ($("go").textContent === "View only") $("go").textContent = wallet.account ? "Build position" : "Connect wallet";
@@ -569,10 +582,10 @@
         if (!d.candles.length) {
           const row = await tokenRow();
           if (row && row.pool !== pool && state.quote.usdPerToken) {
-            const rowQuote = row.quote === "ETH" ? "eth" : USDG;
+            const rowQuote = row.quoteAddress ?? (row.quote === "ETH" ? "eth" : USDG);
             const alt = await api(`/api/trade/candles?base=${base}&quote=${rowQuote}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}${row.kind === "v4" ? `&pool=${row.pool}` : ""}`);
             if (alt.candles.length) {
-              const rowQuoteUsd = row.quote === "USDG" ? 1 : state.quote.address === WETH ? state.quote.usdPerToken : (await api("/api/pools/platform").catch(() => null))?.ethUsd;
+              const rowQuoteUsd = row.quote === "USDG" ? 1 : row.quote === "ETH" ? (state.quote.address === WETH ? state.quote.usdPerToken : (await api("/api/pools/platform").catch(() => null))?.ethUsd) : null;
               if (rowQuoteUsd) {
                 const k = rowQuoteUsd / state.quote.usdPerToken;
                 const px = (c) => { const o = { ...c }; for (const f of ["open", "high", "low", "close"]) if (typeof o[f] === "number") o[f] *= k; return o; };
@@ -676,7 +689,7 @@
 
     // ---- planner
     let planSeq = 0;
-    const canBuild = () => !!state && !state.hooks && !state.dynamicFee && !pools.find((p) => p.pool === pool)?.offMarket;
+    const canBuild = () => !!state && !state.hooks && !state.dynamicFee;
     async function replan() {
       if (!state || !canBuild()) return;
       const seq = ++planSeq;

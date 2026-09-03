@@ -306,6 +306,7 @@ export async function poolsList(store) {
         pool: m.pool,
         kind,
         quote: m.quote.symbol,
+        quoteAddress: m.quote.address, // the tape is asked by address; a symbol is not always ETH or USDG
         quotes: [m.quote.symbol],
         venues: [kind],
         pools: 1,
@@ -603,6 +604,30 @@ async function baseOf(pool) {
  * V4 pools with a hook or a hook-set fee stay out — a hook may veto or tax
  * what the manager does, and the page cannot promise what it cannot see.
  */
+/**
+ * Liquidity and √price per V4 pool, remembered: a pool that read empty is asked
+ * again after ten minutes (spam pools stay empty; one that fills shows within
+ * that), a live one after thirty seconds. A token's hundreds of pools then cost
+ * one round of reads, not one per visit.
+ */
+const v4ReadCache = new Map();
+async function v4Reads(poolIds) {
+  const now = Date.now(), liq = new Array(poolIds.length), sqrt = new Array(poolIds.length), ask = [];
+  poolIds.forEach((id, i) => {
+    const c = v4ReadCache.get(id);
+    if (c && now - c.at < (c.liq === 0n ? 600_000 : 30_000)) { liq[i] = c.liq; sqrt[i] = c.sqrt; } else ask.push(i);
+  });
+  if (ask.length) {
+    const ids = ask.map((i) => poolIds[i]);
+    const [l, s] = await Promise.all([v4LiquidityOf(ids), sqrtPricesOf(ids)]);
+    ask.forEach((i, j) => {
+      liq[i] = l[j]; sqrt[i] = s[j];
+      if (l[j] != null && s[j] != null) v4ReadCache.set(poolIds[i], { liq: l[j], sqrt: s[j], at: now });
+    });
+  }
+  return [liq, sqrt];
+}
+
 export async function poolsForToken(token) {
   token = lower(token);
   // The other side must be ETH or USDG: the page quotes in money, never in another token.
@@ -613,12 +638,13 @@ export async function poolsForToken(token) {
   // Every V4 pool against ETH or USDG. A hooked or hook-priced pool comes along
   // as view-only: its market is real, but a hook may veto or tax what the manager
   // does, and the page cannot promise what it cannot see.
-  const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && (k.native0 || lower(k.currency0) === USDG || lower(k.currency1) === USDG) && (lower(k.currency0) === token || lower(k.currency1) === token) && !isMoney(token));
-  const [liq, slots, liq4, sqrt4, usd, info, ref] = await Promise.all([
+  // Fee tiers nobody sane would build in are dropped before anything is read:
+  // a popular token collects hundreds of spam pools, and each is an RPC read.
+  const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && (k.native0 || lower(k.currency0) === USDG || lower(k.currency1) === USDG) && (lower(k.currency0) === token || lower(k.currency1) === token) && !isMoney(token) && (k.dynamicFee || (k.fee > 0 && k.fee <= 100_000)));
+  const [liq, slots, [liq4, sqrt4], usd, info, ref] = await Promise.all([
     batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "liquidity" }))),
     batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "slot0" }))),
-    v4.length ? v4LiquidityOf(v4.map((k) => k.poolId)) : [],
-    v4.length ? sqrtPricesOf(v4.map((k) => k.poolId)) : [],
+    v4Reads(v4.map((k) => k.poolId)),
     ethUsd().catch(() => null),
     tokenInfo(token),
     // The token's price where it actually trades, from the ranked list (cached, so free).
