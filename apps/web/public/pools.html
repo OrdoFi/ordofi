@@ -412,9 +412,11 @@
       syncRange();
       loadCandles(); loadDepth(); loadBalances(); replan();
     }
+    let rowP = null; // the token's ranked row: its busiest market, for stats and as the chart's fallback tape
+    const tokenRow = () => rowP ??= api(`/api/pools/row?token=${token.address}`).then((d) => d.row).catch(() => null);
     async function loadStats() {
       try {
-        const { row } = await api(`/api/pools/row?token=${token.address}`);
+        const row = await tokenRow();
         if (!supply && row?.marketCapUsd && row?.priceUsd) { supply = row.marketCapUsd / row.priceUsd; $("mode").querySelector("[data-m=mc]").style.opacity = 1; }
         if (!state?.marketCapUsd && row?.marketCapUsd) $("s-mc").textContent = usd(row.marketCapUsd);
         $("s-chg").textContent = pct(row?.change24); $("s-chg").className = "v " + cls(row?.change24);
@@ -478,13 +480,33 @@
       try {
         const q = state.quote.address === WETH ? "eth" : state.quote.address;
         // A V4 pool's chart is its own tape; for V3 the pair picks the deepest pool, as the trade terminal does.
-        const d = await api(`/api/trade/candles?base=${token.address === WETH ? "eth" : token.address}&quote=${q}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}${state.kind === "v4" ? `&pool=${pool}` : ""}`);
+        const base = token.address === WETH ? "eth" : token.address;
+        let d = await api(`/api/trade/candles?base=${base}&quote=${q}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}${state.kind === "v4" ? `&pool=${pool}` : ""}`);
+        let borrowed = null;
+        // A pool that has not traded has no tape of its own; the token's busiest market
+        // lends its history, converted into this pool's quote so the guides still line up.
+        if (!d.candles.length) {
+          const row = await tokenRow();
+          if (row && row.pool !== pool && state.quote.usdPerToken) {
+            const rowQuote = row.quote === "ETH" ? "eth" : USDG;
+            const alt = await api(`/api/trade/candles?base=${base}&quote=${rowQuote}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}${row.kind === "v4" ? `&pool=${row.pool}` : ""}`);
+            if (alt.candles.length) {
+              const rowQuoteUsd = row.quote === "USDG" ? 1 : state.quote.address === WETH ? state.quote.usdPerToken : (await api("/api/pools/platform").catch(() => null))?.ethUsd;
+              if (rowQuoteUsd) {
+                const k = rowQuoteUsd / state.quote.usdPerToken;
+                const px = (c) => { const o = { ...c }; for (const f of ["open", "high", "low", "close"]) if (typeof o[f] === "number") o[f] *= k; return o; };
+                d = { ...alt, candles: alt.candles.map(px) };
+                borrowed = `${token.symbol}/${row.quote}${row.kind === "v4" ? " V4" : ""}`;
+              }
+            }
+          }
+        }
         candlesQ = d.candles;
         const keep = quiet ? chart.timeScale().getVisibleLogicalRange() : null;
         setSeriesData();
         if (keep) chart.timeScale().setVisibleLogicalRange(keep); else chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candlesQ.length - 140), to: candlesQ.length + 4 });
         chart.applyOptions({ timeScale: { secondsVisible: tfSec < 60 } });
-        $("chart-note").textContent = `${d.candles.length} candles · ${d.swaps.toLocaleString()} swaps${d.source === "tape" ? " · live tape" : ""}`;
+        $("chart-note").textContent = borrowed ? `no trades in this pool yet · chart from ${borrowed}` : `${d.candles.length} candles · ${d.swaps.toLocaleString()} swaps${d.source === "tape" ? " · live tape" : ""}`;
       } catch (e) { $("chart-note").textContent = e.message; }
     }
     function setSeriesData() {
