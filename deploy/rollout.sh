@@ -33,13 +33,21 @@ say() { printf '  %s\n' "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 caddy_reload() {
-  if ! "${COMPOSE[@]}" ps --status running -q caddy 2>/dev/null | grep -q .; then
+  local cid
+  cid="$("${COMPOSE[@]}" ps --status running -q caddy 2>/dev/null | head -n1 || true)"
+  if [ -z "$cid" ]; then
     say "--    caddy is not running; skipping reload"
     return 0
   fi
-  "${COMPOSE[@]}" exec -T caddy caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 \
+  # The Caddyfile is a single-file bind mount, and git replaces the file
+  # rather than rewriting it, so after a pull the container still sees the
+  # old inode and `caddy reload` reports "config is unchanged". Copy the
+  # current file in and reload from the copy; the mount catches up whenever
+  # the container is next recreated.
+  docker cp deploy/Caddyfile "$cid:/tmp/Caddyfile.rollout" >/dev/null
+  docker exec "$cid" caddy validate --config /tmp/Caddyfile.rollout --adapter caddyfile >/dev/null 2>&1 \
     || die "Caddyfile does not validate; nothing reloaded"
-  "${COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1
+  docker exec "$cid" caddy reload --config /tmp/Caddyfile.rollout --adapter caddyfile >/dev/null 2>&1
   say "ok    caddy reloaded"
 }
 
