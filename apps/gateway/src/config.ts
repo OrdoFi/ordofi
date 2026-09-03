@@ -79,6 +79,15 @@ export const CONFIG = {
   hedgeAfterMs: Number(process.env.ORDO_HEDGE_AFTER_MS ?? 150),
   chainId: Number(process.env.ORDO_CHAIN_ID ?? 4663),
   /**
+   * Set on an edge deployment (a gateway placed near users, away from the
+   * database): the URL of the origin gateway. The edge answers what it can
+   * from memory and forwards everything else there verbatim, so keys, limits,
+   * protection, the auction and the routed ledger all stay in one place.
+   * Must reach the origin directly, not through the CDN, or the origin sees
+   * the CDN's address as the client. Empty = this is the origin.
+   */
+  edgeOrigin: process.env.ORDO_EDGE_ORIGIN?.trim() || "",
+  /**
    * Methods anonymous callers may use when allowAnon is on: everything a
    * wallet needs to function once the endpoint is added as its network RPC,
    * including a revert-protected send. Wallets cannot attach an API key

@@ -1,0 +1,26 @@
+# rpc.ordofi.network at the edge — see src/worker.mjs.
+#
+#   cd deploy/edge-worker
+#   npx wrangler login          # once, opens the browser
+#   npx wrangler deploy         # ships to every Cloudflare city
+#   npx wrangler tail           # live log
+#
+# The route puts the Worker in front of the origin for the whole host; the
+# Worker only acts on POST and hands everything else to the origin unchanged.
+name = "ordofi-rpc-edge"
+main = "src/worker.mjs"
+compatibility_date = "2026-08-01"
+workers_dev = false
+
+routes = [
+  { pattern = "rpc.ordofi.network/*", zone_name = "ordofi.network" },
+]
+
+[vars]
+CHAIN_ID = "4663"
+# "1": anonymous reads may be answered at the edge (the origin allows them
+# too). "0": anything without a key goes straight to the origin.
+ALLOW_ANON = "1"
+
+[observability]
+enabled = true

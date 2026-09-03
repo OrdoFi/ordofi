@@ -10,6 +10,7 @@ import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.
 import { routeOrderFlow } from "./orderflow.js";
 import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, clientIp, hedged, staticAnswer } from "./fastpath.js";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
+import { callOrigin, forwardHeaders, type OriginReply } from "./edge.js";
 
 const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
@@ -183,6 +184,63 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
   }
 }
 
+/**
+ * Edge mode (CONFIG.edgeOrigin set): answer from memory when the answer is
+ * in memory, otherwise forward to the origin gateway as the client sent it and
+ * return exactly what it said. Idempotent reads that miss are fetched through
+ * the origin once for all concurrent callers and cached here for their usual
+ * window, so the second wallet asking for the head block does not cross the
+ * ocean either. Authentication and limits are the origin's: the key header
+ * and the client's address travel with the request.
+ */
+async function edgeAnswer(
+  msg: { id?: unknown },
+  method: string,
+  params: unknown[],
+  req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } },
+): Promise<object> {
+  const keyed = Boolean(req.headers["x-api-key"] || req.headers.authorization);
+  const plainRead = !method.startsWith("ordo_") && method !== "eth_sendRawTransaction";
+  if (plainRead && (keyed || CONFIG.allowAnon)) {
+    const local = localAnswer(method, params);
+    if (local !== undefined) return { jsonrpc: "2.0", id: msg.id, result: local };
+  }
+  const headers = forwardHeaders(req.headers, clientIp(req));
+  metrics.inc("rpc_edge_forwarded_total", { method });
+  const started = Date.now();
+  const call = () => callOrigin(CONFIG.edgeOrigin, method, params, msg.id, headers);
+  let reply: OriginReply;
+  try {
+    if (plainRead && IDEMPOTENT_READS.has(method)) {
+      // The cache holds results, the same shape localAnswer hands out.
+      const result = await cache.through(
+        cacheKey(method, params),
+        async () => {
+          const r = await call();
+          // An error is an answer for this caller, not a fact about the chain.
+          if (r.error) throw Object.assign(new Error(r.error.message), { reply: r });
+          return r.result;
+        },
+        (v) => cacheTtlMs(method, params, v),
+      );
+      reply = { result };
+    } else {
+      reply = await call();
+    }
+  } catch (e) {
+    reply = (e as { reply?: OriginReply }).reply ?? {
+      error: { code: -32000, message: `origin gateway unreachable — ${(e as Error).message}` },
+    };
+  } finally {
+    metrics.observe("upstream_latency_ms", Date.now() - started);
+  }
+  if (reply.error) {
+    metrics.inc("rpc_errors_total", { method });
+    return { jsonrpc: "2.0", id: msg.id, error: reply.error };
+  }
+  return { jsonrpc: "2.0", id: msg.id, result: reply.result };
+}
+
 function authenticate(
   req: { headers: Record<string, string | string[] | undefined> },
   method: string,
@@ -237,6 +295,8 @@ const server = createServer((req, res) => {
     res.end(
       JSON.stringify({
         status: stopping ? "draining" : "ok",
+        role: CONFIG.edgeOrigin ? "edge" : "origin",
+        ...(CONFIG.edgeOrigin ? { origin: CONFIG.edgeOrigin } : {}),
         upstream: UPSTREAM,
         sequencer: sequencerUrl(),
         uptimeSeconds: metrics.json().uptimeSeconds,
@@ -280,6 +340,9 @@ const server = createServer((req, res) => {
         const method = msg.method ?? "";
         metrics.inc("rpc_requests_total", { method });
 
+        const params: unknown[] = Array.isArray(msg.params) ? msg.params : [];
+        if (CONFIG.edgeOrigin) return edgeAnswer(msg, method, params, req);
+
         const auth = authenticate({ headers: req.headers }, method);
         if (!auth) {
           metrics.inc("rpc_unauthorized_total", { method });
@@ -289,8 +352,6 @@ const server = createServer((req, res) => {
             error: { code: -32001, message: "unauthorized: valid x-api-key required" },
           };
         }
-
-        const params: unknown[] = Array.isArray(msg.params) ? msg.params : [];
 
         // Anything answered from memory is free: no upstream, no limiter.
         // Only plain reads take this exit — the ordo_* methods and sends have
@@ -384,6 +445,12 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 
 server.listen(CONFIG.port, () => {
   console.log(`OrdoFi gateway | listening on :${CONFIG.port} | upstream=${UPSTREAM}`);
+  if (CONFIG.edgeOrigin) {
+    console.log(
+      `OrdoFi gateway | EDGE: chainId/net_version, the head, fees and mined receipts answered here; everything else forwarded verbatim to ${CONFIG.edgeOrigin} (keys, limits, protection, auction and ledger are the origin's)`,
+    );
+    return;
+  }
   console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon}`);
   console.log(`OrdoFi gateway | GET /health /metrics /metrics.json`);
   console.log(
