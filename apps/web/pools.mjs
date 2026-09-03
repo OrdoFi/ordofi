@@ -587,11 +587,14 @@ export async function poolsForToken(token) {
   // does not make it worth offering.
   const v4Quote = (k) => { const { token0, token1 } = tokensOf(k); return token0 === token ? token1 : token0; };
   const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.fee, tickSpacing: k.tickSpacing, quote: v4Quote(k), liquidity: liq4[i].toString() })).filter((p) => p.fee <= 100_000).sort(byLiq);
-  // Per quote asset: the live ones (at most eight), else the sanest three.
+  // Per quote asset: the live ones (at most eight), then up to three empty ones
+  // at the sanest fees, so a tier nobody has seeded can still be the first.
   const v4Shown = [];
   for (const q of [WETH, USDG]) {
-    const rows = v4Rows.filter((p) => p.quote === q), live = rows.filter((p) => BigInt(p.liquidity) > 0n).slice(0, 8);
-    v4Shown.push(...(live.length ? live : rows.sort((a, b) => a.fee - b.fee).slice(0, 3)));
+    const rows = v4Rows.filter((p) => p.quote === q);
+    const live = rows.filter((p) => BigInt(p.liquidity) > 0n).slice(0, 8);
+    const empty = rows.filter((p) => BigInt(p.liquidity) === 0n).sort((a, b) => a.fee - b.fee).slice(0, 3);
+    v4Shown.push(...live, ...empty);
   }
   const rows = [
     ...mine.map(([addr, p], i) => ({ pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i].toString() })),
