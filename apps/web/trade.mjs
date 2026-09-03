@@ -276,6 +276,15 @@ export function tokenMetaOf(address) {
   const m = meta.get(String(address).toLowerCase());
   return m && !m.miss ? m : null;
 }
+/** Names learned from the contracts themselves, kept where the registry keeps everything else. */
+export function rememberTokenNames(pairs) {
+  let changed = false;
+  for (const [address, name] of pairs) {
+    const m = meta.cache.get(String(address).toLowerCase());
+    if (m && !m.miss && !m.name && name) { m.name = name; changed = true; }
+  }
+  if (changed) { meta.dirty = true; meta.save(); }
+}
 
 /** Which fee tiers a token has against ETH and USDG — i.e. whether the router can reach it. */
 const routes = new Resolver(join(DATA_DIR, "routes.json"), async (token) => {

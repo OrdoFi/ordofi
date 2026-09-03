@@ -194,15 +194,20 @@ export function mountShell(root, { page } = {}) {
   // Search: the index comes down once (prefetched after the page settles) and
   // every keystroke is matched here, so results appear as fast as you type.
   const box = root.querySelector("#lq-search"), q = root.querySelector("#lq-q"), out = root.querySelector("#lq-results");
-  let sel = -1, index = null, indexP = null;
-  const loadIndex = () => indexP ??= api("/api/pools/search-index").then((d) => {
-    const low = (s) => String(s ?? "").toLowerCase();
+  // Two sizes: the tokens with a market come down after the page settles; the
+  // long tail (every token with a pool) the first time someone types.
+  let sel = -1, index = null;
+  const loads = {};
+  const low = (s) => String(s ?? "").toLowerCase();
+  const loadIndex = (all = false) => loads[all] ??= api(`/api/pools/search-index${all ? "?all=1" : ""}`).then((d) => {
+    if (index?.complete && !d.complete) return index;
     index = {
+      complete: !!d.complete,
       tokens: d.tokens.map(([token, symbol, name, mc, vol]) => ({ token, symbol, name, mc, vol, s: low(symbol), n: low(name) })),
       stakes: (d.stakes ?? []).map(([vault, token, symbol, name, tvl, rate7d]) => ({ vault: low(vault), token, symbol, name, tvl, rate7d, s: low(symbol), n: low(name) })),
     };
     return index;
-  }).catch(() => { indexP = null; return null; });
+  }).catch(() => { delete loads[all]; return null; });
   const close = () => { box.classList.remove("open"); sel = -1; };
   // Exact symbol first, then symbol prefix, name prefix, then anything containing the
   // words; within a class the index's own order (volume, market cap, holders) holds.
@@ -219,9 +224,10 @@ export function mountShell(root, { page } = {}) {
     out.innerHTML = rows.length ? rows.join("") : `<div class="none">Nothing matches “${esc(raw)}”.</div>`;
     box.classList.add("open"); sel = -1;
   };
-  q.addEventListener("input", () => { if (!index) loadIndex().then(() => { if (q.value.trim()) render(); }); render(); });
-  q.addEventListener("focus", loadIndex, { once: true });
-  (window.requestIdleCallback ?? ((f) => setTimeout(f, 1500)))(loadIndex);
+  const rerender = () => { if (q.value.trim()) render(); };
+  q.addEventListener("input", () => { render(); if (!index) loadIndex().then(rerender); if (!index?.complete) loadIndex(true).then(rerender); });
+  q.addEventListener("focus", () => loadIndex(), { once: true });
+  (window.requestIdleCallback ?? ((f) => setTimeout(f, 1500)))(() => loadIndex());
   q.addEventListener("keydown", (e) => {
     const links = [...out.querySelectorAll("a")];
     if (e.key === "Escape") { close(); q.blur(); }

@@ -14,7 +14,7 @@ import {
   tickToPrice,
   tickToSqrtPriceX96,
 } from "@ordofi/core/liquidity";
-import { CHAIN, USDG, WETH, bestPool, bestPoolV4, poolCache, tokenMetaOf, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
+import { CHAIN, USDG, WETH, bestPool, bestPoolV4, poolCache, rememberTokenNames, tokenMetaOf, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
 import { batchCall, call } from "./rpc.mjs";
 import {
   LADDER_V4_ABI, LADDER_V4_TOPICS, MODIFY_LIQUIDITY_EVENT, MODIFY_LIQUIDITY_TOPIC, POSM_ABI,
@@ -60,6 +60,7 @@ const POOL_ABI = [
 const ERC20_ABI = [
   { type: "function", name: "totalSupply", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
   { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ type: "address" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "name", stateMutability: "view", inputs: [], outputs: [{ type: "string" }] },
 ];
 const PERMIT_TUPLE = { name: "permit", type: "tuple", components: [
   { name: "token", type: "address" }, { name: "value", type: "uint256" }, { name: "deadline", type: "uint256" },
@@ -357,9 +358,10 @@ export async function poolsRow(store, token) {
  */
 export function warmPoolsList(store) {
   const tick = () => poolsList(store).catch(() => {});
-  tick();
+  const index = () => searchIndex(store).catch(() => {});
+  tick().then(index);
   setInterval(tick, 20_000).unref?.();
-  setInterval(() => searchIndex(store).catch(() => {}), 60_000).unref?.();
+  setInterval(index, 60_000).unref?.();
 }
 
 // --------------------------------------------------------------- search
@@ -370,8 +372,8 @@ export function warmPoolsList(store) {
  * (24h volume, then market cap, then holders). Compact rows, fetched once by
  * the page and matched in the browser, so typing costs no round trip.
  */
-export async function searchIndex(store) {
-  return cachedSWR("search-index", 60_000, async () => {
+export async function searchIndex(store, { all = false } = {}) {
+  const full = await cachedSWR("search-index", 60_000, async () => {
     const [list, tokens] = await Promise.all([poolsList(store), tradeTokens(store)]);
     const ranked = new Map(list.all.map((r) => [r.token, r]));
     const known = new Map(tokens.map((t) => [t.address, t]));
@@ -385,16 +387,30 @@ export async function searchIndex(store) {
       const other = p.currency0 === V4.nativeCurrency ? p.currency1 : p.currency0;
       if (!isMoney(other)) universe.add(lower(other));
     }
-    const rows = [];
+    const rows = [], unnamed = [];
     for (const a of universe) {
-      const r = ranked.get(a), k = known.get(a), m = r ?? k ?? tokenMetaOf(a);
-      const symbol = m?.symbol ?? k?.symbol;
+      const r = ranked.get(a), k = known.get(a), m = tokenMetaOf(a);
+      const symbol = r?.symbol ?? k?.symbol ?? m?.symbol;
       if (!symbol) continue;
-      rows.push([a, symbol, (r?.name ?? k?.name ?? m?.name ?? "").slice(0, 40), r?.marketCapUsd ?? null, r?.volume24Usd ?? 0, k?.holders ?? m?.holders ?? 0]);
+      const row = [a, symbol, (r?.name || k?.name || m?.name || "").slice(0, 40), r?.marketCapUsd ?? null, r?.volume24Usd ?? 0, k?.holders ?? m?.holders ?? 0];
+      if (!row[2]) unnamed.push(row);
+      rows.push(row);
+    }
+    // The explorer knows no name for some launchpad tokens; the contract does.
+    // Asked once, in batches, and remembered in the registry.
+    if (unnamed.length) {
+      const names = await batchCall(unnamed.slice(0, 1_200).map((r) => ({ to: r[0], abi: ERC20_ABI, fn: "name" }))).catch(() => []);
+      const learned = [];
+      unnamed.forEach((r, i) => { const n = typeof names[i] === "string" ? names[i].trim().slice(0, 40) : ""; if (n) { r[2] = n; learned.push([r[0], n]); } });
+      rememberTokenNames(learned);
     }
     rows.sort((x, y) => (y[4] - x[4]) || ((y[3] ?? 0) - (x[3] ?? 0)) || (y[5] - x[5]));
-    return { tokens: rows.map((r) => r.slice(0, 5)), at: new Date().toISOString() };
+    const compact = rows.map((r) => r.slice(0, 5));
+    // Two sizes: what the page prefetches (every token with a market) and the
+    // long tail it fetches the first time someone types.
+    return { tokens: compact, ranked: compact.filter((r) => r[4] > 0 || r[3]), at: new Date().toISOString() };
   });
+  return { tokens: all ? full.tokens : full.ranked, complete: all, at: full.at };
 }
 
 /**

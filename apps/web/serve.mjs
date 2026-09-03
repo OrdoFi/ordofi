@@ -820,7 +820,7 @@ async function handle(req, res) {
       if (path === "/api/pools") body = await poolsPage(store);
       else if (path === "/api/pools/row") body = { token: q.get("token"), row: await poolsRow(store, addr("token")) };
       else if (path === "/api/pools/search-index") {
-        const [idx, s] = await Promise.all([searchIndex(store), stakesList(null).catch(() => null)]);
+        const [idx, s] = await Promise.all([searchIndex(store, { all: q.get("all") === "1" }), stakesList(null).catch(() => null)]);
         body = { ...idx, stakes: (s?.stakes ?? []).map((x) => [x.vault, x.token, x.symbol, x.name ?? "", x.tvlUsd ?? 0, x.rate7d ?? 0]) };
         sendJson(req, res, 200, body, { "cache-control": "public, max-age=60" });
         return;
