@@ -880,7 +880,7 @@ async function handle(req, res) {
       /** Which manager a ladder lives in; V3 unless said otherwise. */
       const venue = () => (q.get("venue") === "v4" ? "v4" : "v3");
       let body;
-      if (path === "/api/pools") body = await poolsPage(store);
+      if (path === "/api/pools") body = await poolsPage(store, Number(q.get("window")) || 86_400);
       else if (path === "/api/pools/row") body = { token: q.get("token"), row: await poolsRow(store, addr("token")) };
       else if (path === "/api/pools/search-index") {
         const [idx, s] = await Promise.all([searchIndex(store, { all: q.get("all") === "1" }), stakesList(null).catch(() => null)]);

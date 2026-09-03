@@ -553,12 +553,21 @@ export async function tradeToken(store, address) {
 // on the quote side (USDG over ETH over anything else), matching the chart.
 
 const moneyRank = (a) => (a === USDG ? 3 : a === WETH ? 2 : 1);
-let marketsCache = null; // { at, data }
 
-export async function tradeMarkets(store) {
+/** Windows the list can be ranked over; anything else falls back to a day. */
+export const MARKET_WINDOWS = [3_600, 21_600, 86_400];
+const marketsCaches = new Map();
+/**
+ * Every pair's market over the last `windowSec` (a day unless asked otherwise):
+ * price, move, volume, swaps. Field names keep their 24h suffix whatever the
+ * window, so every reader stays as it is; the window is reported alongside.
+ */
+export async function tradeMarkets(store, windowSec = 86_400) {
+  if (!MARKET_WINDOWS.includes(windowSec)) windowSec = 86_400;
+  const marketsCache = marketsCaches.get(windowSec);
   if (marketsCache && Date.now() - marketsCache.at < 60_000) return marketsCache.data;
   const now = Math.floor(Date.now() / 1000);
-  const [day, hourRows] = await Promise.all([marketStats(store, now - 86_400), marketStats(store, now - 3_600)]);
+  const [day, hourRows] = await Promise.all([marketStats(store, now - windowSec), marketStats(store, now - 3_600)]);
   const hour = new Map(hourRows.map((r) => [r.pool, r]));
   const tokens = await tradeTokens(store);
   const tokenByAddr = new Map(tokens.map((t) => [t.address, t]));
@@ -630,9 +639,10 @@ export async function tradeMarkets(store) {
     v4Pools: store?.v4PoolCount?.() ?? 0,
     coverage: { poolsTraded: day.length, poolsUnknown: unknownPools, tapeSince: day.length ? Math.min(...day.map((r) => r.firstBucket)) : null },
     resolvers: resolverStats(),
+    windowSec,
     at: new Date().toISOString(),
   };
-  marketsCache = { at: Date.now(), data };
+  marketsCaches.set(windowSec, { at: Date.now(), data });
   return data;
 }
 

@@ -14,7 +14,7 @@ import {
   tickToPrice,
   tickToSqrtPriceX96,
 } from "@ordofi/core/liquidity";
-import { CHAIN, USDG, WETH, bestPool, bestPoolV4, factoryPoolsFor, poolCache, rememberTokenNames, tokenMetaOf, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
+import { CHAIN, USDG, WETH, bestPool, bestPoolV4, factoryPoolsFor, poolCache, rememberTokenNames, tokenMetaOf, tradeCandles, tradeMarkets, tradeTokens, MARKET_WINDOWS } from "./trade.mjs";
 import { batchCall, call } from "./rpc.mjs";
 import {
   LADDER_V4_ABI, LADDER_V4_TOPICS, MODIFY_LIQUIDITY_EVENT, MODIFY_LIQUIDITY_TOPIC, POSM_ABI,
@@ -276,9 +276,11 @@ const isMoney = (a) => a === WETH || a === USDG;
  *   established — by market cap among tokens that actually traded.
  * Fees are volume times the pool's fee tier; that is what LPs split.
  */
-export async function poolsList(store) {
-  return cachedSWR("list", 60_000, async () => {
-    const [markets, tokens] = await Promise.all([tradeMarkets(store), tradeTokens(store)]);
+export async function poolsList(store, windowSec = 86_400) {
+  // Other windows are built on demand and kept a minute; the day's stays warm from boot.
+  if (!MARKET_WINDOWS.includes(windowSec)) windowSec = 86_400;
+  return cachedSWR(windowSec === 86_400 ? "list" : `list:${windowSec}`, 60_000, async () => {
+    const [markets, tokens] = await Promise.all([tradeMarkets(store, windowSec), tradeTokens(store)]);
     const tokenBy = new Map(tokens.map((t) => [t.address, t]));
     const byToken = new Map();
     for (const m of markets.markets ?? []) {
@@ -352,8 +354,8 @@ export async function poolsList(store) {
 export const ORDO_TOKEN = "0xfe2f0fb0c00d19786a8abf98d4b1f1ac8763b167";
 
 /** The list without its long tail — what the page downloads — led by $ORDO. */
-export async function poolsPage(store) {
-  const { all, ...page } = await poolsList(store);
+export async function poolsPage(store, windowSec = 86_400) {
+  const { all, ...page } = await poolsList(store, windowSec);
   return { ...page, hero: await heroRow(store, all) };
 }
 /**

@@ -233,6 +233,9 @@
 
     // ================= LIST =================
     let listData = null;
+    // The window the lists rank over: a day unless the visitor picks otherwise, remembered.
+    const WIN_LABEL = { 3600: "1h", 21600: "6h", 86400: "24h" };
+    let win = Number(localStorage.getItem("ordo.pools.window")) || 86400; if (!WIN_LABEL[win]) win = 86400;
     const quoteFilter = { trending: "all", established: "all" };
     const sparkCache = new Map(); // token → closes (24h, 30m buckets)
     const logo = (t) => tokenIcon(t.token ?? t.address, t.symbol);
@@ -252,17 +255,30 @@
           <div class="ph"><h3>${sec}</h3>
             <div style="display:flex;gap:8px;align-items:center">
               <div class="seg qf" data-sec="${sec}"><button data-q="all" class="on">All</button><button data-q="ETH">ETH</button><button data-q="USDG">USDG</button></div>
-              <span class="chip" title="Volume, fees, trades and change over the last 24 hours">24h</span>
+              <div class="seg wf" title="Volume, fees, trades and change over this window"><button data-w="3600">1h</button><button data-w="21600">6h</button><button data-w="86400" class="on">24h</button></div>
             </div></div>
-          <table class="list"><thead><tr><th>Token</th><th>MC</th><th>24h</th><th>Fees 24h</th><th>Trades</th><th>Vol 24h</th><th>Age</th><th>Last 24h</th></tr></thead><tbody id="rows-${sec}">${skeletonRows(8, 8)}</tbody></table>
+          <table class="list"><thead><tr><th>Token</th><th>MC</th><th class="wl">24h</th><th>Fees <span class="wl">24h</span></th><th>Trades</th><th>Vol <span class="wl">24h</span></th><th>Age</th><th>Last <span class="wl">24h</span></th></tr></thead><tbody id="rows-${sec}">${skeletonRows(8, 8)}</tbody></table>
         </div>`).join("")}`;
       $("f-hero").innerHTML = `<div class="fhead"><div class="tok"><span class="sk round" style="width:40px;height:40px"></span><span class="sk w2" style="height:22px;width:140px"></span></div></div><div class="fgrid">${Array.from({ length: 6 }, () => `<div><span class="sk w2"></span><br/><span class="sk w3" style="height:16px;margin-top:6px"></span></div>`).join("")}</div>`;
       mountShell($("lq-shell"), { page: "pools" });
+      document.querySelectorAll(".wf button").forEach((b) => b.addEventListener("click", async () => {
+        const w = Number(b.dataset.w); if (w === win) return;
+        win = w; localStorage.setItem("ordo.pools.window", String(w)); sparkCache.clear();
+        document.querySelectorAll(".wf button").forEach((x) => x.classList.toggle("on", Number(x.dataset.w) === w));
+        document.querySelectorAll(".wl").forEach((e) => (e.textContent = WIN_LABEL[w]));
+        document.querySelectorAll(".sec tbody").forEach((tb) => { tb.style.opacity = ".45"; });
+        await loadList(); document.querySelectorAll(".sec tbody").forEach((tb) => { tb.style.opacity = ""; });
+      }));
       document.querySelectorAll(".qf button").forEach((b) => b.addEventListener("click", () => {
         const sec = b.parentElement.dataset.sec; quoteFilter[sec] = b.dataset.q;
         b.parentElement.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); renderRows(sec);
       }));
-      listData = await api("/api/pools");
+      await loadList();
+    }
+    async function loadList() {
+      listData = await api(`/api/pools?window=${win}`);
+      document.querySelectorAll(".wl").forEach((e) => (e.textContent = WIN_LABEL[win]));
+      document.querySelectorAll(".wf button").forEach((b) => b.classList.toggle("on", Number(b.dataset.w) === win));
       renderFeatured();
       renderRows("trending"); renderRows("established");
     }
@@ -273,9 +289,9 @@
         $("f-hero").href = `/pools/${hero.token}`;
         $("f-hero").innerHTML = `<div class="fhead">${tokenCell(hero)}</div>
           <div class="fgrid">
-            <div><div class="k">Market cap</div><div class="v">${usdc(hero.marketCapUsd)}</div></div><div><div class="k">24h</div><div class="v ${cls(hero.change24)}">${pct(hero.change24)}</div></div>
-            <div><div class="k">Vol 24h</div><div class="v">${usdc(hero.volume24Usd)}</div></div><div><div class="k">Fees 24h</div><div class="v">${usdc(hero.fees24Usd)}</div></div>
-            <div><div class="k">Trades 24h</div><div class="v">${num(hero.trades24, 0)}</div></div><div><div class="k">Pool age</div><div class="v">${hero.ageDays == null ? "—" : hero.ageDays + "d"}</div></div>
+            <div><div class="k">Market cap</div><div class="v">${usdc(hero.marketCapUsd)}</div></div><div><div class="k"><span class="wl">24h</span></div><div class="v ${cls(hero.change24)}">${pct(hero.change24)}</div></div>
+            <div><div class="k">Vol <span class="wl">24h</span></div><div class="v">${usdc(hero.volume24Usd)}</div></div><div><div class="k">Fees <span class="wl">24h</span></div><div class="v">${usdc(hero.fees24Usd)}</div></div>
+            <div><div class="k">Trades <span class="wl">24h</span></div><div class="v">${num(hero.trades24, 0)}</div></div><div><div class="k">Pool age</div><div class="v">${hero.ageDays == null ? "—" : hero.ageDays + "d"}</div></div>
           </div><canvas class="fspark" width="600" height="160"></canvas>`;
         sparkInto(hero, $("f-hero").querySelector("canvas"), 3.5);
       }
@@ -300,7 +316,7 @@
     async function closes24(t) {
       if (sparkCache.has(t.token)) return sparkCache.get(t.token);
       // A V4 market's tape is its own pool's; without the PoolId the request would look for a V3 pool.
-      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quote === "ETH" ? "eth" : USDG}&bucketSec=1800&hours=24${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
+      const p = api(`/api/trade/candles?base=${t.token}&quote=${t.quoteAddress ?? (t.quote === "ETH" ? "eth" : USDG)}&bucketSec=${win >= 86400 ? 1800 : win >= 21600 ? 300 : 60}&hours=${win / 3600}${t.kind === "v4" && t.pool ? `&pool=${t.pool}` : ""}`).then((d) => d.candles.map((x) => x.close)).catch(() => []);
       sparkCache.set(t.token, p);
       return p;
     }
@@ -621,10 +637,10 @@
         if (!d.candles.length) {
           const row = await tokenRow();
           if (row && row.pool !== pool && state.quote.usdPerToken) {
-            const rowQuote = row.quote === "ETH" ? "eth" : USDG;
+            const rowQuote = row.quoteAddress ?? (row.quote === "ETH" ? "eth" : USDG);
             const alt = await api(`/api/trade/candles?base=${base}&quote=${rowQuote}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}${row.kind === "v4" ? `&pool=${row.pool}` : ""}`);
             if (alt.candles.length) {
-              const rowQuoteUsd = row.quote === "USDG" ? 1 : state.quote.address === WETH ? state.quote.usdPerToken : (await api("/api/pools/platform").catch(() => null))?.ethUsd;
+              const rowQuoteUsd = row.quote === "USDG" ? 1 : row.quote === "ETH" ? (state.quote.address === WETH ? state.quote.usdPerToken : (await api("/api/pools/platform").catch(() => null))?.ethUsd) : null;
               if (rowQuoteUsd) {
                 const k = rowQuoteUsd / state.quote.usdPerToken;
                 const px = (c) => { const o = { ...c }; for (const f of ["open", "high", "low", "close"]) if (typeof o[f] === "number") o[f] *= k; return o; };
