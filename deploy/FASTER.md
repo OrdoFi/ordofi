@@ -23,11 +23,19 @@ Verified locally against the real chain: `eth_chainId` 0.3 ms, cached
 `eth_blockNumber` 0.4 ms (was one upstream trip each), 25 concurrent
 `eth_blockNumber` → 1 distinct answer, receipt second fetch 13 ms vs 256 ms,
 `ordo_simulate` ~140 ms from Europe, a burn to `0x0` refused in 60 ms without
-reaching the sequencer. The single-instance → two-replica migration and two forced rolling restarts
-under ~85 req/s, behind a local Caddy with the production proxy settings:
-0 failed requests out of ~10,000. (Caddy's `dynamic a` upstreams were tried
-first and rejected: active health checks do not run on dynamic upstreams, and
-without them one request in a few thousand hit a closing keep-alive connection.)
+reaching the sequencer. Rolling restarts, measured: the single-instance → two-replica migration and
+four forced replacements of both replicas under ~85 req/s behind a local Caddy
+with the production proxy settings, 0 failed requests out of 14,148; then the
+production migration and a forced production rollout probed from Europe over
+TLS, 0 failed out of 1,491. (Caddy's `dynamic a` upstreams were tried first
+and rejected: active health checks do not run on dynamic upstreams, and
+without them about one request in three thousand hit a closing keep-alive
+connection.)
+
+Live after the rollout, from Europe: `eth_chainId` 130 ms, which is the
+network round trip itself (ping 135 ms) — the gateway now adds nothing; before,
+168 ms. Inside the box: `eth_chainId` and a cached `eth_blockNumber` answer in
+4–7 ms against ~31 ms before.
 
 ### One-time step that causes a ~1–2 s blip
 
