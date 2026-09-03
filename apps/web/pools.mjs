@@ -18,7 +18,7 @@ import { CHAIN, USDG, WETH, bestPool, bestPoolV4, factoryPoolsFor, poolCache, re
 import { batchCall, call } from "./rpc.mjs";
 import {
   LADDER_V4_ABI, LADDER_V4_TOPICS, MODIFY_LIQUIDITY_EVENT, MODIFY_LIQUIDITY_TOPIC, POSM_ABI,
-  SPACING_FOR_FEE, holdings as v4Holdings, initializeCalldata, isPlainMoneyPool, keyArg, keyFromChain, liquidityOf as v4LiquidityOf, poolKeyOf, segmentsOf, slot0 as v4Slot0, tickProfile as v4TickProfile, tokensOf,
+  SPACING_FOR_FEE, holdings as v4Holdings, initializeCalldata, isPlainMoneyPool, keyArg, keyFromChain, liquidityOf as v4LiquidityOf, poolKeyOf, segmentsOf, slot0 as v4Slot0, sqrtPricesOf, tickProfile as v4TickProfile, tokensOf,
 } from "./v4.mjs";
 
 /**
@@ -369,7 +369,7 @@ async function heroRow(store, all) {
   }
   return cachedSWR("hero:ordo", 60_000, async () => {
     const pools = await poolsForToken(ORDO_TOKEN);
-    const main = pools.find((p) => BigInt(p.liquidity) > 0n) ?? pools[0];
+    const main = pools[0] ?? null; // deepest first, dust counted as empty
     const st = main ? await poolState(main.pool, ORDO_TOKEN).catch(() => null) : null;
     const t = tokenMetaOf(ORDO_TOKEN);
     return {
@@ -614,14 +614,33 @@ export async function poolsForToken(token) {
   // as view-only: its market is real, but a hook may veto or tax what the manager
   // does, and the page cannot promise what it cannot see.
   const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && (k.native0 || lower(k.currency0) === USDG || lower(k.currency1) === USDG) && (lower(k.currency0) === token || lower(k.currency1) === token) && !isMoney(token));
-  const [liq, liq4] = await Promise.all([
+  const [liq, slots, liq4, sqrt4, usd] = await Promise.all([
     batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "liquidity" }))),
+    batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "slot0" }))),
     v4.length ? v4LiquidityOf(v4.map((k) => k.poolId)) : [],
+    v4.length ? sqrtPricesOf(v4.map((k) => k.poolId)) : [],
+    ethUsd().catch(() => null),
   ]);
   // A pool whose liquidity could not be read must not rank as empty: the stake
   // page picks the deepest pool from this list, and a stake is created once per pool.
-  if ([...liq, ...liq4].some((x) => x == null)) throw new Error("The RPC did not answer for every pool; try again in a moment.");
-  const byLiq = (a, b) => (BigInt(b.liquidity) > BigInt(a.liquidity) ? 1 : BigInt(b.liquidity) < BigInt(a.liquidity) ? -1 : 0);
+  if ([...liq, ...slots, ...liq4, ...sqrt4].some((x) => x == null)) throw new Error("The RPC did not answer for every pool; try again in a moment.");
+  // Raw liquidity is not comparable across fee tiers or prices, so pools are ranked
+  // by what the quote side is worth at the current price, in ETH: L/√P of the
+  // currency0 side or L·√P of currency1, whichever is the money. A pool holding
+  // less than a few dollars is treated as empty — anyone can park dust in a 10%
+  // pool, and it must not become the page's default over an unseeded 1% one.
+  const depthOf = (L, sqrtPriceX96, quote, quoteIs0) => {
+    const s = Number(sqrtPriceX96) / 2 ** 96;
+    if (!(s > 0) || L === 0n) return 0;
+    const q = quoteIs0 ? Number(L) / s : Number(L) * s;
+    return quote === WETH ? q / 1e18 : usd ? q / 1e6 / usd : q / 1e6 / 4000;
+  };
+  const DUST_ETH = 0.005;
+  const live = (p) => p.depthEth >= DUST_ETH;
+  // With nothing live the tier a new market should start at comes first: 1% for
+  // a volatile token, then the other standard tiers; a made-up tier last.
+  const tierRank = (fee) => { const i = [10000, 3000, 500, 100].indexOf(fee); return i < 0 ? 4 : i; };
+  const byDepth = (a, b) => (live(a) !== live(b) ? (live(a) ? -1 : 1) : live(a) ? b.depthEth - a.depthEth : tierRank(a.fee) - tierRank(b.fee) || (b.fee ?? 0) - (a.fee ?? 0));
   // Anyone can initialise a V4 pool for a few cents, so a token collects dozens
   // of empty ones at absurd fee tiers. Offer the ones holding liquidity (at most
   // eight); with none live, the sanest three so the first position can still be built.
@@ -629,24 +648,27 @@ export async function poolsForToken(token) {
   // does not make it worth offering.
   const v4Quote = (k) => { const { token0, token1 } = tokensOf(k); return token0 === token ? token1 : token0; };
   // A zero-fee pool pays LPs nothing; a hook-set fee is unknown here and reported as null.
-  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.dynamicFee ? null : k.fee, tickSpacing: k.tickSpacing, quote: v4Quote(k), liquidity: liq4[i].toString(), buildable: isPlainMoneyPool(k, USDG), hooked: k.hooked, dynamicFee: k.dynamicFee }))
-    .filter((p) => p.fee == null || (p.fee > 0 && p.fee <= 100_000)).sort(byLiq);
+  const v4Rows = v4.map((k, i) => {
+    const quote = v4Quote(k);
+    return { pool: k.poolId, kind: "v4", venue: "v4", fee: k.dynamicFee ? null : k.fee, tickSpacing: k.tickSpacing, quote, liquidity: liq4[i].toString(), depthEth: depthOf(liq4[i], sqrt4[i], quote, lower(k.currency0) !== token), buildable: isPlainMoneyPool(k, USDG), hooked: k.hooked, dynamicFee: k.dynamicFee };
+  }).filter((p) => p.fee == null || (p.fee > 0 && p.fee <= 100_000)).sort(byDepth);
   // Per quote asset: the live ones (at most eight), then up to three empty ones
   // at the sanest fees, so a tier nobody has seeded can still be the first.
   const v4Shown = [];
   for (const q of [WETH, USDG]) {
     const rows = v4Rows.filter((p) => p.quote === q);
-    const live = rows.filter((p) => BigInt(p.liquidity) > 0n).slice(0, 8);
-    const empty = rows.filter((p) => BigInt(p.liquidity) === 0n).sort((a, b) => a.fee - b.fee).slice(0, 3);
-    v4Shown.push(...live, ...empty);
+    v4Shown.push(...rows.filter(live).slice(0, 8), ...rows.filter((p) => !live(p)).slice(0, 3));
   }
   const rows = [
-    ...mine.map(([addr, p], i) => ({ pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i].toString(), buildable: true, hooked: false, dynamicFee: false })),
+    ...mine.map(([addr, p], i) => {
+      const quote = p.token0 === token ? p.token1 : p.token0;
+      return { pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote, liquidity: liq[i].toString(), depthEth: depthOf(liq[i], slots[i][0], quote, p.token0 !== token), buildable: true, hooked: false, dynamicFee: false };
+    }),
     ...v4Shown,
   ];
   return rows
     .map((p) => ({ ...p, quoteSymbol: p.quote === WETH ? "ETH" : "USDG" }))
-    .sort(byLiq);
+    .sort(byDepth);
 }
 /**
  * Creating a pool that does not exist yet: a plain V4 pool of native ETH and

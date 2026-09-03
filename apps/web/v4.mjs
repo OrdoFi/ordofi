@@ -192,6 +192,8 @@ export async function slot0(poolId) {
 }
 
 export const liquidityOf = (poolIds) => batchCall(poolIds.map((id) => ({ to: V4.stateView, abi: STATE_VIEW_ABI, fn: "getLiquidity", args: [id] })));
+/** sqrtPriceX96 per pool as a bigint, 0n for a pool never initialised, null where the RPC failed. */
+export const sqrtPricesOf = async (poolIds) => (await batchCall(poolIds.map((id) => ({ to: V4.stateView, abi: STATE_VIEW_ABI, fn: "getSlot0", args: [id] })))).map((s) => (s ? BigInt(s[0]) : null));
 
 /**
  * The initialised ticks in [lo, hi] and the net liquidity at each, read off

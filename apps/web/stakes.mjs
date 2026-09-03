@@ -337,7 +337,7 @@ export async function stakeCreatePlan(token, venue = null) {
   // No venue asked for: the one holding the deeper ETH pool — a token often has
   // an empty pool in one version and all its liquidity in the other. V3 on a tie.
   if (!venue) {
-    const depth = (p) => (p ? BigInt(p.liquidity) : -1n);
+    const depth = (p) => (p ? p.depthEth : -1);
     venue = depth(options.v4) > depth(options.v3) ? "v4" : "v3";
   }
   const pool = options[venue];
