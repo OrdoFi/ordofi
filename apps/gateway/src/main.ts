@@ -8,7 +8,7 @@ import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
-import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, hedged, staticAnswer } from "./fastpath.js";
+import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, clientIp, hedged, staticAnswer } from "./fastpath.js";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 
 const UPSTREAM = ENDPOINTS.rpc;
@@ -202,12 +202,6 @@ function authenticate(
   return null;
 }
 
-function clientIp(req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } }): string {
-  const fwd = req.headers["x-forwarded-for"];
-  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
-  return first || req.socket?.remoteAddress || "unknown";
-}
-
 const LANDING = landingHtml({
   chainId: CONFIG.chainId,
   explorer: "https://robinhoodchain.blockscout.com",
@@ -306,8 +300,8 @@ const server = createServer((req, res) => {
           if (local !== undefined) return { jsonrpc: "2.0", id: msg.id, result: local };
         }
 
-        // Keys are limited per key; anonymous callers per source IP (the
-        // first x-forwarded-for hop is the client when Caddy fronts us).
+        // Keys are limited per key; anonymous callers per source IP (see
+        // clientIp for what counts as the source behind Caddy and Cloudflare).
         // Anonymous sends have a second, stricter budget: each one costs a
         // simulation and a sequencer submission.
         const ip = clientIp(req);

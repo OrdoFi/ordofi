@@ -218,3 +218,23 @@ export async function hedged<T>(
     );
   });
 }
+
+/**
+ * The address the anonymous limits are keyed on.
+ *
+ * Behind Cloudflare the peer Caddy sees is an edge node, so x-forwarded-for
+ * names the edge, not the wallet, and one edge would share a single budget
+ * between every wallet it carries. Cloudflare puts the wallet's address in
+ * cf-connecting-ip and overwrites any value the client sent. Caddy strips that
+ * header from requests that did not arrive from a Cloudflare address
+ * (deploy/Caddyfile), so when it reaches us it can be trusted. Without it, the
+ * first x-forwarded-for hop is the client when Caddy alone fronts us.
+ */
+export function clientIp(req: { headers: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string } }): string {
+  const cf = req.headers["cf-connecting-ip"];
+  const cfIp = (Array.isArray(cf) ? cf[0] : cf)?.trim();
+  if (cfIp) return cfIp;
+  const fwd = req.headers["x-forwarded-for"];
+  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(",")[0]?.trim();
+  return first || req.socket?.remoteAddress || "unknown";
+}

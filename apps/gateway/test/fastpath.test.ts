@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, hedged, staticAnswer } from "../src/fastpath.ts";
+import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, clientIp, hedged, staticAnswer } from "../src/fastpath.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -186,5 +186,21 @@ test("hedge: when both fail, the primary's error is the one the caller sees", as
       10,
     ),
     /primary failed/,
+  );
+});
+
+test("the anonymous limit is keyed on the wallet, not the proxy in front of it", () => {
+  const sock = { remoteAddress: "172.18.0.5" };
+  assert.equal(clientIp({ headers: {}, socket: sock }), "172.18.0.5", "no proxy: the peer");
+  assert.equal(clientIp({ headers: { "x-forwarded-for": "203.0.113.9" }, socket: sock }), "203.0.113.9", "Caddy alone: the hop it recorded");
+  assert.equal(
+    clientIp({ headers: { "x-forwarded-for": "104.23.199.123", "cf-connecting-ip": "203.0.113.9" }, socket: sock }),
+    "203.0.113.9",
+    "Cloudflare in front: its header names the wallet, x-forwarded-for names the edge",
+  );
+  assert.equal(
+    clientIp({ headers: { "x-forwarded-for": "198.51.100.7, 104.23.199.123", "cf-connecting-ip": "203.0.113.9" }, socket: sock }),
+    "203.0.113.9",
+    "a client-supplied x-forwarded-for prefix cannot pick its own key",
   );
 });
