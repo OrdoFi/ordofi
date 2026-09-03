@@ -14,11 +14,11 @@ import {
   tickToPrice,
   tickToSqrtPriceX96,
 } from "@ordofi/core/liquidity";
-import { CHAIN, USDG, WETH, bestPool, bestPoolV4, poolCache, rememberTokenNames, tokenMetaOf, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
+import { CHAIN, USDG, WETH, bestPool, bestPoolV4, factoryPoolsFor, poolCache, rememberTokenNames, tokenMetaOf, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
 import { batchCall, call } from "./rpc.mjs";
 import {
   LADDER_V4_ABI, LADDER_V4_TOPICS, MODIFY_LIQUIDITY_EVENT, MODIFY_LIQUIDITY_TOPIC, POSM_ABI,
-  holdings as v4Holdings, isPlainEthPool, keyArg, keyFromChain, liquidityOf as v4LiquidityOf, poolKeyOf, segmentsOf, slot0 as v4Slot0, tickProfile as v4TickProfile, tokensOf,
+  holdings as v4Holdings, isPlainMoneyPool, keyArg, keyFromChain, liquidityOf as v4LiquidityOf, poolKeyOf, segmentsOf, slot0 as v4Slot0, tickProfile as v4TickProfile, tokensOf,
 } from "./v4.mjs";
 
 /**
@@ -566,10 +566,12 @@ async function baseOf(pool) {
  */
 export async function poolsForToken(token) {
   token = lower(token);
-  const all = [...poolCache.cache.entries()];
   // The other side must be ETH or USDG: the page quotes in money, never in another token.
-  const mine = all.filter(([, p]) => p && !p.miss && p.v3 && (p.token0 === token || p.token1 === token) && isMoney(p.token0 === token ? p.token1 : p.token0));
-  const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && isPlainEthPool(k) && k.currency1 === token);
+  // The factory is asked directly, so a pool that has never traded is still offered.
+  const seen = new Map(poolCache.cache.entries());
+  for (const p of await factoryPoolsFor(token).catch(() => [])) seen.set(p.pool, p);
+  const mine = [...seen.entries()].filter(([, p]) => p && !p.miss && p.v3 && (p.token0 === token || p.token1 === token) && isMoney(p.token0 === token ? p.token1 : p.token0));
+  const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && isPlainMoneyPool(k, USDG) && (lower(k.currency0) === token || lower(k.currency1) === token) && !isMoney(token));
   const [liq, liq4] = await Promise.all([
     batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "liquidity" }))),
     v4.length ? v4LiquidityOf(v4.map((k) => k.poolId)) : [],
@@ -583,9 +585,14 @@ export async function poolsForToken(token) {
   // eight); with none live, the sanest three so the first position can still be built.
   // A fee above 10% is a trap, not a market (V4 lets anyone set 93%); dust parked in one
   // does not make it worth offering.
-  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.fee, tickSpacing: k.tickSpacing, quote: WETH, liquidity: liq4[i].toString() })).filter((p) => p.fee <= 100_000).sort(byLiq);
-  const live4 = v4Rows.filter((p) => BigInt(p.liquidity) > 0n).slice(0, 8);
-  const v4Shown = live4.length ? live4 : v4Rows.sort((a, b) => a.fee - b.fee).slice(0, 3);
+  const v4Quote = (k) => { const { token0, token1 } = tokensOf(k); return token0 === token ? token1 : token0; };
+  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.fee, tickSpacing: k.tickSpacing, quote: v4Quote(k), liquidity: liq4[i].toString() })).filter((p) => p.fee <= 100_000).sort(byLiq);
+  // Per quote asset: the live ones (at most eight), else the sanest three.
+  const v4Shown = [];
+  for (const q of [WETH, USDG]) {
+    const rows = v4Rows.filter((p) => p.quote === q), live = rows.filter((p) => BigInt(p.liquidity) > 0n).slice(0, 8);
+    v4Shown.push(...(live.length ? live : rows.sort((a, b) => a.fee - b.fee).slice(0, 3)));
+  }
   const rows = [
     ...mine.map(([addr, p], i) => ({ pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i].toString() })),
     ...v4Shown,

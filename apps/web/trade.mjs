@@ -20,6 +20,7 @@ import { rpcFetch, V4, isV4PoolId } from "@ordofi/core";
 import { getTokenInfo, toWhole } from "@ordofi/core/pricing";
 import { ROUTER as SWAP_ROUTER, encodeExactInputSwap } from "@ordofi/core/router";
 import { proveDelivery, proofToJson } from "@ordofi/core/guard";
+import { batchCall } from "./rpc.mjs";
 
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../data");
 const EXPLORER_API = "https://robinhoodchain.blockscout.com/api/v2";
@@ -284,6 +285,29 @@ export function rememberTokenNames(pairs) {
     if (m && !m.miss && !m.name && name) { m.name = name; changed = true; }
   }
   if (changed) { meta.dirty = true; meta.save(); }
+}
+
+/**
+ * Every V3 pool the factory holds for a token against ETH and USDG, asked of
+ * the chain directly (eight calls, one batch) — a pool that has never traded
+ * is not in pools.json but is still there to build on. What is found is
+ * remembered by the pool resolver so the rest of the page knows it too.
+ */
+export async function factoryPoolsFor(token) {
+  const t = token.toLowerCase();
+  const asks = [];
+  for (const other of [WETH, USDG]) for (const fee of FEES) asks.push({ other, fee });
+  const got = await batchCall(asks.map((a) => ({ to: V3_FACTORY, abi: FACTORY_ABI, fn: "getPool", args: [a.other, t, a.fee] })));
+  const out = [];
+  asks.forEach((a, i) => {
+    const p = typeof got[i] === "string" ? got[i].toLowerCase() : null;
+    if (!p || p === "0x0000000000000000000000000000000000000000") return;
+    const [token0, token1] = t < a.other ? [t, a.other] : [a.other, t];
+    if (!pools.get(p)) { pools.cache.set(p, { pool: p, token0, token1, fee: a.fee, v3: true }); pools.dirty = true; }
+    out.push({ pool: p, token0, token1, fee: a.fee, v3: true });
+  });
+  if (pools.dirty) pools.save();
+  return out;
 }
 
 /** Which fee tiers a token has against ETH and USDG — i.e. whether the router can reach it. */

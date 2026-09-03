@@ -286,7 +286,18 @@
       if (!token && !/^0x[0-9a-f]{40}$/.test(tokenParam)) { $("root").innerHTML = `<div class="empty">Unknown token. <a href="/pools" style="color:var(--accent)">Back to pools</a></div>`; return; }
       const list = await api(`/api/pools/token?token=${token?.address ?? tokenParam}`);
       pools = list.pools;
-      if (!pools.length) { $("root").innerHTML = `<div class="empty">${esc(token?.symbol ?? tokenParam)} has no Uniswap V3 or V4 pool against ETH or USDG yet.</div>`; return; }
+      if (!pools.length) {
+        const sym = token?.symbol ?? tokenParam.slice(0, 10);
+        $("root").innerHTML = `<div id="lq-shell"></div>
+          <div class="head">${logo(token ?? { address: tokenParam, symbol: sym })}<div><h1>${esc(sym)}</h1><div class="nm">${esc(token?.name ?? "")}${token?.name ? " · " : ""}Robinhood Chain</div><div class="meta"><span class="mono">${esc(tokenParam)}</span> · <a href="${EXPLORER}/token/${esc(tokenParam)}" target="_blank" rel="noopener">explorer</a></div></div></div>
+          <div class="panel"><div class="empty" style="padding:34px 20px;text-align:left;line-height:1.6">
+            <b style="display:block;font-size:15px;margin-bottom:6px">No pool to build on yet</b>
+            ${esc(sym)} has no Uniswap V3 or V4 pool against ETH or USDG on Robinhood Chain, and a position needs one to live in. Pools are created on Uniswap by whoever first seeds them; once one exists it appears here within a minute.<br/>
+            <span style="display:inline-flex;gap:14px;margin-top:14px"><a href="/pools" style="color:var(--accent)">← back to pools</a><a href="/trade?base=${esc(tokenParam)}" style="color:var(--accent)">try the trade page</a></span>
+          </div></div>`;
+        mountShell($("lq-shell"), { page: "pools" });
+        return;
+      }
       if (!token) { // a token the list has not ranked yet: take its identity from the pool
         const st = await api(`/api/pools/state?pool=${pools[0].pool}&base=${tokenParam}`);
         token = { address: tokenParam, symbol: st.base.symbol, name: st.base.name, icon: st.base.icon, decimals: st.base.decimals };
@@ -363,19 +374,17 @@
       setInterval(() => { if (document.visibilityState === "visible") loadCandles(true); }, tfSec < 60 ? 5000 : 30000);
     }
 
-    // ---- pool groups: USDG pools and ETH pools on V3, ETH pools on V4 — the same three Delta shows
-    const GROUPS = [["v3", USDG, "USDG"], ["v3", WETH, "V3 ETH"], ["v4", WETH, "V4 ETH"]];
+    // ---- pool groups: USDG pools (V3 and V4 together), ETH pools on V3, ETH pools on V4 — the same three Delta shows
+    const GROUPS = [["usdg", "USDG", (p) => p.quote === USDG], ["v3eth", "V3 ETH", (p) => p.quote === WETH && (p.kind ?? "v3") === "v3"], ["v4eth", "V4 ETH", (p) => p.quote === WETH && p.kind === "v4"]];
     const fmtFee = (p) => p.fee == null ? "dyn" : `${(p.fee / 1e4).toFixed(2)}%`;
     function renderGroups() {
-      const byGroup = new Map();
-      for (const p of pools) { const k = `${p.kind ?? "v3"}:${p.quote}`; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k).push(p); }
       const fmtLiq = (p) => { const l = Number(BigInt(p.liquidity)); return l > 0 ? "live" : "empty"; };
-      $("groups").innerHTML = GROUPS.map(([kind, q, label]) => {
-        const ps = byGroup.get(`${kind}:${q}`);
-        if (!ps?.length) return kind === "v4" ? `<div class="grp"><button disabled style="cursor:default;opacity:.55" title="No V4 ETH pool for this token yet"><small>V4 ETH</small><b>none</b></button></div>` : "";
+      $("groups").innerHTML = GROUPS.map(([key, label, is]) => {
+        const ps = pools.filter(is);
+        if (!ps.length) return key === "v4eth" ? `<div class="grp"><button disabled style="cursor:default;opacity:.55" title="No V4 ETH pool for this token yet"><small>V4 ETH</small><b>none</b></button></div>` : "";
         const cur = ps.find((p) => p.pool === pool);
-        return `<div class="grp ${cur ? "on" : ""}" data-q="${q}" data-k="${kind}"><button><small>${label}</small><b>${cur ? fmtFee(cur) : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
-          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· ts ${p.tickSpacing}</small>` : ""}</span><small>${fmtLiq(p)}</small></button>`).join("")}</div></div>`;
+        return `<div class="grp ${cur ? "on" : ""}" data-g="${key}"><button><small>${label}</small><b>${cur ? fmtFee(cur) : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
+          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}</small>` : ""}</span><small>${fmtLiq(p)}</small></button>`).join("")}</div></div>`;
       }).join("");
       $("groups").querySelectorAll(".grp > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
       $("groups").querySelectorAll(".menu button[data-p]").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));

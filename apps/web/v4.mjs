@@ -147,6 +147,8 @@ export const keyFromChain = (k) => ({
 
 /** What the liquidity pages can work with: an ETH pool with no hook and a fixed fee. */
 export const isPlainEthPool = (k) => !!k && k.native0 && !k.hooked && !k.dynamicFee;
+/** Native ETH or USDG on one side, no hook, a fixed fee: a pool the ladder manager can work without surprises. */
+export const isPlainMoneyPool = (k, usdg) => !!k && !k.hooked && !k.dynamicFee && (k.native0 || lower(k.currency0) === usdg || lower(k.currency1) === usdg);
 
 /** The ERC-20 the pool is about, with native ETH reported as WETH. */
 export const tokensOf = (k) => ({ token0: k.native0 ? WETH : k.currency0, token1: k.currency1 });

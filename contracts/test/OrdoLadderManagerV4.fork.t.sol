@@ -237,6 +237,93 @@ contract OrdoLadderManagerV4ForkTest is Test {
         assertEq(address(mgr).balance, 0);
     }
 
+    // ------------------------------------------------------- token / USDG pool
+
+    /// CNPY / USDG 3%: a V4 pool with no ETH in it at all. currency0 is the
+    /// token, currency1 is USDG, both settle through Permit2, msg.value is zero.
+    address constant CNPY = 0x532c5583671870723CEEf573600208aF49c87c54;
+    PoolKey cnpyUsdg = PoolKey({currency0: CNPY, currency1: USDG, fee: 30000, tickSpacing: 300, hooks: address(0)});
+
+    function _cnpyTick() internal view returns (int24 t) {
+        (, t,,) = IStateView(STATE_VIEW).getSlot0(mgr.toId(cnpyUsdg));
+    }
+
+    /// Bought in the pool: a launchpad token's storage layout may defeat `deal`.
+    function _buyCnpy(address to, uint256 usdgIn) internal {
+        vm.startPrank(whale);
+        IERC20(USDG).transfer(address(swapper), usdgIn);
+        swapper.swapExactIn(cnpyUsdg, false, usdgIn);
+        IERC20(CNPY).transfer(to, IERC20(CNPY).balanceOf(whale));
+        vm.stopPrank();
+    }
+
+    function test_tokenUsdgPool_bothSidesAreErc20AndNoValueIsSent() public onFork {
+        _buyCnpy(alice, 5_000e6);
+        uint256 haveTok = IERC20(CNPY).balanceOf(alice);
+        uint256 haveUsdg = IERC20(USDG).balanceOf(alice);
+        assertGt(haveTok, 0, "bought some");
+        int24 tick = _cnpyTick();
+        int24 mid = (tick / 300) * 300;
+        if (mid > tick) mid -= 300;
+        // Below the price only USDG, around it both, above it only the token.
+        OrdoLadderManagerV4.Rung[] memory r = new OrdoLadderManagerV4.Rung[](3);
+        r[0] = OrdoLadderManagerV4.Rung({tickLower: mid - 6000, tickUpper: mid - 3000, amount0: 0, amount1: 1_000e6, amount0Min: 0, amount1Min: 0});
+        r[1] = OrdoLadderManagerV4.Rung({tickLower: mid - 3000, tickUpper: mid + 3300, amount0: haveTok / 2, amount1: 1_000e6, amount0Min: 0, amount1Min: 0});
+        r[2] = OrdoLadderManagerV4.Rung({tickLower: mid + 3300, tickUpper: mid + 6300, amount0: haveTok / 2, amount1: 0, amount0Min: 0, amount1Min: 0});
+        vm.startPrank(alice);
+        IERC20(CNPY).approve(address(mgr), type(uint256).max);
+        IERC20(USDG).approve(address(mgr), type(uint256).max);
+        uint256 id = mgr.openLadder(cnpyUsdg, r, 2, tick - 30_000, tick + 30_000, block.timestamp + 60);
+        vm.stopPrank();
+        OrdoLadderManagerV4.Ladder memory l = mgr.ladder(id);
+        assertEq(l.openBins, 3);
+        assertGt(l.deposited0, 0, "token side went in");
+        assertGt(l.deposited1, 0, "USDG side went in");
+        assertEq(haveTok - IERC20(CNPY).balanceOf(alice), l.deposited0, "exactly the token the pool took left Alice");
+        assertEq(haveUsdg - IERC20(USDG).balanceOf(alice), l.deposited1, "exactly the USDG the pool took left Alice");
+        assertEq(IERC20(CNPY).balanceOf(address(mgr)), 0, "no token left in the manager");
+        assertEq(IERC20(USDG).balanceOf(address(mgr)), 0, "no USDG left in the manager");
+        assertEq(address(mgr).balance, 0);
+        (uint160 a0,,) = mgr.permit2().allowance(address(mgr), CNPY, POSM);
+        (uint160 a1,,) = mgr.permit2().allowance(address(mgr), USDG, POSM);
+        assertEq(a0, 0, "Permit2 grant for the token cleared");
+        assertEq(a1, 0, "Permit2 grant for USDG cleared");
+
+        // Trade through it both ways, collect, close.
+        vm.startPrank(whale);
+        IERC20(USDG).transfer(address(swapper), 30_000e6);
+        swapper.swapExactIn(cnpyUsdg, false, 30_000e6);
+        IERC20(CNPY).transfer(address(swapper), IERC20(CNPY).balanceOf(whale));
+        swapper.swapExactIn(cnpyUsdg, true, IERC20(CNPY).balanceOf(address(swapper)));
+        vm.stopPrank();
+        vm.prank(alice);
+        (uint256 f0, uint256 f1) = mgr.collect(id);
+        assertTrue(f0 > 0 || f1 > 0, "fees earned");
+        uint256 tokBefore = IERC20(CNPY).balanceOf(alice);
+        uint256 usdgBefore = IERC20(USDG).balanceOf(alice);
+        vm.prank(alice);
+        mgr.close(id);
+        assertGt(IERC20(CNPY).balanceOf(alice) + IERC20(USDG).balanceOf(alice), tokBefore + usdgBefore, "principal returned");
+        assertEq(mgr.ladder(id).openBins, 0);
+        assertEq(IERC20(CNPY).balanceOf(address(mgr)), 0);
+        assertEq(IERC20(USDG).balanceOf(address(mgr)), 0);
+    }
+
+    function test_tokenUsdgPool_refusesStrayValue() public onFork {
+        _buyCnpy(alice, 1_000e6);
+        int24 tick = _cnpyTick();
+        int24 mid = (tick / 300) * 300;
+        if (mid > tick) mid -= 300;
+        OrdoLadderManagerV4.Rung[] memory r = new OrdoLadderManagerV4.Rung[](1);
+        r[0] = OrdoLadderManagerV4.Rung({tickLower: mid - 3000, tickUpper: mid + 3300, amount0: IERC20(CNPY).balanceOf(alice), amount1: 500e6, amount0Min: 0, amount1Min: 0});
+        vm.startPrank(alice);
+        IERC20(CNPY).approve(address(mgr), type(uint256).max);
+        IERC20(USDG).approve(address(mgr), type(uint256).max);
+        vm.expectRevert(OrdoLadderManagerV4.ETHNotAccepted.selector);
+        mgr.openLadder{value: 0.1 ether}(cnpyUsdg, r, 0, tick - 30_000, tick + 30_000, block.timestamp + 60);
+        vm.stopPrank();
+    }
+
     function test_open_takesExactlyWhatPreviewSaid() public onFork {
         int24 tick = _tick();
         OrdoLadderManagerV4.Rung[] memory r = _rungs(tick);
