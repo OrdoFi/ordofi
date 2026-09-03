@@ -153,6 +153,30 @@ carry the Nitro node as a read replica, with the gateway in edge mode
 (`ORDO_EDGE_ORIGIN`) in front of it, so that European reads never cross the
 Atlantic and only sends do — and those must, because the sequencer is in the US.
 
+## Outage, 3 Sep 21:50–22:36 UTC: the Worker's free tier
+
+What happened: one client (a Railway host, user agent `node`, the Scalar
+indexer's header backfill) sent ~328k requests in the 20:00 UTC hour at ~90/s,
+anonymously. The gateway served it up to its 3,000/min/IP limit and rate-limited
+14k more; upstream p99 went from ~1 s to 2 s for everyone and 33k hedges fired
+(1.4k won). The Cloudflare Worker was on the Workers Free plan, which allows
+100k requests a day and then does not degrade but blocks the route: from
+~21:50 UTC every request to rpc.ordofi.network answered `429 error code: 1027`,
+from 22:00 all of them. Restored at 22:36 UTC by deleting the Worker
+(`wrangler delete`), which put traffic straight back on the origin.
+
+What changed (`77b4ebe`): an anonymous address may hold 16 upstream requests in
+flight (excess waits behind its own for 2 s, then -32005), and hedges are
+budgeted to 10% of hedgeable reads over a rolling 10 s window. Measured
+locally: 40 concurrent reads from one address all succeed, serialized; 200
+concurrent get 176 through and 24 refused.
+
+What must happen before the Worker returns: Workers Paid on the Cloudflare
+account (Compute → Plans; $5/month, 10M requests included, no daily cut-off).
+Then `node <wrangler> deploy` from `deploy/edge-worker`; `npx` hangs on this
+machine, run the cached binary under `~/.npm/_npx/*/node_modules/wrangler/bin/wrangler.js`
+directly. Do not deploy it on the free tier again.
+
 ## The Nitro node: what is actually there
 
 `deploy/nitro-node/README.md` was written for Vultr bare metal in Chicago. The
