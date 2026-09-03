@@ -363,7 +363,7 @@
     // ================= DETAIL =================
     const TFS = [[5, "5s"], [30, "30s"], [60, "1m"], [300, "5m"], [900, "15m"], [1800, "30m"], [3600, "1h"], [14400, "4h"], [43200, "12h"], [86400, "24h"]];
     const HOURS = { 5: 1, 30: 2, 60: 8, 300: 48, 900: 168, 1800: 336, 3600: 720, 14400: 2880, 43200: 6000, 86400: 9600 };
-    let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfSec = 900, chart, series, volume, minLine, maxLine;
+    let token = null, pools = [], pool = null, defaultPool = null, state = null, depth = null, plan = null, tfSec = 900, chart, series, volume, minLine, maxLine;
     let shape = "bidask", bins = 40, slippageBps = 100, minPct = -30, maxPct = 40, balances = null, replanT = null, supply = null, mode = "price", candlesQ = [], portfolio = null;
     // Ranges are quoted in market cap by default (as Delta does; a price with six zeros says little) once supply is known; a visitor's own choice is remembered.
     const chosenMode = localStorage.getItem("ordo.pools.mode");
@@ -412,11 +412,14 @@
         const st = await api(`/api/pools/state?pool=${pools[0].pool}&base=${tokenParam}`);
         token = { address: tokenParam, symbol: st.base.symbol, name: st.base.name, icon: st.base.icon, decimals: st.base.decimals };
       }
-      // Open on the pool asked for; else the token's busiest market if it is offered
-      // (even view-only — it is the price people mean); else the deepest pool that can be built into.
+      // Open on the pool asked for; else the deepest pool a position can actually be
+      // built into (a launchpad's hooked pool may be the busiest market, but its hook
+      // refuses every mint but its own, and nobody comes here to look at a disabled
+      // button); else a buildable pool that is still empty; else the market itself, view-only.
       const want = new URLSearchParams(location.search).get("pool");
-      const main = (await tokenRow())?.pool;
-      pool = pools.find((p) => p.pool === want)?.pool ?? pools.find((p) => p.pool === main)?.pool ?? (pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools[0]).pool;
+      const buildable = pools.filter((p) => p.buildable !== false);
+      defaultPool = (buildable.find((p) => BigInt(p.liquidity) > 0n) ?? buildable[0] ?? pools[0]).pool;
+      pool = pools.find((p) => p.pool === want)?.pool ?? defaultPool;
 
       $("root").innerHTML = `
         <div id="lq-shell"></div>
@@ -565,7 +568,7 @@
 
     async function selectPool(p) {
       pool = p;
-      history.replaceState(null, "", `/pools/${token.address}${p !== pools[0].pool ? `?pool=${p}` : ""}`);
+      history.replaceState(null, "", `/pools/${token.address}${p !== defaultPool ? `?pool=${p}` : ""}`);
       try { state = await api(`/api/pools/state?pool=${pool}&base=${token.address}`); }
       catch (e) {
         // A pool that cannot be read (never initialised, RPC down) is shown as such rather than as a blank page.
@@ -582,7 +585,7 @@
       $("go").disabled = !canBuild();
       if (!canBuild()) {
         const other = pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools.find((p) => p.buildable !== false);
-        $("preview").innerHTML = `This pool runs a V4 hook${state.dynamicFee ? " that sets its own fee" : ""}. A hook can change or refuse what happens on a mint, so OrdoFi shows this market but does not build into it.${other ? ` <a href="#" id="pick-buildable" style="color:var(--accent)">Build in ${esc(token.symbol)}/${other.quoteSymbol} ${fmtFee(other)}${other.kind === "v4" ? " V4" : ""} instead →</a>` : " None of this token's other pools can be built into yet."}`;
+        $("preview").innerHTML = `This pool is run by a V4 hook${state.dynamicFee ? " that sets its own fee" : ""}. A hook decides who may add liquidity, and launchpad hooks refuse everyone but themselves — so no one can build into this pool, here or anywhere. OrdoFi shows it for its price.${other ? ` <a href="#" id="pick-buildable" style="color:var(--accent)">Build in ${esc(token.symbol)}/${other.quoteSymbol} ${fmtFee(other)}${other.kind === "v4" ? " V4" : ""} instead →</a>` : " None of this token's other pools can be built into yet."}`;
         $("pick-buildable")?.addEventListener("click", (e) => { e.preventDefault(); selectPool(other.pool); });
         $("go").textContent = "View only";
       } else if ($("go").textContent === "View only") $("go").textContent = wallet.account ? "Build position" : "Connect wallet";
