@@ -157,6 +157,142 @@ export class MicroCache {
 }
 
 /**
+ * How many requests one client may have waiting on the upstream at once.
+ *
+ * The per-minute limit bounds how much a client sends; it says nothing about
+ * how much of the upstream it occupies at any moment. One backfill script at
+ * 90 requests/s stayed under 3,000/min per IP for long stretches while holding
+ * dozens of upstream connections, and every wallet behind the same gateway
+ * saw its p99 go from 1 s to 2 s. A wallet holds one or two requests in
+ * flight; a dapp polling hard, perhaps ten. Above the cap a client's requests
+ * wait for one of its own to finish — a batch of forty eth_calls is legitimate
+ * and simply runs sixteen at a time — and only a client that keeps the cap
+ * full for longer than `maxWaitMs` is refused. The upstream stays shared
+ * either way: what one address can occupy is bounded.
+ */
+export class InflightCap {
+  private counts = new Map<string, number>();
+  private waiters = new Map<string, (() => void)[]>();
+
+  constructor(
+    private readonly max: number,
+    private readonly maxWaitMs = 2_000,
+  ) {}
+
+  /**
+   * Take a slot for `key`, waiting up to maxWaitMs for one; null if none came.
+   * Call the returned function when the request is done.
+   */
+  async acquire(key: string): Promise<(() => void) | null> {
+    if (this.max <= 0) return () => {};
+    if ((this.counts.get(key) ?? 0) < this.max) {
+      this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
+      return this.releaser(key);
+    }
+    // Wait to be handed a slot. The slot is transferred, not freed and
+    // re-taken, so the count never exceeds the cap even if a new request
+    // arrives between the release and the wake-up.
+    const got = await new Promise<boolean>((resolve) => {
+      const q = this.waiters.get(key) ?? [];
+      const wake = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        const list = this.waiters.get(key);
+        if (list) {
+          const i = list.indexOf(wake);
+          if (i >= 0) list.splice(i, 1);
+          if (!list.length) this.waiters.delete(key);
+        }
+        resolve(false);
+      }, this.maxWaitMs);
+      q.push(wake);
+      this.waiters.set(key, q);
+    });
+    return got ? this.releaser(key) : null;
+  }
+
+  private releaser(key: string): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const q = this.waiters.get(key);
+      const next = q?.shift();
+      if (q && !q.length) this.waiters.delete(key);
+      if (next) {
+        next(); // slot passes to the longest waiter; count unchanged
+        return;
+      }
+      const m = (this.counts.get(key) ?? 1) - 1;
+      if (m <= 0) this.counts.delete(key);
+      else this.counts.set(key, m);
+    };
+  }
+
+  inflight(key: string): number {
+    return this.counts.get(key) ?? 0;
+  }
+
+  waiting(key: string): number {
+    return this.waiters.get(key)?.length ?? 0;
+  }
+}
+
+/**
+ * Whether a hedge may be fired right now.
+ *
+ * A hedge is a second upstream call for the same read; useful when the
+ * primary is occasionally slow, harmful when it is slow because it is
+ * saturated, since then every hedge adds to the load that made it slow. The
+ * budget is the classic one: over a rolling window, hedges may be at most
+ * `ratio` of the reads, with a small floor so quiet periods still hedge. At
+ * 17% of 200k reads hedged in one evening — 33k extra upstream calls, of
+ * which 1.4k won — the answer should have been "no" long before it was.
+ */
+export class HedgeBudget {
+  private buckets: { at: number; reads: number; hedges: number }[] = [];
+
+  constructor(
+    private readonly ratio = 0.1,
+    private readonly floorPerWindow = 20,
+    private readonly windowMs = 10_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  private current(): { at: number; reads: number; hedges: number } {
+    const t = Math.floor(this.now() / 1000) * 1000;
+    const last = this.buckets[this.buckets.length - 1];
+    if (last && last.at === t) return last;
+    const b = { at: t, reads: 0, hedges: 0 };
+    this.buckets.push(b);
+    const cutoff = t - this.windowMs;
+    while (this.buckets.length && this.buckets[0].at < cutoff) this.buckets.shift();
+    return b;
+  }
+
+  /** Record one read that could be hedged. */
+  read(): void {
+    this.current().reads++;
+  }
+
+  /** Whether a hedge may fire now; if so it is counted. */
+  tryHedge(): boolean {
+    this.current();
+    let reads = 0;
+    let hedges = 0;
+    for (const b of this.buckets) {
+      reads += b.reads;
+      hedges += b.hedges;
+    }
+    if (hedges >= this.floorPerWindow && hedges + 1 > reads * this.ratio) return false;
+    this.current().hedges++;
+    return true;
+  }
+}
+
+/**
  * Race a primary request against a hedge fired after `afterMs`. The first
  * fulfilled answer wins; the hedge is never fired if the primary settles first.
  * Rejections only propagate when every attempt has failed, and then the
@@ -167,7 +303,9 @@ export async function hedged<T>(
   primary: () => Promise<T>,
   hedge: () => Promise<T>,
   afterMs: number,
-  onEvent?: (e: "fired" | "won") => void,
+  onEvent?: (e: "fired" | "won" | "withheld") => void,
+  /** Asked at fire time; false means the primary is on its own (see HedgeBudget). */
+  mayHedge: () => boolean = () => true,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
@@ -177,6 +315,10 @@ export async function hedged<T>(
 
     const timer = setTimeout(() => {
       if (settled) return;
+      if (!mayHedge()) {
+        onEvent?.("withheld");
+        return;
+      }
       hedgeStarted = true;
       onEvent?.("fired");
       hedge().then(

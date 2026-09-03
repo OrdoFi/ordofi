@@ -72,6 +72,18 @@ export const CONFIG = {
    */
   anonSendRateLimit: Number(process.env.ORDO_ANON_SEND_RATE_LIMIT ?? 60),
   /**
+   * Upstream requests one anonymous IP may have in flight at once (see
+   * InflightCap). A wallet holds one or two; a hard-polling dapp perhaps ten.
+   * A backfill script holding fifty is what this stops. 0 disables.
+   */
+  anonMaxInflight: Number(process.env.ORDO_ANON_MAX_INFLIGHT ?? 16),
+  /**
+   * Hedges as a share of hedgeable reads over a rolling 10 s window (see
+   * HedgeBudget). Above this the primary is on its own, because a primary that
+   * is slow for everyone is saturated, not unlucky.
+   */
+  hedgeBudgetRatio: Number(process.env.ORDO_HEDGE_BUDGET ?? 0.1),
+  /**
    * How long an idempotent read may wait on the primary upstream before the
    * same request is hedged to the next one. The median upstream answer is
    * ~80 ms; this only ever fires on the slow tail.

@@ -8,7 +8,18 @@ import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
-import { BLOCK_MS, IDEMPOTENT_READS, MicroCache, cacheKey, cacheTtlMs, clientIp, hedged, staticAnswer } from "./fastpath.js";
+import {
+  BLOCK_MS,
+  HedgeBudget,
+  IDEMPOTENT_READS,
+  InflightCap,
+  MicroCache,
+  cacheKey,
+  cacheTtlMs,
+  clientIp,
+  hedged,
+  staticAnswer,
+} from "./fastpath.js";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { callOrigin, forwardHeaders, type OriginReply } from "./edge.js";
 
@@ -16,6 +27,8 @@ const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
 const limiter = new RateLimiter();
 const sendLimiter = new RateLimiter();
+const inflight = new InflightCap(CONFIG.anonMaxInflight);
+const hedgeBudget = new HedgeBudget(CONFIG.hedgeBudgetRatio);
 const cache = new MicroCache();
 
 // Self-serve keys minted by the portal live in the shared index, hashed. The
@@ -78,11 +91,13 @@ async function fetchUpstream(method: string, params: unknown[]): Promise<unknown
   if (!IDEMPOTENT_READS.has(method) || urls.length < 2 || CONFIG.hedgeAfterMs <= 0) {
     return rpcFetch(method, params);
   }
+  hedgeBudget.read();
   return hedged(
     () => rpcFetch(method, params),
     () => rpcOnce(urls[1], method, params),
     CONFIG.hedgeAfterMs,
-    (ev) => metrics.inc(ev === "fired" ? "hedge_fired_total" : "hedge_won_total"),
+    (ev) => metrics.inc(`hedge_${ev}_total`),
+    () => hedgeBudget.tryHedge(),
   );
 }
 
@@ -408,6 +423,22 @@ const server = createServer((req, res) => {
           };
         }
 
+        // Concurrency, not just rate: an anonymous client may hold only so
+        // many upstream requests at once, so one script cannot occupy the
+        // upstream that every wallet here shares. Beyond the cap its requests
+        // queue behind its own for up to two seconds, then are refused.
+        const slot = auth === "anon" ? await inflight.acquire(`anon:${ip}`) : () => {};
+        if (!slot) {
+          metrics.inc("rpc_inflight_limited_total", { key: "anon" });
+          return {
+            jsonrpc: "2.0",
+            id: msg.id,
+            error: {
+              code: -32005,
+              message: `too many concurrent requests from this address (${CONFIG.anonMaxInflight} in flight for over 2s); slow down`,
+            },
+          };
+        }
         try {
           const result = await dispatch(
             method,
@@ -423,6 +454,8 @@ const server = createServer((req, res) => {
             id: msg.id,
             error: { code: e.code ?? -32000, message: e.message, data: e.data },
           };
+        } finally {
+          slot();
         }
       }),
     );
@@ -473,7 +506,7 @@ server.listen(CONFIG.port, () => {
   console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon}`);
   console.log(`OrdoFi gateway | GET /health /metrics /metrics.json`);
   console.log(
-    `OrdoFi gateway | fast path: chainId/net_version local, head cached ${BLOCK_MS}ms, fees 1s, mined receipts 10m; hedged reads after ${CONFIG.hedgeAfterMs}ms across ${rpcUrls().length} upstream(s); anon ${CONFIG.anonRateLimit} upstream reads + ${CONFIG.anonSendRateLimit} sends /min/IP`,
+    `OrdoFi gateway | fast path: chainId/net_version local, head cached ${BLOCK_MS}ms, fees 1s, mined receipts 10m; hedged reads after ${CONFIG.hedgeAfterMs}ms across ${rpcUrls().length} upstream(s), at most ${Math.round(CONFIG.hedgeBudgetRatio * 100)}% of reads; anon ${CONFIG.anonRateLimit} upstream reads + ${CONFIG.anonSendRateLimit} sends /min/IP, ${CONFIG.anonMaxInflight} in flight/IP`,
   );
   console.log(
     `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo`,

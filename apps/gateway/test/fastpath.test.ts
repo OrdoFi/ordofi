@@ -204,3 +204,61 @@ test("the anonymous limit is keyed on the wallet, not the proxy in front of it",
     "a client-supplied x-forwarded-for prefix cannot pick its own key",
   );
 });
+
+test("the in-flight cap serializes one client's excess and refuses only a client that keeps it full", async () => {
+  const { InflightCap } = await import("../src/fastpath.ts");
+  const cap = new InflightCap(2, 200);
+  const a = await cap.acquire("ip");
+  const b = await cap.acquire("ip");
+  assert.ok(a && b);
+  assert.equal(cap.inflight("ip"), 2);
+  let thirdGot: unknown = "pending";
+  const third = cap.acquire("ip").then((r) => (thirdGot = r));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(thirdGot, "pending", "waits rather than refuses");
+  assert.equal(cap.waiting("ip"), 1);
+  a!();
+  await third;
+  assert.ok(typeof thirdGot === "function", "handed the freed slot");
+  assert.equal(cap.inflight("ip"), 2, "count never exceeds the cap");
+  // Another client is unaffected.
+  assert.ok(await cap.acquire("other"));
+  // A client that keeps the cap full past the wait is refused.
+  const fourth = await cap.acquire("ip");
+  assert.equal(fourth, null);
+  b!();
+  (thirdGot as () => void)();
+  assert.equal(cap.inflight("ip"), 0);
+});
+
+test("the hedge budget lets quiet periods hedge and stops a flood from doubling itself", async () => {
+  const { HedgeBudget } = await import("../src/fastpath.ts");
+  let t = 0;
+  const budget = new HedgeBudget(0.1, 5, 10_000, () => t);
+  // Quiet: a handful of slow reads may all hedge (the floor).
+  for (let i = 0; i < 5; i++) budget.read();
+  for (let i = 0; i < 5; i++) assert.equal(budget.tryHedge(), true);
+  assert.equal(budget.tryHedge(), false, "sixth of five reads: over the ratio and past the floor");
+  // Busy: 1,000 reads allow ~100 hedges, not 1,000.
+  for (let i = 0; i < 1000; i++) budget.read();
+  let fired = 0;
+  for (let i = 0; i < 1000; i++) if (budget.tryHedge()) fired++;
+  assert.ok(fired >= 90 && fired <= 101, `fired ${fired}`);
+  // The window rolls: 11 s later the past is forgotten.
+  t = 11_000;
+  budget.read();
+  assert.equal(budget.tryHedge(), true);
+});
+
+test("a withheld hedge leaves the primary on its own, success or failure", async () => {
+  const { hedged } = await import("../src/fastpath.ts");
+  const events: string[] = [];
+  const slow = () => new Promise<string>((r) => setTimeout(() => r("primary"), 40));
+  const v = await hedged(slow, async () => "hedge", 5, (e) => events.push(e), () => false);
+  assert.equal(v, "primary");
+  assert.deepEqual(events, ["withheld"]);
+  await assert.rejects(
+    hedged(() => new Promise((_, rej) => setTimeout(() => rej(new Error("down")), 30)), async () => "hedge", 5, undefined, () => false),
+    /down/,
+  );
+});
