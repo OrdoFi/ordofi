@@ -129,7 +129,7 @@
   <script type="module">
     import { wallet, rejected } from "/wallet.js";
     import { esc, usd, num, formatUnits, parseUnits } from "/ladders.js";
-    import { mountShell } from "/liquidity.js";
+    import { mountShell, drawSpark } from "/liquidity.js";
     const $ = (id) => document.getElementById(id);
     const EXPLORER = "https://robinhoodchain.blockscout.com";
     const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
@@ -199,11 +199,8 @@
     async function trend(s, cv) {
       if (!s || !cv) return;
       if (!sparkCache.has(s.token)) sparkCache.set(s.token, api(`/api/trade/candles?base=${s.token}&quote=eth&bucketSec=1800&hours=24`).then((d) => d.candles.map((x) => x.close)).catch(() => []));
-      const c = await sparkCache.get(s.token); if (c.length < 2) return;
-      const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...c), hi = Math.max(...c);
-      ctx.strokeStyle = c.at(-1) >= c[0] ? "#1e9e6a" : "#c0392b"; ctx.lineWidth = 2; ctx.beginPath();
-      c.forEach((v, i) => { const x = (i / (c.length - 1)) * W, y = H - 3 - ((v - lo) / (hi - lo || 1)) * (H - 6); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-      ctx.stroke();
+      const c = await sparkCache.get(s.token); if (c.length < 2 || !cv.isConnected) return;
+      drawSpark(cv, c, { lineWidth: 2, dot: false });
     }
 
     // ---- expanded stake

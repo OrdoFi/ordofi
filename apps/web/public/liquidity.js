@@ -80,6 +80,24 @@ export function skeletonRows(rows, cols) {
  * Sparkline with a soft area fill and a pulsing dot on the latest print — the
  * canvas draws the line, the dot is an element so it can animate cheaply.
  */
+/**
+ * Continue the current path through `pts` as a monotone cubic spline. Slopes are
+ * Fritsch–Carlson, so the curve never overshoots a local high or low — a price
+ * line must not draw a peak the market never printed.
+ */
+function curveThrough(ctx, pts) {
+  const n = pts.length; if (n < 3) { for (let i = 1; i < n; i++) ctx.lineTo(pts[i][0], pts[i][1]); return; }
+  const dx = [], dy = [], s = [];
+  for (let i = 0; i < n - 1; i++) { dx.push(pts[i + 1][0] - pts[i][0] || 1e-9); dy.push(pts[i + 1][1] - pts[i][1]); s.push(dy[i] / dx[i]); }
+  const m = [s[0]];
+  for (let i = 1; i < n - 1; i++) m.push(s[i - 1] * s[i] <= 0 ? 0 : (3 * (dx[i - 1] + dx[i])) / ((2 * dx[i] + dx[i - 1]) / s[i - 1] + (dx[i] + 2 * dx[i - 1]) / s[i]));
+  m.push(s[n - 2]);
+  for (let i = 0; i < n - 1; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], h = dx[i] / 3;
+    ctx.bezierCurveTo(x0 + h, y0 + m[i] * h, x1 - h, y1 - m[i + 1] * h, x1, y1);
+  }
+}
+
 export function drawSpark(cv, closes, { lineWidth = 2.5, dot = true } = {}) {
   if (!cv || closes.length < 2) return;
   const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...closes), hi = Math.max(...closes);
@@ -87,8 +105,8 @@ export function drawSpark(cv, closes, { lineWidth = 2.5, dot = true } = {}) {
   const pts = closes.map((v, i) => [(i / (closes.length - 1)) * W, H - 4 - ((v - lo) / (hi - lo || 1)) * (H - 8)]);
   ctx.clearRect(0, 0, W, H);
   const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, up ? "rgba(30,158,106,.22)" : "rgba(192,57,43,.22)"); g.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(pts[0][0], H); pts.forEach(([x, y]) => ctx.lineTo(x, y)); ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = col; ctx.lineWidth = lineWidth; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath(); pts.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke();
+  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(pts[0][0], H); ctx.lineTo(pts[0][0], pts[0][1]); curveThrough(ctx, pts); ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = lineWidth; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]); curveThrough(ctx, pts); ctx.stroke();
   if (!dot) return;
   const host = cv.parentElement; if (!host) return;
   if (getComputedStyle(host).position === "static") host.style.position = "relative";
