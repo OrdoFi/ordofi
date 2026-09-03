@@ -410,8 +410,8 @@
         <p>A Uniswap V4 pool of ETH and ${esc(token.symbol)}, no hook, at the fee you pick. Creating it costs gas only and opens it at the price ${esc(token.symbol)} trades at today; the first position is then placed on this page like any other.</p>
         <div class="shapes" style="margin-top:12px">${TIERS.map(([f, l, d]) => `<button class="shape" data-fee="${f}" ${have.has(f) ? "disabled title=\"already exists\"" : ""}><b>${l}</b><small style="display:block;color:var(--muted);margin-top:3px">${have.has(f) ? "exists" : d}</small></button>`).join("")}</div>
         <div class="hint" style="margin-top:14px">Starting price · USD per ${esc(token.symbol)}</div>
-        <div class="box"><input id="cp-price" inputmode="decimal" placeholder="loading…" /><span class="u" id="cp-src"></span></div>
-        <div class="hint" id="cp-hint">Taken from the busiest market. Change it only if you know better — the first swaps will pull the price to the market anyway.</div>
+        <div class="box"><input id="cp-price" inputmode="decimal" placeholder="loading…" /><span class="u">USD</span></div>
+        <div class="hint" id="cp-src">Taken from the busiest market. Change it only if you know better — the first swaps pull the price to the market anyway.</div>
         <div class="foot"><button id="cp-cancel">Cancel</button><button class="go" id="cp-go" disabled>Create pool</button></div>
         <div class="res" id="cp-res"></div>`);
       const res = (h, bad) => { const el = b.querySelector("#cp-res"); el.innerHTML = h; el.className = "res" + (bad ? " bad" : ""); };
@@ -426,10 +426,10 @@
           const p = await api(`/api/pools/create-plan?token=${token.address}&fee=${fee}${price ? `&price=${price}` : ""}`);
           if (my !== seq) return;
           plan = p;
-          if (!givenUsd) { b.querySelector("#cp-price").value = p.priceUsd != null ? fmtPx(p.priceUsd) : ""; b.querySelector("#cp-src").textContent = p.priceSource ? `from ${p.priceSource}` : ""; }
+          if (!givenUsd) { b.querySelector("#cp-price").value = p.priceUsd != null ? fmtPx(p.priceUsd) : ""; if (p.priceSource) b.querySelector("#cp-src").textContent = `Taken from ${p.priceSource}. Change it only if you know better — the first swaps pull the price to the market anyway.`; }
           res(`Opens at ${fmtPx(p.price)} ETH${p.priceUsd != null ? ` (${usd(p.priceUsd, 6)})` : ""} per ${esc(token.symbol)} · tick spacing ${p.tickSpacing} · sent to the Uniswap V4 PoolManager`);
           b.querySelector("#cp-go").disabled = false;
-        } catch (e) { if (my === seq) { res(esc(e.message), true); if (!givenUsd) { b.querySelector("#cp-price").placeholder = "enter a price"; b.querySelector("#cp-src").textContent = ""; } } }
+        } catch (e) { if (my === seq) { res(esc(e.message), true); if (!givenUsd) { b.querySelector("#cp-price").placeholder = "enter a price"; b.querySelector("#cp-src").textContent = "Nothing trades this token yet, so name the opening price yourself."; } } }
       };
       paint(); load();
       b.querySelectorAll(".shape:not([disabled])").forEach((s) => s.addEventListener("click", () => { fee = Number(s.dataset.fee); paint(); load(Number(b.querySelector("#cp-price").value.replace(/,/g, "")) || null); }));

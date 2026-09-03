@@ -664,21 +664,18 @@ export async function poolCreatePlan({ token, fee, price = null }) {
   const info = await tokenInfo(token);
   // Where the price comes from: the caller, else the token's busiest market.
   let ethPerToken = price != null ? Number(price) : null, source = price != null ? "given" : null;
+  const usd = await ethUsd().catch(() => null);
   if (ethPerToken == null) {
     const row = (await poolsList(STORE)).all.find((r) => r.token === token);
-    const st = row?.pool ? await poolState(row.pool, token).catch(() => null) : null;
-    if (st?.price) {
-      const q = lower(st.quote.address);
-      const usd = await ethUsd().catch(() => null);
-      ethPerToken = q === WETH ? st.price : q === USDG && usd ? st.price / usd : null;
-      source = ethPerToken != null ? `${info.symbol}/${st.quote.symbol}${st.kind === "v4" ? " V4" : " V3"}${st.hooks ? " (hooked)" : ""}` : null;
+    if (row?.priceUsd && usd) {
+      ethPerToken = row.priceUsd / usd;
+      source = `${info.symbol}/${row.quote}${row.kind === "v4" ? " V4" : " V3"}, the busiest market`;
     }
   }
   if (!(ethPerToken > 0)) throw new Error("This token has no market to take a starting price from; enter one.");
   // token1 (the token) per token0 (ETH), raw units: 10^(dToken−18) / (ETH per token).
   const raw = 10 ** (info.decimals - 18) / ethPerToken;
   const { key, sqrtPriceX96, data } = initializeCalldata(token, fee, raw);
-  const usd = await ethUsd().catch(() => null);
   return {
     token, symbol: info.symbol, fee, tickSpacing, key, sqrtPriceX96: sqrtPriceX96.toString(),
     price: ethPerToken, priceUsd: usd ? ethPerToken * usd : null, priceSource: source,
