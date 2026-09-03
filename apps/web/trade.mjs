@@ -555,7 +555,7 @@ const moneyRank = (a) => (a === USDG ? 3 : a === WETH ? 2 : 1);
 let marketsCache = null; // { at, data }
 
 export async function tradeMarkets(store) {
-  if (marketsCache && Date.now() - marketsCache.at < 20_000) return marketsCache.data;
+  if (marketsCache && Date.now() - marketsCache.at < 60_000) return marketsCache.data;
   const now = Math.floor(Date.now() / 1000);
   const day = store?.marketStats?.(now - 86_400) ?? [];
   const hour = new Map((store?.marketStats?.(now - 3_600) ?? []).map((r) => [r.pool, r]));

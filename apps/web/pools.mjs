@@ -277,7 +277,7 @@ const isMoney = (a) => a === WETH || a === USDG;
  * Fees are volume times the pool's fee tier; that is what LPs split.
  */
 export async function poolsList(store) {
-  return cachedSWR("list", 30_000, async () => {
+  return cachedSWR("list", 60_000, async () => {
     const [markets, tokens] = await Promise.all([tradeMarkets(store), tradeTokens(store)]);
     const tokenBy = new Map(tokens.map((t) => [t.address, t]));
     const byToken = new Map();
@@ -392,9 +392,12 @@ export async function poolsRow(store, token) {
 export function warmPoolsList(store) {
   const tick = () => poolsList(store).catch(() => {});
   const index = () => searchIndex(store).catch(() => {});
+  // The list is stale-while-revalidate, so a visitor never waits on a rebuild; once a
+  // minute is as fresh as a 24h ranking needs, and the market query runs on the
+  // event loop, so every rebuild is time no request is being answered.
   tick().then(index);
-  setInterval(tick, 20_000).unref?.();
-  setInterval(index, 60_000).unref?.();
+  setInterval(tick, 60_000).unref?.();
+  setInterval(index, 120_000).unref?.();
 }
 
 // --------------------------------------------------------------- search

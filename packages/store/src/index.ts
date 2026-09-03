@@ -182,6 +182,10 @@ export class OrdoStore {
         last_block INTEGER NOT NULL,
         PRIMARY KEY (pool, bucket)
       );
+      -- The market list asks "every pool's day" in one query. Ordered by time
+      -- and carrying what that query sums, so it reads the last day's slice of
+      -- the index, not the whole table — which V4 has grown past eight million rows.
+      CREATE INDEX IF NOT EXISTS candles_by_time ON candles (bucket, pool, high, low, vol0, vol1, swaps);
 
       -- The last couple of hours of individual V3 swaps, per pool: the trades
       -- tape. Public upstreams refuse eth_getLogs beyond ~128 blocks (13 s on
@@ -696,7 +700,9 @@ export class OrdoStore {
    * One row per pool that traded since `sinceBucket`: first open, last close,
    * extremes, volume and swap count over the window. This is what a market
    * list needs, and reading it here means the terminal can rank hundreds of
-   * pairs without a single RPC call.
+   * pairs without a single RPC call. The planner left alone walks the whole
+   * table in primary-key order to save the GROUP BY a sort — a minute over
+   * eight million rows; the time index is named so the day's slice is read instead.
    */
   marketStats(sinceBucket: number): {
     pool: string; open: number; high: number; low: number; close: number;
@@ -708,7 +714,7 @@ export class OrdoStore {
           `WITH w AS (
              SELECT pool, MIN(bucket) fb, MAX(bucket) lb, MAX(high) high, MIN(low) low,
                     SUM(vol0) vol0, SUM(vol1) vol1, SUM(swaps) swaps
-             FROM candles WHERE bucket >= ? GROUP BY pool)
+             FROM candles INDEXED BY candles_by_time WHERE bucket >= ? GROUP BY pool)
            SELECT w.pool, f.open, w.high, w.low, l.close, w.vol0, w.vol1, w.swaps, w.fb, w.lb
            FROM w
            JOIN candles f ON f.pool = w.pool AND f.bucket = w.fb
