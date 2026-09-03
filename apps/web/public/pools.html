@@ -150,7 +150,9 @@
     .sdesc { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin-top: 10px; min-height: 38px; }
     .sdesc canvas { width: 100%; height: 44px; display: block; margin-bottom: 8px; }
     label.f { display: block; font-family: var(--mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin: 16px 0 6px; }
-    .range2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .range2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+    .range2 > div { min-width: 0; }
+    .box input { width: 100%; }
     .box { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); padding: 9px 11px; }
     .box input { flex: 1; min-width: 0; border: none; background: transparent; font-family: var(--mono); font-size: 14px; color: var(--text); outline: none; }
     .box .u { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: none; }
@@ -345,6 +347,9 @@
     const HOURS = { 5: 1, 30: 2, 60: 8, 300: 48, 900: 168, 1800: 336, 3600: 720, 14400: 2880, 43200: 6000, 86400: 9600 };
     let token = null, pools = [], pool = null, state = null, depth = null, plan = null, tfSec = 900, chart, series, volume, minLine, maxLine;
     let shape = "bidask", bins = 40, slippageBps = 100, minPct = -30, maxPct = 40, balances = null, replanT = null, supply = null, mode = "price", candlesQ = [], portfolio = null;
+    // Ranges are quoted in market cap by default (as Delta does; a price with six zeros says little) once supply is known; a visitor's own choice is remembered.
+    const chosenMode = localStorage.getItem("ordo.pools.mode");
+    const useMode = (m) => { mode = m; document.querySelectorAll("#mode button").forEach((x) => x.classList.toggle("on", x.dataset.m === m)); applyMode(); };
     // Everything on the chart is in display units: USD per token, or USD market cap.
     const factor = () => (state?.quote.usdPerToken ?? 0) * (mode === "mc" && supply ? supply : 1);
     const disp = (quotePrice) => quotePrice * factor();
@@ -454,7 +459,7 @@
       $("max-quote").addEventListener("click", () => { if (balances?.quote != null) { $("amt-quote").value = Math.max(0, balances.quote - (state.quote.address === WETH ? 0.003 : 0)).toFixed(6).replace(/0+$/, "").replace(/\.$/, ""); replan(); } });
       $("go").addEventListener("click", build);
       document.querySelectorAll("#tfs button").forEach((b) => b.addEventListener("click", () => { tfSec = Number(b.dataset.tf); document.querySelectorAll("#tfs button").forEach((x) => x.classList.toggle("on", x === b)); loadCandles(); }));
-      document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => { if (b.dataset.m === "mc" && !supply) return; mode = b.dataset.m; document.querySelectorAll("#mode button").forEach((x) => x.classList.toggle("on", x === b)); applyMode(); }));
+      document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => { if (b.dataset.m === "mc" && !supply) return; localStorage.setItem("ordo.pools.mode", b.dataset.m); useMode(b.dataset.m); }));
       mountShell($("lq-shell"), { page: "pools" });
       initChart();
       renderGroups();
@@ -568,6 +573,7 @@
       supply = state.base.totalSupply ?? supply;
       $("s-mc").textContent = usd(state.marketCapUsd); $("s-liq").textContent = usd(state.tvlUsd);
       $("mode").querySelector("[data-m=mc]").style.opacity = supply ? 1 : .35;
+      if (supply && mode !== "mc" && chosenMode !== "price") useMode("mc");
       loadStats();
       syncRange();
       loadCandles(); loadDepth(); loadBalances(); replan();
@@ -577,7 +583,7 @@
     async function loadStats() {
       try {
         const row = await tokenRow();
-        if (!supply && row?.marketCapUsd && row?.priceUsd) { supply = row.marketCapUsd / row.priceUsd; $("mode").querySelector("[data-m=mc]").style.opacity = 1; }
+        if (!supply && row?.marketCapUsd && row?.priceUsd) { supply = row.marketCapUsd / row.priceUsd; $("mode").querySelector("[data-m=mc]").style.opacity = 1; if (mode !== "mc" && chosenMode !== "price") useMode("mc"); }
         if (!state?.marketCapUsd && row?.marketCapUsd) $("s-mc").textContent = usd(row.marketCapUsd);
         $("s-chg").textContent = pct(row?.change24); $("s-chg").className = "v " + cls(row?.change24);
         $("s-vol").textContent = usd(row?.volume24Usd); $("s-fees").textContent = usd(row?.fees24Usd);
