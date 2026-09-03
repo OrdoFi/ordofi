@@ -687,7 +687,23 @@ export class OrdoStore {
     ).map((r) => ({ txHash: r.tx_hash, submittedAt: Number(r.submitted_at), sender: r.sender, keyLabel: r.key_label, via: r.via, status: r.status == null ? null : Number(r.status), volumeUsd: r.volume_usd }));
   }
 
-  /** How far back the tape goes for one pool, or null if it has none. */
+  /**
+   * When a pool's tape begins — its age on the list. MIN over the primary key
+   * is one index seek, and the answer is kept: a first candle only ever moves
+   * back (a backfill), never forward, so a value read once serves for the hour.
+   */
+  private readonly firstBucketCache = new Map<string, { v: number | null; at: number }>();
+  candleFirst(pool: string): number | null {
+    const k = pool.toLowerCase();
+    const c = this.firstBucketCache.get(k);
+    if (c && Date.now() - c.at < 3_600_000) return c.v;
+    const r = this.db.prepare(`SELECT MIN(bucket) f FROM candles WHERE pool = ?`).get(k) as { f?: number } | undefined;
+    const v = r?.f == null ? null : Number(r.f);
+    this.firstBucketCache.set(k, { v, at: Date.now() });
+    return v;
+  }
+
+  /** How far back the tape goes for one pool, or null if it has none. Counts every row; use `candleFirst` for age alone. */
   candleCoverage(pool: string): { from: number; to: number; minutes: number } | null {
     const r = this.db
       .prepare(`SELECT MIN(bucket) f, MAX(bucket) t, COUNT(*) n FROM candles WHERE pool = ?`)
@@ -815,21 +831,35 @@ export class OrdoStore {
     };
   }
 
+  // A V4 pool's key never changes once initialised, so a row read once is kept
+  // for the life of the process; the market list asks for twenty thousand a minute.
+  private readonly v4RowCache = new Map<string, V4PoolRow>();
+
   v4Pool(poolId: string): V4PoolRow | null {
-    const r = this.db.prepare(`SELECT * FROM v4_pools WHERE pool_id = ?`).get(poolId.toLowerCase());
-    return r ? OrdoStore.v4Row(r) : null;
+    const k = poolId.toLowerCase();
+    const hit = this.v4RowCache.get(k);
+    if (hit) return hit;
+    const r = this.db.prepare(`SELECT * FROM v4_pools WHERE pool_id = ?`).get(k);
+    if (!r) return null;
+    const row = OrdoStore.v4Row(r);
+    this.v4RowCache.set(k, row);
+    return row;
   }
 
   /** Many keys at once, for the market list; unknown ids are simply absent. */
   v4PoolsByIds(poolIds: string[]): Map<string, V4PoolRow> {
     const out = new Map<string, V4PoolRow>();
-    const ids = [...new Set(poolIds.map((p) => p.toLowerCase()))];
-    for (let i = 0; i < ids.length; i += 500) {
-      const chunk = ids.slice(i, i + 500);
+    const missing: string[] = [];
+    for (const id of new Set(poolIds.map((p) => p.toLowerCase()))) {
+      const hit = this.v4RowCache.get(id);
+      if (hit) out.set(id, hit); else missing.push(id);
+    }
+    for (let i = 0; i < missing.length; i += 500) {
+      const chunk = missing.slice(i, i + 500);
       const rows = this.db
         .prepare(`SELECT * FROM v4_pools WHERE pool_id IN (${chunk.map(() => "?").join(",")})`)
         .all(...chunk) as any[];
-      for (const r of rows) out.set(r.pool_id, OrdoStore.v4Row(r));
+      for (const r of rows) { const row = OrdoStore.v4Row(r); this.v4RowCache.set(r.pool_id, row); out.set(r.pool_id, row); }
     }
     return out;
   }
@@ -856,8 +886,12 @@ export class OrdoStore {
     ).map(OrdoStore.v4Row);
   }
 
+  private v4CountCache: { n: number; at: number } | null = null;
   v4PoolCount(): number {
-    return Number((this.db.prepare(`SELECT COUNT(*) n FROM v4_pools`).get() as any)?.n ?? 0);
+    if (this.v4CountCache && Date.now() - this.v4CountCache.at < 60_000) return this.v4CountCache.n;
+    const n = Number((this.db.prepare(`SELECT COUNT(*) n FROM v4_pools`).get() as any)?.n ?? 0);
+    this.v4CountCache = { n, at: Date.now() };
+    return n;
   }
 
   /** The tape is a rolling window, not an archive; old buckets cost disk. */

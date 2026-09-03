@@ -10,6 +10,7 @@
   "dependencies": {
     "@ordofi/core": "*",
     "@ordofi/store": "*",
+    "sharp": "^0.34.5",
     "viem": "^2.21.0"
   }
 }

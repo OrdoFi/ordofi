@@ -335,8 +335,8 @@ export async function poolsList(store, windowSec = 86_400) {
     rows.forEach((r) => { const s = cache.get(`supply:${r.token}`)?.v; r.marketCapUsd = s != null && r.priceUsd ? Number(s) / 10 ** r.decimals * r.priceUsd : null; });
     // Age: first candle we have for its main pool.
     for (const r of rows) {
-      const cov = store?.candleCoverage?.(r.pool);
-      r.ageDays = cov ? Math.max(0, Math.floor((Date.now() / 1000 - cov.from) / 86_400)) : null;
+      const first = store?.candleFirst?.(r.pool) ?? store?.candleCoverage?.(r.pool)?.from ?? null;
+      r.ageDays = first ? Math.max(0, Math.floor((Date.now() / 1000 - first) / 86_400)) : null;
     }
     scheduleIconProbe(rows.filter((r) => !r.icon).map((r) => r.token));
     const all = rows.slice().sort((a, b) => b.volume24Usd - a.volume24Usd);
@@ -385,7 +385,7 @@ async function heroRow(store, all) {
       token: ORDO_TOKEN, symbol: st?.base.symbol ?? t?.symbol ?? "ORDO", name: st?.base.name ?? t?.name ?? "OrdoFi", icon: iconFor(ORDO_TOKEN), decimals: st?.base.decimals ?? 18,
       priceUsd: st?.priceUsd ?? null, change24: null, volume24Usd: 0, fees24Usd: 0, trades24: 0,
       pool: main?.pool ?? null, kind: main?.kind ?? "v4", quote: main?.quoteSymbol ?? "ETH", quotes: main ? [main.quoteSymbol] : [], venues: main ? [main.kind] : [], pools: pools.length,
-      marketCapUsd: st?.marketCapUsd ?? null, ageDays: store?.candleCoverage?.(main?.pool)?.from ? Math.floor((Date.now() / 1000 - store.candleCoverage(main.pool).from) / 86_400) : null,
+      marketCapUsd: st?.marketCapUsd ?? null, ageDays: main?.pool && store?.candleFirst?.(main.pool) ? Math.floor((Date.now() / 1000 - store.candleFirst(main.pool)) / 86_400) : null,
     };
   });
 }
@@ -469,13 +469,34 @@ const ICON_DIR = join(dirname(ICON_CACHE_FILE), "icons");
 const iconMiss = new Map(); // address → at
 const iconInflight = new Map();
 const IMAGE_TYPES = /^image\/(png|jpe?g|gif|webp|svg\+xml|avif)/;
+/**
+ * Avatars are shown at 28–48px; sources hand back 350KB PNGs. Everything is
+ * shrunk to 96px WebP (a few KB) before it is kept or served — eighty of them
+ * on the list page then cost less than one original did. SVGs pass through
+ * (already small, scale for free); if sharp is missing the original is served.
+ */
+let sharpP = null;
+const sharpLib = () => (sharpP ??= import("sharp").then((m) => m.default).catch(() => null));
+async function shrink(body, type) {
+  if (/svg/.test(type) || body.length < 6_000) return { type, body };
+  const sharp = await sharpLib();
+  if (!sharp) return { type, body };
+  try {
+    const out = await sharp(body, { animated: false }).resize(96, 96, { fit: "cover" }).webp({ quality: 82 }).toBuffer();
+    return { type: "image/webp", body: out };
+  } catch { return { type, body }; }
+}
 export async function iconImage(address) {
   const a = lower(address);
   if (!/^0x[0-9a-f]{40}$/.test(a)) return null;
   const file = join(ICON_DIR, a);
   try {
     const type = readFileSync(`${file}.type`, "utf8");
-    return { type, body: readFileSync(file) };
+    const body = readFileSync(file);
+    // An original kept before shrinking existed is shrunk once, and the small one kept from then on.
+    const small = await shrink(body, type);
+    if (small.body !== body) { try { writeFileSync(file, small.body); writeFileSync(`${file}.type`, small.type); } catch { /* memory only */ } }
+    return small;
   } catch { /* not on disk yet */ }
   const missAt = iconMiss.get(a);
   if (missAt && Date.now() - missAt < NEG_ICON_TTL) return null;
@@ -489,11 +510,12 @@ export async function iconImage(address) {
         const r = await fetch(u, { signal: AbortSignal.timeout(8_000), headers: { "user-agent": UA["user-agent"], accept: "image/*" }, redirect: "follow" });
         const type = (r.headers.get("content-type") ?? "").split(";")[0].trim();
         if (!r.ok || !IMAGE_TYPES.test(type)) { try { await r.body?.cancel(); } catch { /* drained */ } continue; }
-        const body = Buffer.from(await r.arrayBuffer());
-        if (!body.length || body.length > 2_000_000) continue;
-        try { mkdirSync(ICON_DIR, { recursive: true }); writeFileSync(file, body); writeFileSync(`${file}.type`, type); } catch { /* read-only data dir: memory only */ }
+        const raw = Buffer.from(await r.arrayBuffer());
+        if (!raw.length || raw.length > 4_000_000) continue;
+        const { type: t2, body } = await shrink(raw, type);
+        try { mkdirSync(ICON_DIR, { recursive: true }); writeFileSync(file, body); writeFileSync(`${file}.type`, t2); } catch { /* read-only data dir: memory only */ }
         if (!iconCache.get(a)?.url) { iconCache.set(a, { url: u, at: Date.now() }); persistIcons(); }
-        return { type, body };
+        return { type: t2, body };
       } catch { /* next source */ }
     }
     iconMiss.set(a, Date.now());
