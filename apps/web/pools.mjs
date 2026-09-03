@@ -480,10 +480,13 @@ export async function poolState(pool, baseToken) {
     cached(`supply:${base}`, 3_600_000, async () => { const s = await call(base, ERC20_ABI, "totalSupply").catch(() => null); if (s == null) cache.delete(`supply:${base}`); return s; }),
     batchCall([{ to: info.token0, abi: ERC20_ABI, fn: "balanceOf", args: [getAddress(pool)] }, { to: info.token1, abi: ERC20_ABI, fn: "balanceOf", args: [getAddress(pool)] }]),
   ]);
+  // A pool the factory created but nobody initialised has no price yet; a
+  // ladder cannot be aimed at a price that does not exist.
+  if (BigInt(slot0[0]) === 0n) throw new Error("This pool exists but has never been initialised — it has no price yet, so nothing can be built in it.");
   const tick = Number(slot0[1]);
   const raw = tickToPrice(tick); // token1 per token0, raw units
   const scale = 10 ** (bInfo.decimals - qInfo.decimals);
-  const price = base === info.token0 ? raw * scale : 1 / (raw * scale); // quote per base, whole units
+  const price = base === info.token0 ? raw * scale : scale / raw; // quote per base, whole units
   const quoteUsd = quote === WETH ? usd : quote === USDG ? 1 : qInfo.usdPerToken;
   const priceUsd = quoteUsd ? price * quoteUsd : null;
   const supplyWhole = supply != null ? Number(supply) / 10 ** bInfo.decimals : null;
@@ -520,7 +523,7 @@ async function poolStateV4(poolId, baseToken) {
   ]);
   const raw = tickToPrice(s.tick);
   const scale = 10 ** (bInfo.decimals - qInfo.decimals);
-  const price = base === token0 ? raw * scale : 1 / (raw * scale);
+  const price = base === token0 ? raw * scale : scale / raw;
   const quoteUsd = quote === WETH ? usd : quote === USDG ? 1 : qInfo.usdPerToken;
   const priceUsd = quoteUsd ? price * quoteUsd : null;
   const supplyWhole = supply != null ? Number(supply) / 10 ** bInfo.decimals : null;
@@ -642,7 +645,7 @@ export async function poolDepth(pool, { spanTicks = 3000, buckets = 60, base = n
       const usd = (Number(amts.amount0) / scale0) * (p0Usd ?? 0) + (Number(amts.amount1) / scale1) * (p1Usd ?? 0);
       const rawMid = tickToPrice((a + b) / 2);
       const sc = 10 ** (st.base.decimals - st.quote.decimals);
-      const price = st.base.isToken0 ? rawMid * sc : 1 / (rawMid * sc);
+      const price = st.base.isToken0 ? rawMid * sc : sc / rawMid;
       bars.push({ tickLower: Math.round(a), tickUpper: Math.round(b), price, liquidity: avg.toString(), usd });
     }
     return { pool, kind: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd, bars, initialisedTicks: initialised.length };
@@ -682,7 +685,7 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
   const st = await poolState(pool, base);
   const sc = 10 ** (st.base.decimals - st.quote.decimals);
   // Back to raw token1/token0 ticks. For an inverted pool a higher quote price is a lower tick.
-  const toTick = (p) => priceToTick(st.base.isToken0 ? p / sc : 1 / (p * sc));
+  const toTick = (p) => priceToTick(st.base.isToken0 ? p / sc : sc / p);
   const tA = toTick(minPrice), tB = toTick(maxPrice);
   const minTick = Math.min(tA, tB), maxTick = Math.max(tA, tB);
   const budget0 = st.base.isToken0 ? baseAmount : quoteAmount;
@@ -717,7 +720,7 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
   const build = (signed) => signed
     ? encodeFunctionData({ abi, functionName: "openLadderWithPermit", args: [poolArg, rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline), signed] })
     : encodeFunctionData({ abi, functionName: "openLadder", args: [poolArg, rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline)] });
-  const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
+  const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : sc / raw; };
   return {
     pool: st.pool, kind: st.kind, venue: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd,
     base: st.base, quote: st.quote,
@@ -826,7 +829,7 @@ export async function planAdd({ id, venue = "v3", shape = "spot", baseAmount = 0
     ? encodeFunctionData({ abi: v.abi, functionName: "addLiquidityWithPermit", args: [BigInt(id), rungs, BigInt(deadline), signed] })
     : encodeFunctionData({ abi: v.abi, functionName: "addLiquidity", args: [BigInt(id), rungs, BigInt(deadline)] });
   const sc = 10 ** (st.base.decimals - st.quote.decimals);
-  const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
+  const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : sc / raw; };
   return {
     id: String(id), venue: v.id, pool: st.pool, kind: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd, base: st.base, quote: st.quote, shape,
     bins: open.length, filled: rs.length,
@@ -1107,7 +1110,7 @@ async function buildPortfolio(owner, venue) {
       return (Number(a0) / d0) * (u0 ?? p0 ?? 0) + (Number(a1) / d1) * (u1 ?? p1 ?? 0);
     };
     const sc = 10 ** (st.base.decimals - st.quote.decimals);
-    const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
+    const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : sc / raw; };
 
     // Live holdings per bin.
     const openBins = l.bins.map((b, k) => ({ ...b, index: k })).filter((b) => b.open);

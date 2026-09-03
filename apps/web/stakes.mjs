@@ -142,7 +142,7 @@ export async function stakeState(entry, owner) {
 /** A pool's price in quote-per-base whole units at a tick, oriented like the pool state. */
 function refPrice(st, tick) {
   const raw = Math.pow(1.0001, tick), sc = 10 ** (st.base.decimals - st.quote.decimals);
-  return st.base.isToken0 ? raw * sc : 1 / (raw * sc);
+  return st.base.isToken0 ? raw * sc : sc / raw;
 }
 
 /** Every stake either factory has created, each tagged with its venue; the V4 ones name their pool by PoolId. */

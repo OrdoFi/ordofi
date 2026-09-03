@@ -392,7 +392,14 @@
     async function selectPool(p) {
       pool = p;
       history.replaceState(null, "", `/pools/${token.address}${p !== pools[0].pool ? `?pool=${p}` : ""}`);
-      state = await api(`/api/pools/state?pool=${pool}&base=${token.address}`);
+      try { state = await api(`/api/pools/state?pool=${pool}&base=${token.address}`); }
+      catch (e) {
+        // A pool that cannot be read (never initialised, RPC down) is shown as such rather than as a blank page.
+        state = null; renderGroups();
+        $("pool-note").textContent = e.message; $("preview").textContent = e.message; $("go").disabled = true;
+        return;
+      }
+      $("go").disabled = false;
       renderGroups();
       $("quote-sym").textContent = state.quote.symbol;
       $("pool-note").textContent = `${state.kind === "v4" ? "Uniswap V4 · " : ""}${(state.fee / 1e4).toFixed(2)}% fee · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
