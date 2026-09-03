@@ -663,19 +663,29 @@ export async function poolCreatePlan({ token, fee, price = null }) {
   if (existing) throw new Error(`An ETH pool at ${(fee / 1e4).toFixed(2)}% already exists for this token.`);
   const info = await tokenInfo(token);
   // Where the price comes from: the caller, else the token's busiest market.
-  let ethPerToken = price != null ? Number(price) : null, source = price != null ? "given" : null;
+  let ethPerToken = price != null ? Number(price) : null, source = price != null ? "given" : null, liveSqrt = null;
   const usd = await ethUsd().catch(() => null);
   if (ethPerToken == null) {
     const row = (await poolsList(STORE)).all.find((r) => r.token === token);
     if (row?.priceUsd && usd) {
       ethPerToken = row.priceUsd / usd;
       source = `${info.symbol}/${row.quote}${row.kind === "v4" ? " V4" : " V3"}, the busiest market`;
+      // That market's own V4 ETH pool: copy its sqrtPrice as it stands this block — exact,
+      // and current to the second, where the candle-derived figure can trail a few percent.
+      if (row.kind === "v4" && poolKeyOf(STORE, row.pool)?.native0) {
+        const s = await v4Slot0(row.pool).catch(() => null);
+        if (s) {
+          liveSqrt = BigInt(s.sqrtPriceX96);
+          ethPerToken = 10 ** (info.decimals - 18) / (Number(liveSqrt) / 2 ** 96) ** 2;
+          source += ", live";
+        }
+      }
     }
   }
   if (!(ethPerToken > 0)) throw new Error("This token has no market to take a starting price from; enter one.");
   // token1 (the token) per token0 (ETH), raw units: 10^(dToken−18) / (ETH per token).
   const raw = 10 ** (info.decimals - 18) / ethPerToken;
-  const { key, sqrtPriceX96, data } = initializeCalldata(token, fee, raw);
+  const { key, sqrtPriceX96, data } = initializeCalldata(token, fee, raw, liveSqrt);
   return {
     token, symbol: info.symbol, fee, tickSpacing, key, sqrtPriceX96: sqrtPriceX96.toString(),
     price: ethPerToken, priceUsd: usd ? ethPerToken * usd : null, priceSource: source,

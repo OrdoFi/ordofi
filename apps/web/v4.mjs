@@ -47,14 +47,16 @@ export const SPACING_FOR_FEE = { 100: 1, 500: 10, 3000: 60, 10000: 200 };
  * token, opening at `rawPrice` — token1 per token0 in raw units — so the first
  * position can be placed around the price the token already trades at.
  */
-export function initializeCalldata(token, fee, rawPrice) {
+export function initializeCalldata(token, fee, rawPrice, sqrtPriceX96 = null) {
   const tickSpacing = SPACING_FOR_FEE[fee];
   if (!tickSpacing) throw new Error("fee tier must be 0.01%, 0.05%, 0.3% or 1%");
-  if (!(rawPrice > 0) || !Number.isFinite(rawPrice)) throw new Error("a starting price is needed");
   const key = { currency0: NATIVE0, currency1: getAddress(token), fee, tickSpacing, hooks: NATIVE0 };
-  // sqrt(price) · 2^96, built in two halves so the double's 53 bits are spent on the mantissa, not the exponent.
-  const sqrt = Math.sqrt(rawPrice);
-  const sqrtPriceX96 = BigInt(Math.floor(sqrt * 2 ** 48)) * (1n << 48n);
+  if (sqrtPriceX96 == null) {
+    if (!(rawPrice > 0) || !Number.isFinite(rawPrice)) throw new Error("a starting price is needed");
+    // sqrt(price) · 2^96, built in two halves so the double's 53 bits are spent on the mantissa, not the exponent.
+    const sqrt = Math.sqrt(rawPrice);
+    sqrtPriceX96 = BigInt(Math.floor(sqrt * 2 ** 48)) * (1n << 48n);
+  }
   return { key, sqrtPriceX96, data: encodeFunctionData({ abi: POOL_MANAGER_ABI, functionName: "initialize", args: [key, sqrtPriceX96] }) };
 }
 
