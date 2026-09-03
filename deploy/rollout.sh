@@ -24,8 +24,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 COMPOSE=(docker compose --env-file .env -f deploy/docker-compose.prod.yml)
-# An optional override file (staging ports, a different Caddyfile) layered on top.
+# Optional overrides for a staging copy of the stack: an extra compose file
+# (other ports) and the Caddyfile that copy runs. Production uses neither.
 [ -n "${ORDO_COMPOSE_EXTRA:-}" ] && COMPOSE+=(-f "$ORDO_COMPOSE_EXTRA")
+CADDYFILE="${ORDO_CADDYFILE:-deploy/Caddyfile}"
 REPLICAS=(gateway-a gateway-b)
 HEALTH_TIMEOUT="${ORDO_ROLLOUT_HEALTH_TIMEOUT:-60}"
 
@@ -44,7 +46,7 @@ caddy_reload() {
   # old inode and `caddy reload` reports "config is unchanged". Copy the
   # current file in and reload from the copy; the mount catches up whenever
   # the container is next recreated.
-  docker cp deploy/Caddyfile "$cid:/tmp/Caddyfile.rollout" >/dev/null
+  docker cp "$CADDYFILE" "$cid:/tmp/Caddyfile.rollout" >/dev/null
   docker exec "$cid" caddy validate --config /tmp/Caddyfile.rollout --adapter caddyfile >/dev/null 2>&1 \
     || die "Caddyfile does not validate; nothing reloaded"
   docker exec "$cid" caddy reload --config /tmp/Caddyfile.rollout --adapter caddyfile >/dev/null 2>&1
@@ -126,7 +128,10 @@ for svc in "${REPLICAS[@]}"; do
   fi
 
   say "--    replacing $svc"
-  "${COMPOSE[@]}" up -d --no-deps --no-build "$svc" >/tmp/ordo-rollout-up.log 2>&1 \
+  # --force-recreate: by this point we have decided to replace it; without the
+  # flag compose leaves a container alone when only the image contents (or,
+  # under ORDO_ROLLOUT_FORCE, nothing) changed.
+  "${COMPOSE[@]}" up -d --no-deps --no-build --force-recreate "$svc" >/tmp/ordo-rollout-up.log 2>&1 \
     || { sed 's/^/        /' /tmp/ordo-rollout-up.log >&2; die "compose could not start $svc"; }
   wait_healthy "$svc" || die "rollout aborted at $svc; the other replica is still serving"
 done
