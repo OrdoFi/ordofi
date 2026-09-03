@@ -15,6 +15,18 @@ export async function call(to, abi, functionName, args = [], from) {
  * in chunks with a breath between them rather than as one wall.
  */
 const BATCH = 120, LANES = 4;
+
+/**
+ * Where bulk reads go. A batch of 120 counts as 120 requests against a metered
+ * upstream's per-second limit, and four lanes of them at once emptied the
+ * quota that the gateway's wallet traffic shares. So bulk rides the public
+ * list (ORDO_RPC_URLS_BULK) first and only falls back to the metered one.
+ */
+function bulkUrls() {
+  const own = (process.env.ORDO_RPC_URLS_BULK ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!own.length) return rpcUrls();
+  return [...own, ...rpcUrls().filter((u) => !own.includes(u))];
+}
 export async function batchCall(items) {
   if (items.length <= BATCH) return batchOnce(items);
   // Chunks go a few at a time: a token with six hundred spam pools should not
@@ -36,7 +48,7 @@ async function batchOnce(items) {
   // host — is not, and the items still open go to the next upstream as a batch.
   const isRevert = (err) => /revert|execution|invalid opcode|out of gas/i.test(err?.message ?? "");
   let open = items.map((_, i) => i);
-  for (const url of rpcUrls()) {
+  for (const url of bulkUrls()) {
     if (!open.length) break;
     const body = open.map((i) => ({ jsonrpc: "2.0", id: i + 1, method: "eth_call", params: [{ to: items[i].to, data: data[i] }, "latest"] }));
     let arr;

@@ -28,6 +28,7 @@ docker run -d --name web-preview --restart unless-stopped --network deploy_defau
   -e ORDO_RPC_URL="${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}" \
   -e ORDO_RPC_URLS="${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}" \
   -e ORDO_ARCHIVE_RPC="${ORDO_ARCHIVE_RPC:-}" \
+  -e ORDO_RPC_URLS_BULK="${ORDO_RPC_URLS:-}" \
   -e ORDO_AUCTION_URL=http://auction:8548 -e ORDO_ARB_URL=http://arb:8549 \
   -e ORDO_SETTLEMENT_ADDRESS="${ORDO_SETTLEMENT_ADDRESS:-}" \
   -e ORDO_STEALTH_SEND_ADDRESS="${ORDO_STEALTH_SEND_ADDRESS:-}" \

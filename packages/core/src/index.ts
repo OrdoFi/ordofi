@@ -92,7 +92,10 @@ class UpstreamRpcError extends Error {
 export function isRetryableRpcError(err: unknown): boolean {
   const e = err as { code?: number; message?: string };
   if (e?.code === -32005 || e?.code === 429) return true;
-  return /rate.?limit|too many requests|throttl|capacity|try again|archive|personal token/i.test(
+  // Chainstack words its throttle "You've exceeded the RPS limit available on
+  // the current plan"; without "rps limit" here that sentence went straight
+  // through the gateway to the wallet instead of to the next upstream.
+  return /rate.?limit|rps limit|exceeded the .*limit|quota|too many requests|throttl|capacity|try again|archive|personal token/i.test(
     e?.message ?? "",
   );
 }
