@@ -70,7 +70,21 @@
     .fline b { color: #1e9e6a; font-weight: 500; } .fline small { color: var(--muted); font-size: 11.5px; margin-left: 8px; }
     .fspark { position: absolute; right: 0; bottom: 0; width: 55%; height: 62%; opacity: .9; pointer-events: none; }
     .fcard.hero .fspark { height: 55%; }
-    .sec { margin-bottom: 22px; }
+    .sec { margin-bottom: 22px; min-width: 0; }
+    /* Wide screens: Trending and Established side by side, as on Delta. The two
+       columns each keep token · MC · move · volume · age · sparkline; fees and
+       trade counts stay on the hero card and the token page. */
+    .secs { display: grid; grid-template-columns: 1fr; gap: 0 18px; }
+    @media (min-width: 1180px) {
+      .secs { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+      .secs .list th:nth-child(4), .secs .list td:nth-child(4), .secs .list th:nth-child(5), .secs .list td:nth-child(5) { display: none; }
+      .secs .list th, .secs .list td { padding: 11px 10px; }
+      .secs .sec .ph { padding: 12px 12px; }
+      .secs .list td:first-child { max-width: 200px; }
+      .secs .list .tok small { display: block; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .secs .sparkwrap { width: 92px; }
+      .secs canvas.spark { width: 92px; height: 30px; }
+    }
     .sec .ph h3 { text-transform: uppercase; }
     .sec table.list { border: none; }
     .seg.qf button { padding: 5px 10px; }
@@ -250,7 +264,7 @@
             <a class="fcard" id="f-volume" href="#"><div class="k">Highest volume · 24h</div></a>
           </div>
         </div>
-        ${["trending", "established"].map((sec) => `
+        <div class="secs">${["trending", "established"].map((sec) => `
         <div class="panel sec" id="sec-${sec}">
           <div class="ph"><h3>${sec}</h3>
             <div style="display:flex;gap:8px;align-items:center">
@@ -258,7 +272,7 @@
               <div class="seg wf" title="Volume, fees, trades and change over this window"><button data-w="3600">1h</button><button data-w="21600">6h</button><button data-w="86400" class="on">24h</button></div>
             </div></div>
           <table class="list"><thead><tr><th>Token</th><th>MC</th><th class="wl">24h</th><th>Fees <span class="wl">24h</span></th><th>Trades</th><th>Vol <span class="wl">24h</span></th><th>Age</th><th>Last <span class="wl">24h</span></th></tr></thead><tbody id="rows-${sec}">${skeletonRows(8, 8)}</tbody></table>
-        </div>`).join("")}`;
+        </div>`).join("")}</div>`;
       $("f-hero").innerHTML = `<div class="fhead"><div class="tok"><span class="sk round" style="width:40px;height:40px"></span><span class="sk w2" style="height:22px;width:140px"></span></div></div><div class="fgrid">${Array.from({ length: 6 }, () => `<div><span class="sk w2"></span><br/><span class="sk w3" style="height:16px;margin-top:6px"></span></div>`).join("")}</div>`;
       mountShell($("lq-shell"), { page: "pools" });
       document.querySelectorAll(".wf button").forEach((b) => b.addEventListener("click", async () => {

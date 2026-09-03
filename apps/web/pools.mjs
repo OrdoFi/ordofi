@@ -341,7 +341,11 @@ export async function poolsList(store, windowSec = 86_400) {
     scheduleIconProbe(rows.filter((r) => !r.icon).map((r) => r.token));
     const all = rows.slice().sort((a, b) => b.volume24Usd - a.volume24Usd);
     const trending = all.slice(0, 40);
-    const established = rows.filter((r) => r.marketCapUsd).sort((a, b) => b.marketCapUsd - a.marketCapUsd).slice(0, 40);
+    // Established: by market cap, among tokens whose cap is backed by a market. A
+    // cap printed from one thin trade against an inflated supply (an $8B token
+    // that turned over $40K) is ranked by nothing real; a cap more than 5,000×
+    // the window's volume, or under 50 trades, keeps a token out of this list.
+    const established = rows.filter((r) => r.marketCapUsd && r.trades24 >= 50 && r.volume24Usd > 0 && r.marketCapUsd / r.volume24Usd <= 5_000).sort((a, b) => b.marketCapUsd - a.marketCapUsd).slice(0, 40);
     const totals = { volume24Usd: rows.reduce((n, r) => n + r.volume24Usd, 0), fees24Usd: rows.reduce((n, r) => n + r.fees24Usd, 0), tokens: rows.length };
     // The header cards: busiest by trades and by volume.
     const mostTraded = rows.slice().sort((a, b) => b.trades24 - a.trades24)[0] ?? null;
