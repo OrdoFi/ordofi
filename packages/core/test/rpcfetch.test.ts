@@ -83,12 +83,12 @@ test("a bot-challenge page fails over", async () => {
   assert.deepEqual(calls, [A, B]);
 });
 
-test("every upstream throttled surfaces the last error", async () => {
+test("every upstream throttled for good: three bounded rounds, then the last error", async () => {
   const { rpcFetch } = await freshRpcFetch();
   stub({ [A]: rpcError("Too Many Requests"), [B]: rpcError("Too Many Requests") });
 
   await assert.rejects(rpcFetch("eth_blockNumber", []), /Too Many Requests/);
-  assert.deepEqual(calls, [A, B]);
+  assert.deepEqual(calls, [A, B, A, B, A, B], "one pass, two paced retries, no more");
 });
 
 test("isRetryableRpcError recognises throttling but not real failures", async () => {
@@ -147,4 +147,31 @@ test("sendRawTransaction: the sequencer's own answer is final, transport failure
     delete process.env.ORDO_SEQUENCER_URL;
     delete process.env.ORDO_RPC_URLS;
   }
+});
+
+test("Chainstack's plan-limit sentence and any HTTP 429 fail over", async () => {
+  const { rpcFetch, isRetryableRpcError } = await freshRpcFetch();
+  assert.equal(isRetryableRpcError({ message: "You've exceeded the RPS limit available on the current plan" }), true);
+  stub({
+    [A]: () => ({ status: 429, body: { jsonrpc: "2.0", id: 1, error: { code: -32000, message: "some new wording" } } }),
+    [B]: ok("0x2"),
+  });
+  assert.equal(await rpcFetch("eth_blockNumber", []), "0x2");
+  assert.deepEqual(calls, [A, B]);
+});
+
+test("when every upstream throttles in the same instant, a short pause and another round answers", async () => {
+  const { rpcFetch } = await freshRpcFetch();
+  let n = 0;
+  const throttleThenOk = (result: string) => () => (++n <= 2 ? rpcError("You've exceeded the RPS limit available on the current plan")() : ok(result)());
+  stub({ [A]: throttleThenOk("0x3"), [B]: throttleThenOk("0x3") });
+  assert.equal(await rpcFetch("eth_blockNumber", []), "0x3");
+  assert.deepEqual(calls, [A, B, A], "both refused once, then the first answered on the second round");
+});
+
+test("a real failure on every upstream is not retried", async () => {
+  const { rpcFetch } = await freshRpcFetch();
+  stub({ [A]: () => "challenge", [B]: () => { throw new Error("connect ECONNREFUSED"); } });
+  await assert.rejects(rpcFetch("eth_blockNumber", []));
+  assert.ok(calls.length <= 4, `dead hosts should not be hammered: ${calls.length} calls`);
 });

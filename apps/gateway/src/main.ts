@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { landingHtml } from "./landing.ts";
 import { join } from "node:path";
-import { ENDPOINTS, rpcFetch, rpcOnce, rpcUrls, sendRawTransaction, sequencerUrl } from "@ordofi/core";
+import { ENDPOINTS, isRetryableRpcError, rpcFetch, rpcOnce, rpcUrls, sendRawTransaction, sequencerUrl } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
@@ -111,6 +111,14 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
       (result) => cacheTtlMs(method, params, result),
     );
   } catch (e) {
+    // A provider's own throttle wording ("exceeded the RPS limit on the current
+    // plan") is about our contract with them, not the user's request, and must
+    // never reach a wallet. If every upstream is busy, say so in our words with
+    // the standard "limit exceeded" code that clients back off and retry on.
+    if (isRetryableRpcError(e)) {
+      metrics.inc("upstream_throttled_total");
+      throw new RpcError(-32005, "the network is busy, please try again in a moment");
+    }
     const code = (e as { code?: number }).code;
     if (typeof code === "number") throw new RpcError(code, (e as Error).message);
     metrics.inc("upstream_challenge_total");

@@ -116,24 +116,34 @@ export async function rpcFetch(
   const urls = rpcUrls();
   let lastErr: Error | null = null;
   if (cursor !== 0 && Date.now() - cursorLeftPrimaryAt > FALLBACK_STICKY_MS) cursor = 0;
-  for (let i = 0; i < urls.length; i++) {
-    const idx = (cursor + i) % urls.length;
-    const url = urls[idx];
-    try {
-      const result = await rpcOnce(url, method, params, opts?.timeoutMs);
-      // Only a genuine answer makes an upstream sticky. Setting this before
-      // checking body.error pinned the cursor to whichever endpoint was busy
-      // throttling us.
-      if (idx !== 0 && cursor === 0) cursorLeftPrimaryAt = Date.now();
-      cursor = idx;
-      return result;
-    } catch (e) {
-      if ((e as UpstreamRpcError).isRpcLevel && !isRetryableRpcError(e)) throw e;
-      lastErr = e as Error;
+  // Throttles are per second. When every upstream refuses in the same
+  // instant, the answer is a short pause and one more round, not an error on
+  // the user's screen; the rounds are bounded so a dead network still fails.
+  for (let round = 0; round <= THROTTLE_RETRY_MS.length; round++) {
+    if (round > 0) await new Promise((r) => setTimeout(r, THROTTLE_RETRY_MS[round - 1]));
+    let allThrottled = urls.length > 0;
+    for (let i = 0; i < urls.length; i++) {
+      const idx = (cursor + i) % urls.length;
+      const url = urls[idx];
+      try {
+        const result = await rpcOnce(url, method, params, opts?.timeoutMs);
+        // Only a genuine answer makes an upstream sticky. Setting this before
+        // checking body.error pinned the cursor to whichever endpoint was busy
+        // throttling us.
+        if (idx !== 0 && cursor === 0) cursorLeftPrimaryAt = Date.now();
+        cursor = idx;
+        return result;
+      } catch (e) {
+        if ((e as UpstreamRpcError).isRpcLevel && !isRetryableRpcError(e)) throw e;
+        lastErr = e as Error;
+        if (!isRetryableRpcError(e)) allThrottled = false;
+      }
     }
+    if (!allThrottled) break;
   }
   throw lastErr ?? new Error("no RPC upstream configured");
 }
+const THROTTLE_RETRY_MS = [350, 900];
 
 /** One JSON-RPC call to one URL; throws UpstreamRpcError for RPC-level errors. */
 export async function rpcOnce(url: string, method: string, params: unknown[], timeoutMs = 20_000): Promise<unknown> {
@@ -151,7 +161,14 @@ export async function rpcOnce(url: string, method: string, params: unknown[], ti
     throw new Error(`HTTP ${res.status} non-JSON from ${new URL(url).host} (rate limit or bot challenge)`);
   }
   if (body.error) {
-    throw new UpstreamRpcError(body.error.message ?? "upstream error", body.error.code ?? -32000);
+    // A 429 is a throttle whatever the sentence inside says, and a 5xx is the
+    // host's problem, not the request's: both must rotate, so they carry the
+    // status as the code rather than whatever the upstream chose to put there.
+    const throttled = res.status === 429 || res.status === 402 || res.status >= 500;
+    throw new UpstreamRpcError(body.error.message ?? "upstream error", throttled ? 429 : body.error.code ?? -32000);
+  }
+  if (!res.ok && body.result === undefined) {
+    throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
   }
   return body.result;
 }
