@@ -78,9 +78,7 @@
     .pool.with-ic { display: flex; align-items: center; gap: 10px; }
     .ic { width: 30px; height: 30px; border-radius: 50%; background: var(--accent-soft); color: var(--accent-dim); font-family: var(--mono); font-size: 11px; display: flex; align-items: center; justify-content: center; overflow: hidden; flex: none; }
     .ic img { width: 100%; height: 100%; object-fit: cover; }
-    canvas.trend { width: 80px; height: 20px; display: block; }
-    .trendwrap { position: relative; display: inline-block; vertical-align: middle; margin-left: 10px; }
-    .list tr.row { animation: lq-rise .3s ease-out both; }
+    canvas.trend { width: 80px; height: 20px; vertical-align: middle; margin-left: 10px; }
     .viewtoggle { margin-left: auto; display: flex; border: 1px solid var(--border-light); background: #fff; border-radius: 999px; overflow: hidden; }
     .viewtoggle button { border: none !important; border-radius: 0 !important; padding: 7px 12px !important; font-size: 13px !important; letter-spacing: 0 !important; }
     .viewtoggle button.on { background: var(--text); color: #fff !important; }
@@ -115,14 +113,15 @@
     <div class="strip"><div><span class="k">Total staked</span><div class="v" id="t-tvl">—<small>WETH</small></div></div><div><span class="k">Stakes</span><div class="v" id="t-n">—</div></div></div>
     <div class="filters"><button class="on" data-f="all">All</button><button data-f="mine">My stakes</button><button data-f="fees">Highest fees</button><button data-f="new">Newest</button>
       <span class="viewtoggle"><button id="v-table" class="on" title="Table view" aria-label="Table view">☰</button><button id="v-grid" title="Grid view" aria-label="Grid view">▦</button></span></div>
-    <table class="list" id="table"><thead><tr><th>Pool</th><th><button id="s-tvl" class="on">TVL ▾</button></th><th><button id="s-rate">7d rate</button></th><th>24h fees</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+    <table class="list" id="table"><thead><tr><th>Pool</th><th><button id="s-tvl" class="on">TVL ▾</button></th><th><button id="s-rate">7d rate</button></th><th>24h fees</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="5" class="empty">Loading stakes…</td></tr></tbody></table>
     <div class="sgrid" id="grid" style="display:none"></div>
 
     <div class="create panel" style="padding:20px">
       <h2>Create a stake</h2>
-      <p>Attach a stake to your token's ETH pool so holders can deposit and earn a share of trading fees, paid in ETH. The pool must already exist on Uniswap V3. Anyone can create one, once per pool; there is no owner afterwards.</p>
+      <p>Attach a stake to your token's ETH pool so holders can deposit and earn a share of trading fees, paid in ETH. The pool must already exist on Uniswap V3 or V4. Anyone can create one, once per pool; there is no owner afterwards.</p>
       <label class="f">Token address</label>
-      <div class="grid3"><div class="inp"><input id="c-token" placeholder="0x… (paired with WETH)" /></div><button class="go" id="c-go" style="margin:0;width:auto;padding:13px 22px" disabled>Create stake</button></div>
+      <div class="grid3"><div class="inp"><input id="c-token" placeholder="0x… (paired with ETH)" /></div><button class="go" id="c-go" style="margin:0;width:auto;padding:13px 22px" disabled>Create stake</button></div>
+      <div id="c-venues" style="display:none;margin-top:10px"><label class="f">Pool</label><div class="seg" id="c-venue"><button data-v="v3">V3</button><button data-v="v4">V4</button></div></div>
       <div class="res" id="c-res"></div>
     </div>
   </div>
@@ -130,7 +129,7 @@
   <script type="module">
     import { wallet, rejected } from "/wallet.js";
     import { esc, usd, num, formatUnits, parseUnits } from "/ladders.js";
-    import { mountShell, skeletonRows, drawSpark } from "/liquidity.js";
+    import { mountShell } from "/liquidity.js";
     const $ = (id) => document.getElementById(id);
     const EXPLORER = "https://robinhoodchain.blockscout.com";
     const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
@@ -154,9 +153,6 @@
         render();
       } catch (e) { $("rows").innerHTML = `<tr><td colspan="5" class="empty">${esc(e.message)}</td></tr>`; }
     }
-    // Chain state and the indexer settle a few seconds after a receipt; one
-    // early refresh for responsiveness, one later so nothing stays stale.
-    function refreshSoon() { setTimeout(load, 1200); setTimeout(load, 6000); }
     function rows() {
       let r = data.stakes.slice();
       if (filter === "mine") r = r.filter((s) => s.me && (Number(s.me.staked) > 0 || Number(s.me.loose) > 0));
@@ -168,6 +164,10 @@
     }
     const icon = (s) => `<div class="ic" data-i="${esc(s.symbol.slice(0, 2))}">${s.icon ? `<img src="${esc(s.icon)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc(s.symbol.slice(0, 2))}</div>`;
     const fees24 = (s) => usd(market.get(s.token)?.fees24Usd);
+    const venueTag = (s) => s.venue === "v4" ? "V4" : "V3";
+    const sub = (s) => `${venueTag(s)} · ${(s.fee / 1e4).toFixed(2)}% · fee share → WETH${s.me && Number(s.me.staked) > 0 ? " · you're in" : ""}`;
+    // A V4 pool lives inside the PoolManager and has no explorer page of its own; our pool page shows it.
+    const poolLink = (s) => s.venue === "v4" ? `/pools/${s.token}?pool=${s.pool}` : `${EXPLORER}/address/${s.pool}`;
     function render() {
       const r = rows();
       document.body.classList.toggle("gridview", view === "grid");
@@ -177,7 +177,7 @@
         $("table").style.display = "none"; $("grid").style.display = "";
         $("grid").innerHTML = r.length ? r.map((s) => `
           <div class="scard ${openVault === s.vault ? "open" : ""}" data-v="${s.vault}">
-            <div class="sc-head">${icon(s)}<div class="pool"><b>WETH / ${esc(s.symbol)}</b><small>fee share → WETH${s.me && Number(s.me.staked) > 0 ? " · you're in" : ""}</small></div><span class="trendwrap"><canvas class="trend" width="160" height="40"></canvas></span></div>
+            <div class="sc-head">${icon(s)}<div class="pool"><b>${s.venue === "v4" ? "ETH" : "WETH"} / ${esc(s.symbol)}</b><small>${sub(s)}</small></div><canvas class="trend" width="160" height="40"></canvas></div>
             <div class="sc-stats"><div><span class="k">TVL</span><div class="v">${fmtEth(s.tvlWeth)} <small>WETH</small></div></div><div><span class="k">7d rate</span><div class="v rate">${pct(s.rate7d)}</div></div><div><span class="k">24h fees</span><div class="v">${fees24(s)}</div></div></div>
             <button class="sc-open">${openVault === s.vault ? "Close" : "Manage"}</button>
             ${openVault === s.vault ? `<div class="sc-detail">${detail(s)}</div>` : ""}
@@ -187,8 +187,8 @@
       } else {
         $("table").style.display = ""; $("grid").style.display = "none";
         $("rows").innerHTML = r.length ? r.map((s) => `
-          <tr class="row ${openVault === s.vault ? "open" : ""}" data-v="${s.vault}"><td><div class="pool with-ic">${icon(s)}<div><b>WETH / ${esc(s.symbol)}</b><small>fee share → WETH${s.me && Number(s.me.staked) > 0 ? " · you're in" : ""}</small></div></div></td>
-            <td>${fmtEth(s.tvlWeth)} <span style="color:var(--muted);font-size:11px">WETH</span></td><td class="rate">${pct(s.rate7d)}</td><td>${fees24(s)} <span class="trendwrap"><canvas class="trend" width="160" height="40"></canvas></span></td><td class="chev">${openVault === s.vault ? "▴" : "▾"}</td></tr>
+          <tr class="row ${openVault === s.vault ? "open" : ""}" data-v="${s.vault}"><td><div class="pool with-ic">${icon(s)}<div><b>${s.venue === "v4" ? "ETH" : "WETH"} / ${esc(s.symbol)}</b><small>${sub(s)}</small></div></div></td>
+            <td>${fmtEth(s.tvlWeth)} <span style="color:var(--muted);font-size:11px">WETH</span></td><td class="rate">${pct(s.rate7d)}</td><td>${fees24(s)} <canvas class="trend" width="160" height="40"></canvas></td><td class="chev">${openVault === s.vault ? "▴" : "▾"}</td></tr>
           ${openVault === s.vault ? `<tr class="detail"><td colspan="5">${detail(s)}</td></tr>` : ""}`).join("") : `<tr><td colspan="5" class="empty">${empty}</td></tr>`;
         $("rows").querySelectorAll("tr.row").forEach((tr) => { tr.addEventListener("click", () => toggle(tr.dataset.v)); trend(r.find((s) => s.vault === tr.dataset.v), tr.querySelector("canvas.trend")); });
       }
@@ -200,8 +200,10 @@
       if (!s || !cv) return;
       if (!sparkCache.has(s.token)) sparkCache.set(s.token, api(`/api/trade/candles?base=${s.token}&quote=eth&bucketSec=1800&hours=24`).then((d) => d.candles.map((x) => x.close)).catch(() => []));
       const c = await sparkCache.get(s.token); if (c.length < 2) return;
-      if (!cv.isConnected) return;
-      drawSpark(cv, c, { lineWidth: 2, dot: true });
+      const ctx = cv.getContext("2d"), W = cv.width, H = cv.height, lo = Math.min(...c), hi = Math.max(...c);
+      ctx.strokeStyle = c.at(-1) >= c[0] ? "#1e9e6a" : "#c0392b"; ctx.lineWidth = 2; ctx.beginPath();
+      c.forEach((v, i) => { const x = (i / (c.length - 1)) * W, y = H - 3 - ((v - lo) / (hi - lo || 1)) * (H - 6); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      ctx.stroke();
     }
 
     // ---- expanded stake
@@ -243,7 +245,7 @@
             <div class="note">Your stake comes back as coins: ETH and ${esc(s.symbol)}, in the pool's current ratio. Two confirmations — one to unstake, one to withdraw. Rewards stay claimable in the Rewards tab.</div>
           </div></div>
       </div>
-      <div class="addrs"><span>Stake <a href="${EXPLORER}/address/${s.farm}" target="_blank" rel="noopener">${short(s.farm)}</a></span><span>Vault <a href="${EXPLORER}/address/${s.vault}" target="_blank" rel="noopener">${short(s.vault)}</a></span><span>Pool <a href="${EXPLORER}/address/${s.pool}" target="_blank" rel="noopener">${short(s.pool)}</a></span><span>Reward token <a href="${EXPLORER}/token/${WETH}" target="_blank" rel="noopener">WETH</a></span><span>Lifetime rewards ${fmtEth(s.totalRewardsWeth, 5)} WETH</span></div>`;
+      <div class="addrs"><span>Stake <a href="${EXPLORER}/address/${s.farm}" target="_blank" rel="noopener">${short(s.farm)}</a></span><span>Vault <a href="${EXPLORER}/address/${s.vault}" target="_blank" rel="noopener">${short(s.vault)}</a></span><span>Pool <a href="${poolLink(s)}" target="_blank" rel="noopener">${s.venue === "v4" ? `Uniswap V4 · ${short(s.pool)}` : short(s.pool)}</a></span><span>Reward token <a href="${EXPLORER}/token/${WETH}" target="_blank" rel="noopener">WETH</a></span><span>Lifetime rewards ${fmtEth(s.totalRewardsWeth, 5)} WETH</span>${s.reference ? `<span title="The V4 vault only sells token fees for ETH while the price sits near this reference, which it refreshes itself once it is older than 10 minutes.">Reference ${s.reference.usable ? "ready" : "warming up"} · ${num(s.reference.price, 8)} ETH</span>` : ""}</div>`;
     }
     async function loadBalances(s) {
       if (!wallet.account) { balances = null; return; }
@@ -271,8 +273,7 @@
       // Stop clicks inside the detail from toggling the row.
       document.querySelectorAll("tr.detail").forEach((tr) => tr.addEventListener("click", (e) => e.stopPropagation()));
     }
-    async function requote(s, extra) {
-      const signed = extra && typeof extra === "object" && extra.permitV ? extra : null; // an event object is not a permit
+    async function requote(s) {
       const my = ++qSeq, q = $("d-quote"), go = $("d-go");
       quote = null; // whatever was quoted before is void; a failed re-quote leaves nothing to send
       if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
@@ -290,7 +291,6 @@
       // The server executes the deposit from this account before handing it out;
       // without the account there is no proof and no transaction.
       if (wallet.account) url += `&from=${wallet.account}`;
-      if (signed) url += "&" + new URLSearchParams(signed).toString();
       try {
         const p = await api(url);
         if (my !== qSeq) return;
@@ -303,8 +303,7 @@
         q.innerHTML = p.quote ? `<div class="kv"><span>Swapped</span><b>${num(formatUnits(p.quote.swapIn, asset === "eth" ? 18 : s.decimals, 6), 6)} ${asset === "eth" ? "ETH" : esc(s.symbol)} → ${num(formatUnits(p.quote.swapOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"}</b></div>
           <div class="kv"><span>Price impact</span><b class="${p.quote.priceImpactBps > 100 ? "dn" : ""}">${p.quote.priceImpactBps == null ? "—" : (p.quote.priceImpactBps / 100).toFixed(2) + "%"}</b></div>
           <div class="kv"><span>Protection</span><b>at least ${num(formatUnits(p.quote.minOut, asset === "eth" ? s.decimals : 18, 6), 6)} ${asset === "eth" ? esc(s.symbol) : "WETH"} or it reverts · through rpc.ordofi.network</b></div>` : `<div class="kv"><span>Protection</span><b>no swap · deposited at the pool's ratio, the rest refunded</b></div>`;
-        if (p.tx?.approve && p.permit?.supported) q.innerHTML += `<div class="kv"><span>Allowance</span><b>${esc(s.symbol)} allowed by signature — no approval transaction</b></div>`;
-        if (wallet.account) { go.textContent = p.tx?.approve ? (p.permit?.supported ? "Sign & deposit" : "Approve & deposit") : "Deposit & stake"; go.disabled = !p.tx; }
+        if (wallet.account) { go.textContent = p.tx?.approve ? `Approve & deposit` : "Deposit & stake"; go.disabled = !p.tx; }
       } catch (e) { if (my === qSeq) { q.innerHTML = `<div class="kv"><span>Quote</span><b class="dn">${esc(e.message)}</b></div>`; if (wallet.account) go.disabled = true; } }
     }
     const res = (id, html, bad) => { const el = $(id); if (el) { el.innerHTML = html; el.className = "res" + (bad ? " bad" : ""); } };
@@ -313,22 +312,13 @@
       if (!quote?.tx) return;
       $("d-go").disabled = true;
       try {
-        let signed = null;
-        if (quote.tx.approve) {
-          const pm = quote.permit;
-          if (pm?.supported && pm.nonce != null) {
-            res("d-res", `Sign to allow ${esc(s.symbol)} — a signature, not a transaction…`);
-            try { signed = await wallet.signPermit(pm); } catch (e) { if (rejected(e)) throw e; signed = null; }
-          }
-          if (!signed) { res("d-res", "Approve in your wallet…"); await wallet.ensureAllowance(quote.tx.approve.token, quote.tx.approve.spender, quote.tx.approve.amount, (h) => res("d-res", `Approving ${txLink(h)}…`)); }
-        }
-        await requote(s, signed);
+        if (quote.tx.approve) { res("d-res", "Approve in your wallet…"); await wallet.ensureAllowance(quote.tx.approve.token, quote.tx.approve.spender, quote.tx.approve.amount, (h) => res("d-res", `Approving ${txLink(h)}…`)); }
+        await requote(s);
         if (!quote?.tx) throw new Error(quote?.guard?.reason ?? "deposit not verified");
-        if (signed && quote.tx.approve) throw new Error("the signature could not be used — try again, or approve instead");
         res("d-res", "Confirm the deposit in your wallet…");
         const r = await wallet.sendProven(quote, (h) => res("d-res", `Depositing & staking ${txLink(h)}…`));
         res("d-res", `Staked · ${txLink(r.hash)}`);
-        refreshSoon();
+        setTimeout(load, 1200);
       } catch (e) { res("d-res", fail(e), true); $("d-go").disabled = false; }
     }
     async function claim(s, compound) {
@@ -336,7 +326,7 @@
         const c = await api(`/api/pools/stake-claim?farm=${s.farm}`);
         res("r-res", "Confirm the claim in your wallet…");
         const r = await wallet.send(c, (h) => res("r-res", `Claiming ${txLink(h)}…`));
-        if (!compound) { res("r-res", `Claimed · ${txLink(r.hash)}`); refreshSoon(); return; }
+        if (!compound) { res("r-res", `Claimed · ${txLink(r.hash)}`); setTimeout(load, 1200); return; }
         // Compound exactly the WETH this claim paid — read from the receipt's
         // Transfer(farm → account) logs — never the wallet's whole WETH balance.
         const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -354,7 +344,7 @@
         res("r-res", "Confirm the compound in your wallet…");
         const r2 = await wallet.sendProven(p, (h) => res("r-res", `Compounding ${txLink(h)}…`));
         res("r-res", `Compounded · ${txLink(r2.hash)}`);
-        refreshSoon();
+        setTimeout(load, 1200);
       } catch (e) { res("r-res", fail(e), true); }
     }
     async function withdraw(s) {
@@ -374,24 +364,37 @@
         res("w-res", `2/2 · Confirm the withdrawal in your wallet… (at least ${num(formatUnits(c2.minimum.weth, 18, 6), 6)} ETH + ${num(formatUnits(c2.minimum.token, s.decimals, 6), 6)} ${esc(s.symbol)} or it reverts)`);
         const r = await wallet.sendProven(c2, (h) => res("w-res", `2/2 · Withdrawing ${txLink(h)}…`));
         res("w-res", `Withdrawn · ${txLink(r.hash)}`);
-        refreshSoon();
+        setTimeout(load, 1200);
       } catch (e) { res("w-res", fail(e), true); $("w-go").disabled = false; }
     }
 
     // ---- create
-    let createPlan = null;
-    for (const ev of ["input", "change", "keyup"]) $("c-token").addEventListener(ev, async () => {
+    // The token may trade against ETH in V3, V4 or both; each venue takes its own stake, so the picker only appears when there is a choice.
+    let createPlan = null, createVenue = null, cSeq = 0;
+    async function replanCreate() {
+      const my = ++cSeq;
       const t = $("c-token").value.trim().toLowerCase(); createPlan = null; $("c-go").disabled = true;
-      if (!/^0x[0-9a-f]{40}$/.test(t)) { res("c-res", t ? "That is not an address." : ""); return; }
+      if (!/^0x[0-9a-f]{40}$/.test(t)) { res("c-res", t ? "That is not an address." : ""); $("c-venues").style.display = "none"; createVenue = null; return; }
       try {
-        const p = await api(`/api/pools/stake-create?token=${t}`);
-        createPlan = p;
-        if (p.exists) { res("c-res", `${esc(p.symbol ?? "This token")} already has a stake. <a href="/stakes?vault=${p.exists.vault}">Open it →</a>`); return; }
-        res("c-res", `Will attach to ${esc(p.symbol ?? "the token")}/ETH ${(p.fee / 1e4).toFixed(2)}% — its deepest ETH pool.`);
+        const p = await api(`/api/pools/stake-create?token=${t}${createVenue ? `&venue=${createVenue}` : ""}`);
+        if (my !== cSeq) return;
+        createPlan = p; createVenue = p.venue;
+        const both = p.venues?.v3 && p.venues?.v4;
+        $("c-venues").style.display = both ? "" : "none";
+        $("c-venue").querySelectorAll("button").forEach((b) => { b.classList.toggle("on", b.dataset.v === p.venue); b.textContent = `${b.dataset.v.toUpperCase()}${p.venues?.[b.dataset.v] ? ` · ${(p.venues[b.dataset.v].fee / 1e4).toFixed(2)}%` : ""}`; });
+        if (p.exists) { res("c-res", `${esc(p.symbol ?? "This token")} already has a ${p.venue.toUpperCase()} stake. <a href="/stakes?vault=${p.exists.vault}">Open it →</a>${both ? ` The other pool can still take one.` : ""}`); return; }
+        res("c-res", `Will attach to ${esc(p.symbol ?? "the token")}/ETH ${(p.fee / 1e4).toFixed(2)}% on Uniswap ${p.venue.toUpperCase()} — its deepest ETH pool there.`);
         $("c-go").disabled = !wallet.account; $("c-go").textContent = wallet.account ? "Create stake" : "Connect wallet";
         if (!wallet.account) $("c-go").disabled = false;
-      } catch (e) { res("c-res", esc(e.message), true); }
-    });
+      } catch (e) {
+        if (my !== cSeq) return;
+        // Asked for a venue the token is not in: fall back to whichever it has.
+        if (createVenue && /does have a/.test(e.message)) { createVenue = null; return replanCreate(); }
+        $("c-venues").style.display = "none"; res("c-res", esc(e.message), true);
+      }
+    }
+    for (const ev of ["input", "change", "keyup"]) $("c-token").addEventListener(ev, () => { createVenue = null; replanCreate(); });
+    $("c-venue").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { createVenue = b.dataset.v; replanCreate(); }));
     $("c-go").addEventListener("click", async () => {
       if (!wallet.account) return wallet.openPicker();
       if (!createPlan?.tx || createPlan.exists) return;
@@ -400,7 +403,7 @@
         res("c-res", "Confirm in your wallet…");
         const r = await wallet.send(createPlan.tx, (h) => res("c-res", `Creating ${txLink(h)}…`));
         res("c-res", `Created · ${txLink(r.hash)}`);
-        refreshSoon();
+        setTimeout(load, 1500);
       } catch (e) { res("c-res", fail(e), true); $("c-go").disabled = false; }
     });
 
@@ -411,7 +414,6 @@
     $("v-grid").addEventListener("click", () => { view = "grid"; localStorage.setItem("ordo.stakes.view", view); render(); });
 
     mountShell($("lq-shell"), { page: "stakes" });
-    $("rows").innerHTML = skeletonRows(3, 5);
     api("/api/trade/chain").then(async (c) => { await wallet.init(c); wallet.bindButton($("nav-connect")); wallet.onChange(load); load(); });
   </script>
 

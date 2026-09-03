@@ -84,6 +84,11 @@ services:
       ORDO_LADDER_BLOCK: ${ORDO_LADDER_BLOCK:-}
       ORDO_STAKE_FACTORY: ${ORDO_STAKE_FACTORY:-}
       ORDO_STAKE_ZAP: ${ORDO_STAKE_ZAP:-}
+      # V4 twins default to the addresses in @ordofi/core; set these only to point at a redeploy.
+      ORDO_LADDER_V4_ADDRESS: ${ORDO_LADDER_V4_ADDRESS:-}
+      ORDO_LADDER_V4_BLOCK: ${ORDO_LADDER_V4_BLOCK:-}
+      ORDO_STAKE_FACTORY_V4: ${ORDO_STAKE_FACTORY_V4:-}
+      ORDO_STAKE_ZAP_V4: ${ORDO_STAKE_ZAP_V4:-}
       ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-}
     depends_on: [auction]
     volumes: ["ordo-data:/app/data"]

@@ -97,6 +97,10 @@ let styled = false;
 function ensureStyle() { if (styled) return; styled = true; const st = document.createElement("style"); st.textContent = CSS; document.head.appendChild(st); }
 async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
 
+/** Which manager a ladder lives in: the V3 one unless the portfolio says V4. Every action names it. */
+const venueOf = (l) => (l.venue === "v4" ? "v4" : "v3");
+const venueLabel = (l) => (venueOf(l) === "v4" ? "V4" : "V3");
+
 /** Orientation helpers: amounts come as token0/token1; the UI speaks base/quote. */
 const baseAmt = (l, a0, a1) => BigInt(l.base.isToken0 ? a0 : a1);
 const quoteAmt = (l, a0, a1) => BigInt(l.base.isToken0 ? a1 : a0);
@@ -115,15 +119,19 @@ export function renderLadders(container, portfolio, opts = {}) {
   if (!ladders.length) { container.innerHTML = `<div class="lempty">${opts.emptyText ?? "No open positions yet."}</div>`; return; }
   const groups = new Map();
   for (const l of ladders) { const k = l.base.address; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(l); }
+  // Ladder ids are per manager, so a card is found by venue and id together.
+  const find = (key) => { const [v, id] = key.split(":"); return portfolio.ladders.find((l) => l.id === id && venueOf(l) === v); };
+  const keyOf = (l) => `${venueOf(l)}:${l.id}`;
   container.innerHTML = [...groups.values()].map((ls) => {
     const b = ls[0].base;
+    const open = ls.filter((l) => !l.closed);
     return `<div class="lg" data-token="${b.address}">
       <div class="lg-h"><div class="ic" data-i="${esc(b.symbol.slice(0, 2))}">${b.icon ? `<img src="${esc(b.icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc(b.symbol.slice(0, 2))}</div><b>${esc(b.name ?? b.symbol).toUpperCase()}</b><small>${esc(b.symbol)}</small>
-        ${opts.token ? "" : `<a href="/pools/${b.address}">open pool page →</a>`}<button class="closeall" data-ids="${ls.filter((l) => !l.closed).map((l) => l.id).join(",")}" ${ls.filter((l) => !l.closed).length > 1 ? "" : "disabled"}>Close all</button></div>
+        ${opts.token ? "" : `<a href="/pools/${b.address}">open pool page →</a>`}<button class="closeall" data-keys="${open.map(keyOf).join(",")}" ${open.length > 1 ? "" : "disabled"}>Close all</button></div>
       ${ls.map((l) => card(l)).join("")}</div>`;
   }).join("");
-  container.querySelectorAll("button[data-act]").forEach((btn) => btn.addEventListener("click", () => act(btn.dataset.act, portfolio.ladders.find((l) => l.id === btn.dataset.id), btn, opts)));
-  container.querySelectorAll(".closeall").forEach((btn) => btn.addEventListener("click", () => closeAll(btn.dataset.ids.split(",").filter(Boolean), btn, opts)));
+  container.querySelectorAll("button[data-act]").forEach((btn) => btn.addEventListener("click", () => act(btn.dataset.act, find(btn.dataset.key), btn, opts)));
+  container.querySelectorAll(".closeall").forEach((btn) => btn.addEventListener("click", () => closeAll(btn.dataset.keys.split(",").filter(Boolean).map(find).filter(Boolean), btn, opts)));
 }
 
 function card(l) {
@@ -132,14 +140,15 @@ function card(l) {
   const f = Math.min(1, Math.max(0, (Math.log(l.price) - Math.log(l.minPrice)) / (Math.log(l.maxPrice) - Math.log(l.minPrice) || 1)));
   const fees = Number(l.unclaimed0) + Number(l.unclaimed1) > 0;
   const bins = l.bins.slice().sort((a, b) => a.priceLower - b.priceLower);
-  return `<div class="lc" data-id="${l.id}">
-    <div class="tags"><span class="tag ${l.closed ? "done" : l.inRange ? "in" : "out"}">${l.closed ? "closed" : l.inRange ? "in range" : "out of range"}</span><span class="tag">${SHAPE_NAME[l.shape] ?? l.shape}</span><span class="tag">V3 · ${(l.fee / 1e4).toFixed(2)}%</span><span class="bins">${l.openBins}${l.openBins !== l.binCount ? `/${l.binCount}` : ""} bins</span></div>
+  const key = `${venueOf(l)}:${l.id}`, rid = `lres-${venueOf(l)}-${l.id}`;
+  return `<div class="lc" data-id="${l.id}" data-venue="${venueOf(l)}">
+    <div class="tags"><span class="tag ${l.closed ? "done" : l.inRange ? "in" : "out"}">${l.closed ? "closed" : l.inRange ? "in range" : "out of range"}</span><span class="tag">${SHAPE_NAME[l.shape] ?? l.shape}</span><span class="tag">${venueLabel(l)} · ${(l.fee / 1e4).toFixed(2)}%</span><span class="bins">${l.openBins}${l.openBins !== l.binCount ? `/${l.binCount}` : ""} bins</span></div>
     ${l.closed ? "" : `<div class="acts">
-      <button data-act="pnl" data-id="${l.id}">PnL card</button>
-      <button data-act="collect" data-id="${l.id}" ${fees ? "" : "disabled"}>Claim fees</button>
-      <button data-act="add" data-id="${l.id}">Add liquidity</button>
-      <button data-act="partial" data-id="${l.id}" ${l.openBins > 1 ? "" : "disabled"}>Partial withdraw</button>
-      <button data-act="close" data-id="${l.id}" class="primary">Close</button></div>`}
+      <button data-act="pnl" data-key="${key}">PnL card</button>
+      <button data-act="collect" data-key="${key}" ${fees ? "" : "disabled"}>Claim fees</button>
+      <button data-act="add" data-key="${key}">Add liquidity</button>
+      <button data-act="partial" data-key="${key}" ${l.openBins > 1 ? "" : "disabled"}>Partial withdraw</button>
+      <button data-act="close" data-key="${key}" class="primary">Close</button></div>`}
     <div class="rng"><div><b>${fmtPx(l.minPrice)}</b><small>${l.quote.usdPerToken ? usd(l.minPrice * l.quote.usdPerToken) : ""}</small></div><div style="text-align:right"><b>${fmtPx(l.maxPrice)}</b><small>${l.quote.usdPerToken ? usd(l.maxPrice * l.quote.usdPerToken) : ""}</small></div></div>
     <div class="cur">${l.priceUsd ? usd(l.priceUsd) : fmtPx(l.price)} ›</div>
     <div class="bars">${bins.map((b) => `<i class="${!b.open ? "closed" : b.inRange ? "hit" : ""}" style="height:${b.open ? Math.max(6, (b.usd / mx) * 100) : 6}%" title="${fmtPx(b.priceLower)} – ${fmtPx(b.priceUpper)}"></i>`).join("")}<em style="left:${(f * 100).toFixed(2)}%"></em></div>
@@ -151,12 +160,12 @@ function card(l) {
       <div><div class="k">PnL</div><div class="v ${l.pnlUsd >= 0 ? "up" : "dn"}">${l.pnlUsd >= 0 ? "+" : ""}${usd(l.pnlUsd)}<small class="${l.pnlUsd >= 0 ? "up" : "dn"}">${l.pnlPct == null ? "" : (l.pnlPct >= 0 ? "+" : "") + (l.pnlPct * 100).toFixed(2) + "%"}</small></div></div>
       <div><div class="k">Gas paid</div><div class="v">${usd(l.gasUsd)}<small>${num(l.gasEth, 6)} ETH · net ${l.netUsd >= 0 ? "+" : ""}${usd(l.netUsd)}</small></div></div>
     </div>
-    <div class="res" id="lres-${l.id}"></div></div>`;
+    <div class="res" id="${rid}"></div></div>`;
 }
 
 // ------------------------------------------------------------------ actions
 
-function res(id, html, bad) { const el = document.getElementById(`lres-${id}`); if (el) { el.innerHTML = html; el.className = "res" + (bad ? " bad" : ""); } }
+function res(l, html, bad) { const el = document.getElementById(`lres-${venueOf(l)}-${l.id}`); if (el) { el.innerHTML = html; el.className = "res" + (bad ? " bad" : ""); } }
 const fail = (e) => rejected(e) ? "Rejected in the wallet — nothing happened." : esc(e?.message ?? e);
 
 async function act(kind, l, btn, opts) {
@@ -166,24 +175,33 @@ async function act(kind, l, btn, opts) {
   if (kind === "partial") return partialDialog(l, opts);
   btn.disabled = true;
   try {
-    const c = await api(`/api/pools/${kind}?id=${l.id}`);
-    res(l.id, "Confirm in your wallet…");
-    const r = await wallet.send(c, (h) => res(l.id, `${kind === "close" ? "Closing" : "Claiming"} ${txLink(h)}…`));
-    res(l.id, `${kind === "close" ? "Closed" : "Claimed"} · ${txLink(r.hash)}`);
+    const c = await api(`/api/pools/${kind}?id=${l.id}&venue=${venueOf(l)}`);
+    res(l, "Confirm in your wallet…");
+    const r = await wallet.send(c, (h) => res(l, `${kind === "close" ? "Closing" : "Claiming"} ${txLink(h)}…`));
+    res(l, `${kind === "close" ? "Closed" : "Claimed"} · ${txLink(r.hash)}`);
     setTimeout(() => opts.onChange?.(), 1200);
-  } catch (e) { res(l.id, fail(e), true); btn.disabled = false; }
+  } catch (e) { res(l, fail(e), true); btn.disabled = false; }
 }
 
-async function closeAll(ids, btn, opts) {
-  if (!ids.length) return;
+/** Close every open ladder of a token. Each manager closes its own in one transaction, so a token held in both takes two. */
+async function closeAll(ladders, btn, opts) {
+  if (!ladders.length) return;
   btn.disabled = true;
+  const byVenue = new Map();
+  for (const l of ladders) { const v = venueOf(l); if (!byVenue.has(v)) byVenue.set(v, []); byVenue.get(v).push(l); }
+  const first = ladders[0];
   try {
-    const c = await api(`/api/pools/close-many?ids=${ids.join(",")}`);
-    res(ids[0], "Confirm in your wallet…");
-    const r = await wallet.send(c, (h) => res(ids[0], `Closing ${ids.length} positions ${txLink(h)}…`));
-    res(ids[0], `Closed ${ids.length} positions · ${txLink(r.hash)}`);
+    let n = 0;
+    for (const [v, ls] of byVenue) {
+      n++;
+      const step = byVenue.size > 1 ? `${n}/${byVenue.size} · ` : "";
+      const c = await api(`/api/pools/close-many?ids=${ls.map((l) => l.id).join(",")}&venue=${v}`);
+      res(first, `${step}Confirm in your wallet…`);
+      const r = await wallet.send(c, (h) => res(first, `${step}Closing ${ls.length} ${v.toUpperCase()} position${ls.length > 1 ? "s" : ""} ${txLink(h)}…`));
+      res(first, `${step}Closed ${ls.length} ${v.toUpperCase()} position${ls.length > 1 ? "s" : ""} · ${txLink(r.hash)}`);
+    }
     setTimeout(() => opts.onChange?.(), 1200);
-  } catch (e) { res(ids[0], fail(e), true); btn.disabled = false; }
+  } catch (e) { res(first, fail(e), true); btn.disabled = false; }
 }
 
 // ------------------------------------------------------------------ dialogs
@@ -244,19 +262,17 @@ async function addDialog(l, opts) {
     if (side !== "base") $("ld-bal-q").textContent = `balance ${num(bal.quote, 6)}`;
     if ($("ld-base").value || $("ld-quote").value) replan();
   });
-  async function replan(extra) {
-    const signed = extra && typeof extra === "object" && extra.permitV ? extra : null;
+  async function replan() {
     const my = ++seq;
     const ba = parseUnits($("ld-base").value, l.base.decimals) ?? 0n, qa = parseUnits($("ld-quote").value, l.quote.decimals) ?? 0n;
     if (ba === 0n && qa === 0n) { plan = null; $("ld-lands").textContent = "Enter an amount."; $("ld-go").disabled = true; return; }
     try {
-      const q = new URLSearchParams({ id: l.id, shape, baseAmount: ba.toString(), quoteAmount: qa.toString(), ...(wallet.account ? { owner: wallet.account } : {}), ...(signed ?? {}) });
-      const p = await api(`/api/pools/plan-add?${q}`);
+      const p = await api(`/api/pools/plan-add?id=${l.id}&venue=${venueOf(l)}&shape=${shape}&baseAmount=${ba}&quoteAmount=${qa}`);
       if (my !== seq) return;
       plan = p;
       if (!p.tx) { $("ld-lands").textContent = "Nothing lands: this range needs the other token."; $("ld-go").disabled = true; return; }
       const mx = Math.max(...p.rungs.map((r) => r.weight));
-      $("ld-lands").innerHTML = `<canvas id="ld-cv" width="600" height="96"></canvas>fills <b>${p.filled}</b> of ${p.bins} bins · uses ${num(formatUnits(p.baseTotal, l.base.decimals), 6)} ${esc(l.base.symbol)} + ${num(formatUnits(p.quoteTotal, l.quote.decimals), 6)} ${esc(l.quote.symbol)}${p.tx.approve ? (p.tx.permit?.supported ? " · allowed by signature, no approval transaction" : " · needs an approval first") : ""}`;
+      $("ld-lands").innerHTML = `<canvas id="ld-cv" width="600" height="96"></canvas>fills <b>${p.filled}</b> of ${p.bins} bins · uses ${num(formatUnits(p.baseTotal, l.base.decimals), 6)} ${esc(l.base.symbol)} + ${num(formatUnits(p.quoteTotal, l.quote.decimals), 6)} ${esc(l.quote.symbol)}${p.tx.approve ? " · needs an approval first" : ""}`;
       const cv = $("ld-cv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
       p.rungs.slice().sort((x, y) => x.priceLower - y.priceLower).forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.5)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
       $("ld-go").disabled = false;
@@ -267,18 +283,12 @@ async function addDialog(l, opts) {
     $("ld-go").disabled = true;
     const r = $("ld-res");
     try {
-      let signed = null;
-      if (plan.tx.approve) {
-        const pm = plan.tx.permit;
-        if (pm?.supported && pm.nonce != null) {
-          r.textContent = `Sign to allow ${esc(l.base.symbol)} — a signature, not a transaction…`;
-          try { signed = await wallet.signPermit(pm); } catch (e) { if (rejected(e)) throw e; signed = null; }
-        }
-        if (!signed) { r.textContent = `Approve ${esc(l.base.symbol)} in your wallet…`; await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => { r.innerHTML = `Approving ${txLink(h)}…`; }); }
+      for (const a of plan.tx.approvals ?? (plan.tx.approve ? [plan.tx.approve] : [])) {
+        const sym = a.token.toLowerCase() === l.base.address ? l.base.symbol : l.quote.symbol;
+        r.textContent = `Approve ${esc(sym)} in your wallet…`;
+        await wallet.ensureAllowance(a.token, a.spender, a.amount, (h) => { r.innerHTML = `Approving ${esc(sym)} ${txLink(h)}…`; });
       }
-      await replan(signed);
-      if (!plan?.tx) throw new Error("the plan changed — check the amounts and try again");
-      if (signed && plan.tx.approve) throw new Error("the signature could not be used — try again, or approve instead");
+      await replan();
       r.textContent = "Confirm in your wallet…";
       const rec = await wallet.send(plan.tx, (h) => { r.innerHTML = `Adding ${txLink(h)}…`; });
       r.innerHTML = `Added · ${txLink(rec.hash)}`;
@@ -305,7 +315,7 @@ async function partialDialog(l, opts) {
     $("ld-go").disabled = true;
     const r = $("ld-res");
     try {
-      const c = await api(`/api/pools/close-bins?id=${l.id}&indices=${idx.join(",")}`);
+      const c = await api(`/api/pools/close-bins?id=${l.id}&venue=${venueOf(l)}&indices=${idx.join(",")}`);
       r.textContent = "Confirm in your wallet…";
       const rec = await wallet.send(c, (h) => { r.innerHTML = `Withdrawing ${txLink(h)}…`; });
       r.innerHTML = `Withdrawn · ${txLink(rec.hash)}`;
@@ -324,7 +334,7 @@ export async function pnlCard(l) {
   ctx.fillStyle = "rgba(255,255,255,.04)"; for (let x = 0; x < W; x += 40) for (let y = 0; y < H; y += 40) ctx.fillRect(x, y, 1, 1);
   const mono = "'Fira Code', ui-monospace, Menlo, monospace", disp = "'Funnel Display', Inter, sans-serif";
   ctx.fillStyle = "#fff"; ctx.font = `700 54px ${disp}`; ctx.fillText(`${l.base.symbol} / ${l.quote.symbol}`, 60, 110);
-  const sub = `V3 · ${(l.fee / 1e4).toFixed(2)}% · ${l.binCount} bins · ${(SHAPE_NAME[l.shape] ?? l.shape).toLowerCase()}`;
+  const sub = `${venueLabel(l)} · ${(l.fee / 1e4).toFixed(2)}% · ${l.binCount} bins · ${(SHAPE_NAME[l.shape] ?? l.shape).toLowerCase()}`;
   ctx.fillStyle = "#a39d94"; ctx.font = `18px ${mono}`; ctx.fillText(sub, 60, 145);
   ctx.fillStyle = "#ff6414"; ctx.font = `700 14px ${mono}`; ctx.fillText(l.closed ? "CLOSED" : "LIVE", 60 + ctx.measureText(sub).width * (18 / 14) + 18, 145);
   const pos = l.pnlUsd >= 0, col = pos ? "#3ddc97" : "#ff6b5b";

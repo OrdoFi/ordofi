@@ -143,7 +143,7 @@
         const v = mine.reduce((n, s) => n + s.me.valueWeth, 0), c = mine.reduce((n, s) => n + s.me.earnedWeth, 0);
         $("st-n").textContent = mine.length;
         $("st-v").innerHTML = `${num(v, 5)}<small>WETH</small>`; $("st-c").innerHTML = `${c > 0 && c < 0.0001 ? "<0.0001" : num(c, 5)}<small>WETH</small>`;
-        $("st-list").innerHTML = mine.length ? mine.map((s) => `<div class="empty" style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--border)"><span><b style="display:inline;font-family:var(--display);color:var(--text)">WETH / ${s.symbol}</b> · ${num(s.me.valueWeth, 5)} WETH staked${s.me.valueUsd ? ` (${usd(s.me.valueUsd)})` : ""} · claimable ${num(s.me.earnedWeth, 6)} WETH · 7d rate ${(s.rate7d * 100).toFixed(2)}%</span><a href="/stakes?vault=${s.vault}" style="color:var(--accent)">open stake →</a></div>`).join("")
+        $("st-list").innerHTML = mine.length ? mine.map((s) => `<div class="empty" style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--border)"><span><b style="display:inline;font-family:var(--display);color:var(--text)">${s.venue === "v4" ? "ETH" : "WETH"} / ${s.symbol}</b> · ${s.venue === "v4" ? "V4" : "V3"} · ${num(s.me.valueWeth, 5)} WETH staked${s.me.valueUsd ? ` (${usd(s.me.valueUsd)})` : ""} · claimable ${num(s.me.earnedWeth, 6)} WETH · 7d rate ${(s.rate7d * 100).toFixed(2)}%</span><a href="/stakes?vault=${s.vault}" style="color:var(--accent)">open stake →</a></div>`).join("")
           : `<div class="empty"><b>Nothing here yet</b>Deposit into a <a href="/stakes" style="color:var(--accent)">stake</a> and your positions and rewards will show up here.</div>`;
       } catch { /* the pools section still works without it */ }
     }
@@ -153,7 +153,7 @@
       try {
         const fresh = await api(`/api/pools/positions?owner=${wallet.account}`);
         // Nothing moved: leave the DOM alone so open menus and focus survive the poll.
-        const sig = JSON.stringify(fresh.ladders.map((l) => [l.id, l.openBins, l.valueUsd.toFixed(2), l.unclaimedUsd.toFixed(4), l.closed]));
+        const sig = JSON.stringify(fresh.ladders.map((l) => [l.venue ?? "v3", l.id, l.openBins, l.valueUsd.toFixed(2), l.unclaimedUsd.toFixed(4), l.closed]));
         if (portfolio && sig === lastSig) return;
         lastSig = sig; portfolio = fresh;
         renderCal();

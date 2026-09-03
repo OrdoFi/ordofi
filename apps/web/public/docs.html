@@ -115,6 +115,7 @@ chain ──▶ watcher (arb attribution, OHLC tape) ──▶ SQLite ──▶ 
         <tr><td>WETH</td><td class="wrap"><code>0x0bd7d308f8e1639fab988df18a8011f41eacad73</code></td></tr>
         <tr><td>USDG</td><td class="wrap"><code>0x5fc5360d0400a0fd4f2af552add042d716f1d168</code> (6 decimals)</td></tr>
         <tr><td>Uniswap V3 factory / QuoterV2 / SwapRouter02</td><td class="wrap"><code>0x1f7d7550b1b028f7571e69a784071f0205fd2efa</code> · <code>0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7</code> · <code>0xcaf681a66d020601342297493863e78c959e5cb2</code></td></tr>
+        <tr><td>Uniswap V4 PoolManager / PositionManager / StateView</td><td class="wrap"><code>0x8366a39cc670b4001a1121b8f6a443a643e40951</code> · <code>0x58daec3116aae6d93017baaea7749052e8a04fa7</code> · <code>0xf3334192d15450cdd385c8b70e03f9a6bd9e673b</code> — every V4 pool lives inside the singleton and is keyed by its 32-byte <code>PoolId</code>; native ETH is currency <code>0x0</code></td></tr>
       </table>
       <table class="compact">
         <tr><th>OrdoFi host</th><th>Service</th><th>Transport</th></tr>
@@ -491,7 +492,7 @@ if (!finding.ok) console.error(finding.reason);   // signed proof of what went w
         <li><strong>Valuation.</strong> Per token, with decimals and price from <code>getTokenInfo</code>; ETH/USD is derived from the on-chain WETH/USDG pool, not a constant.</li>
         <li><strong>Extrapolation.</strong> Daily rates are not published until the sample spans at least one hour.</li>
       </ul>
-      <p>Alongside attribution the watcher records a one-minute OHLC tape per Uniswap V3 pool from <code>sqrtPriceX96</code> and swap amounts (<code>candles</code> table, pruned after three days). The index lives in SQLite (<code>arbs</code>, <code>arb_pools</code>, <code>auctions</code>, <code>settlements</code>, <code>candles</code>, <code>api_keys</code>, <code>meta</code>) with NDJSON as the raw record.</p>
+      <p>Alongside attribution the watcher records a one-minute OHLC tape per pool — Uniswap V3 pools by address, V4 pools by <code>PoolId</code>, with their keys from the PoolManager's <code>Initialize</code> events in <code>v4_pools</code> — from <code>sqrtPriceX96</code> and swap amounts (<code>candles</code> table, pruned after three days). The index lives in SQLite (<code>arbs</code>, <code>arb_pools</code>, <code>auctions</code>, <code>settlements</code>, <code>candles</code>, <code>api_keys</code>, <code>meta</code>) with NDJSON as the raw record.</p>
 
       <h2 id="self-hosting">Self-hosting<a class="anchor" href="#self-hosting">#</a></h2>
 <pre class="code">git clone https://github.com/OrdoFi/ordofi && cd ordofi && npm install

@@ -33,6 +33,8 @@ docker run -d --name web-preview --restart unless-stopped --network deploy_defau
   -e ORDO_STEALTH_SEND_ADDRESS="${ORDO_STEALTH_SEND_ADDRESS:-}" \
   -e ORDO_LADDER_ADDRESS="${ORDO_LADDER_ADDRESS:-}" -e ORDO_LADDER_BLOCK="${ORDO_LADDER_BLOCK:-}" \
   -e ORDO_STAKE_FACTORY="${ORDO_STAKE_FACTORY:-}" -e ORDO_STAKE_ZAP="${ORDO_STAKE_ZAP:-}" \
+  -e ORDO_LADDER_V4_ADDRESS="${ORDO_LADDER_V4_ADDRESS:-}" -e ORDO_LADDER_V4_BLOCK="${ORDO_LADDER_V4_BLOCK:-}" \
+  -e ORDO_STAKE_FACTORY_V4="${ORDO_STAKE_FACTORY_V4:-}" -e ORDO_STAKE_ZAP_V4="${ORDO_STAKE_ZAP_V4:-}" \
   -w /app/apps/web \
   deploy-web node --inspect=127.0.0.1:9229 serve.mjs >/dev/null
 sleep 4

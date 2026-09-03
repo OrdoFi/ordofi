@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { decodeEventLog, decodeFunctionResult, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
-import { rpcFetch, rpcOnce, rpcUrls, RPC_HEADERS } from "@ordofi/core";
+import { decodeEventLog, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
+import { rpcFetch, rpcOnce, V4, isV4PoolId } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
 import {
   alignTick,
@@ -14,24 +14,39 @@ import {
   tickToPrice,
   tickToSqrtPriceX96,
 } from "@ordofi/core/liquidity";
-import { CHAIN, USDG, WETH, bestPool, poolCache, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
+import { CHAIN, USDG, WETH, bestPool, bestPoolV4, poolCache, tradeCandles, tradeMarkets, tradeTokens } from "./trade.mjs";
+import { batchCall, call } from "./rpc.mjs";
+import {
+  LADDER_V4_ABI, LADDER_V4_TOPICS, MODIFY_LIQUIDITY_EVENT, MODIFY_LIQUIDITY_TOPIC, POSM_ABI,
+  holdings as v4Holdings, isPlainEthPool, keyArg, keyFromChain, liquidityOf as v4LiquidityOf, poolKeyOf, segmentsOf, slot0 as v4Slot0, tickProfile as v4TickProfile, tokensOf,
+} from "./v4.mjs";
 
 /**
- * Liquidity provision on Uniswap V3 pools, the way a person would want to do
- * it: pick a token, see where liquidity sits, drag a range, choose a shape,
- * and mint the whole ladder in one transaction through OrdoLadderManager.
+ * Liquidity provision on Uniswap V3 and V4 pools, the way a person would want
+ * to do it: pick a token, see where liquidity sits, drag a range, choose a
+ * shape, and mint the whole ladder in one transaction through OrdoLadderManager
+ * (V3 pools) or OrdoLadderManagerV4 (V4 pools).
  *
  * This module is the read side and the planner. It never signs anything; it
  * turns "I want a curve from $2,300 to $2,600 with 1 ETH" into the exact rungs
  * the contract will mint, and it reads back what a wallet already holds.
+ *
+ * A pool is named by its key: a 20-byte address for V3, a 32-byte PoolId for
+ * V4. Everything downstream branches on that, and every ladder carries a
+ * `venue` so the front end can send its actions to the right manager.
  */
 
 /** v3: the v2 manager plus EIP-2612 permit entry points. */
-export const LADDER_MANAGER = process.env.ORDO_LADDER_ADDRESS ?? "0xf9b15283AcbDd693d39d23AccDA7213d8d46a9E2";
+// `||`, not `??`: compose passes unset overrides through as empty strings.
+export const LADDER_MANAGER = process.env.ORDO_LADDER_ADDRESS || "0xf9b15283AcbDd693d39d23AccDA7213d8d46a9E2";
 /** Block the manager was deployed in; event scans never look further back. */
-const LADDER_DEPLOY_BLOCK = Number(process.env.ORDO_LADDER_BLOCK ?? 52_895_364);
+const LADDER_DEPLOY_BLOCK = Number(process.env.ORDO_LADDER_BLOCK || 52_895_364);
+export const LADDER_MANAGER_V4 = process.env.ORDO_LADDER_V4_ADDRESS || V4.ladderManager;
+const LADDER_V4_DEPLOY_BLOCK = Number(process.env.ORDO_LADDER_V4_BLOCK || V4.ladderDeployBlock);
 const NPM = "0x73991a25c818bf1f1128deaab1492d45638de0d3";
 const NATIVE = "eth";
+export const VENUES = ["v3", "v4"];
+export const venueOf = (pool) => (isV4PoolId(pool) ? "v4" : "v3");
 export const SHAPES = ["spot", "curve", "bidask"];
 const shapeCode = (s) => Math.max(0, SHAPES.indexOf(s));
 
@@ -118,50 +133,34 @@ const NPM_ABI = [
   },
 ];
 
-// ------------------------------------------------------------------ rpc
-
-async function call(to, abi, functionName, args = [], from) {
-  const req = { to, data: encodeFunctionData({ abi, functionName, args }) };
-  if (from) req.from = from;
-  const data = await rpcFetch("eth_call", [req, "latest"]);
-  return decodeFunctionResult({ abi, functionName, data });
-}
+// --------------------------------------------------------------- venues
 
 /**
- * Many eth_calls in few HTTP round trips. The upstream counts each call in a
- * batch against its per-second limit, so a busy pool's thousand ticks go over
- * in chunks with a breath between them rather than as one wall.
+ * What differs between the two managers, in one place: address, ABI, the
+ * block to scan events from, and how a bin's live liquidity is read — the V3
+ * position manager answers per token id with its range; V4's answers with
+ * liquidity alone and the range comes from our own bin record.
  */
-const BATCH = 120;
-async function batchCall(items) {
-  if (items.length <= BATCH) return batchOnce(items);
-  const out = [];
-  for (let i = 0; i < items.length; i += BATCH) {
-    if (i) await new Promise((r) => setTimeout(r, 350));
-    out.push(...(await batchOnce(items.slice(i, i + BATCH))));
-  }
-  return out;
-}
-async function batchOnce(items) {
-  if (!items.length) return [];
-  const url = rpcUrls()[0];
-  const body = items.map((it, i) => ({ jsonrpc: "2.0", id: i + 1, method: "eth_call", params: [{ to: it.to, data: encodeFunctionData({ abi: it.abi, functionName: it.fn, args: it.args ?? [] }) }, "latest"] }));
-  try {
-    const r = await fetch(url, { method: "POST", headers: RPC_HEADERS, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
-    const arr = await r.json();
-    if (!Array.isArray(arr)) throw new Error("no batch");
-    const byId = new Map(arr.map((x) => [x.id, x]));
-    return items.map((it, i) => {
-      const res = byId.get(i + 1);
-      if (!res || res.error) return null;
-      try { return decodeFunctionResult({ abi: it.abi, functionName: it.fn, data: res.result }); } catch { return null; }
-    });
-  } catch {
-    const out = [];
-    for (const it of items) out.push(await call(it.to, it.abi, it.fn, it.args ?? []).catch(() => null));
-    return out;
-  }
-}
+const V3_VENUE = {
+  id: "v3", manager: LADDER_MANAGER, abi: LADDER_ABI, deployBlock: LADDER_DEPLOY_BLOCK,
+  topics: MANAGER_TOPICS,
+  async binLiquidity(bins) {
+    const raw = await batchCall(bins.map((b) => ({ to: NPM, abi: NPM_ABI, fn: "positions", args: [b.tokenId] })));
+    return raw.map((p, i) => (p ? { tickLower: Number(p[5]), tickUpper: Number(p[6]), liquidity: BigInt(p[7]) } : { tickLower: Number(bins[i].tickLower), tickUpper: Number(bins[i].tickUpper), liquidity: null }));
+  },
+  poolOf: (l) => lower(l.pool),
+};
+const V4_VENUE = {
+  id: "v4", manager: LADDER_MANAGER_V4, abi: LADDER_V4_ABI, deployBlock: LADDER_V4_DEPLOY_BLOCK,
+  topics: LADDER_V4_TOPICS,
+  async binLiquidity(bins) {
+    const raw = await batchCall(bins.map((b) => ({ to: V4.positionManager, abi: POSM_ABI, fn: "getPositionLiquidity", args: [b.tokenId] })));
+    return raw.map((liq, i) => ({ tickLower: Number(bins[i].tickLower), tickUpper: Number(bins[i].tickUpper), liquidity: liq == null ? null : BigInt(liq) }));
+  },
+  poolOf: (l) => lower(l.poolId),
+};
+const VENUE = { v3: V3_VENUE, v4: V4_VENUE };
+const venueFor = (venue) => VENUE[venue] ?? V3_VENUE;
 
 const cache = new Map();
 async function cached(key, ttlMs, fn) {
@@ -331,7 +330,7 @@ export async function poolsList(store) {
     // The header cards: busiest by trades and by volume.
     const mostTraded = rows.slice().sort((a, b) => b.trades24 - a.trades24)[0] ?? null;
     const highestVolume = all[0] ?? null;
-    return { trending, established, all, featured: { mostTraded, highestVolume }, totals, manager: LADDER_MANAGER, at: new Date().toISOString() };
+    return { trending, established, all, featured: { mostTraded, highestVolume }, totals, manager: LADDER_MANAGER, managers: { v3: LADDER_MANAGER, v4: LADDER_MANAGER_V4 }, at: new Date().toISOString() };
   });
 }
 
@@ -340,6 +339,7 @@ export async function poolsList(store) {
 /** Live state of one pool plus its tokens, oriented so `base` is the token being LP'd. */
 export async function poolState(pool, baseToken) {
   pool = lower(pool);
+  if (isV4PoolId(pool)) return poolStateV4(pool, baseToken);
   const info = poolCache.get(pool) ?? await new Promise((r) => { poolCache.enqueue(pool); setTimeout(() => r(poolCache.get(pool)), 1500); });
   if (!info || !info.v3) throw new Error("not a Uniswap V3 pool we know");
   const [slot0, liquidity, spacing] = await Promise.all([
@@ -368,9 +368,47 @@ export async function poolState(pool, baseToken) {
   const tvlUsd = heldBase != null && heldQuote != null && priceUsd != null && quoteUsd != null
     ? (Number(heldBase) / 10 ** bInfo.decimals) * priceUsd + (Number(heldQuote) / 10 ** qInfo.decimals) * quoteUsd : null;
   return {
-    pool, fee: info.fee, tickSpacing: Number(spacing), tick, sqrtPriceX96: slot0[0].toString(), liquidity: liquidity.toString(),
+    pool, kind: "v3", venue: "v3", fee: info.fee, tickSpacing: Number(spacing), tick, sqrtPriceX96: slot0[0].toString(), liquidity: liquidity.toString(),
     token0: info.token0, token1: info.token1,
     base: { ...bInfo, isToken0: base === info.token0, totalSupply: supplyWhole }, quote: { ...qInfo, usdPerToken: quoteUsd },
+    price, priceUsd, marketCapUsd: supplyWhole != null && priceUsd != null ? supplyWhole * priceUsd : null, tvlUsd,
+  };
+}
+
+/**
+ * The V4 twin. The pool's key comes from the Initialize event the watcher
+ * recorded; price and liquidity from StateView. There is no per-pool balance
+ * to read for TVL inside the singleton, so the liquidity profile within 10×
+ * of the price is summed instead — for the pools this page shows, that is
+ * where all of it sits anyway.
+ */
+async function poolStateV4(poolId, baseToken) {
+  const key = poolKeyOf(STORE, poolId);
+  if (!key) throw new Error("not a Uniswap V4 pool we know yet");
+  const { token0, token1 } = tokensOf(key);
+  const s = await v4Slot0(poolId);
+  const base = lower(baseToken) === token1 ? token1 : token0;
+  const quote = base === token0 ? token1 : token0;
+  const [bInfo, qInfo, usd, supply, held] = await Promise.all([
+    tokenInfo(base), tokenInfo(quote), ethUsd().catch(() => null),
+    cached(`supply:${base}`, 3_600_000, async () => { const x = await call(base, ERC20_ABI, "totalSupply").catch(() => null); if (x == null) cache.delete(`supply:${base}`); return x; }),
+    cachedSWR(`v4tvl:${poolId}`, 60_000, () => v4Holdings(poolId, key.tickSpacing, s.tick, s.liquidity)).catch(() => null),
+  ]);
+  const raw = tickToPrice(s.tick);
+  const scale = 10 ** (bInfo.decimals - qInfo.decimals);
+  const price = base === token0 ? raw * scale : 1 / (raw * scale);
+  const quoteUsd = quote === WETH ? usd : quote === USDG ? 1 : qInfo.usdPerToken;
+  const priceUsd = quoteUsd ? price * quoteUsd : null;
+  const supplyWhole = supply != null ? Number(supply) / 10 ** bInfo.decimals : null;
+  const heldBase = held ? (base === token0 ? held.amount0 : held.amount1) : null, heldQuote = held ? (base === token0 ? held.amount1 : held.amount0) : null;
+  const tvlUsd = heldBase != null && priceUsd != null && quoteUsd != null
+    ? (Number(heldBase) / 10 ** bInfo.decimals) * priceUsd + (Number(heldQuote) / 10 ** qInfo.decimals) * quoteUsd : null;
+  return {
+    pool: poolId, kind: "v4", venue: "v4", poolId, key: { currency0: key.currency0, currency1: key.currency1, fee: key.fee, tickSpacing: key.tickSpacing, hooks: key.hooks },
+    native0: key.native0, hooks: key.hooked ? key.hooks : null, dynamicFee: key.dynamicFee,
+    fee: key.dynamicFee ? s.lpFee : key.fee, lpFee: s.lpFee, tickSpacing: key.tickSpacing, tick: s.tick, sqrtPriceX96: s.sqrtPriceX96.toString(), liquidity: s.liquidity.toString(),
+    token0, token1,
+    base: { ...bInfo, isToken0: base === token0, totalSupply: supplyWhole }, quote: { ...qInfo, usdPerToken: quoteUsd },
     price, priceUsd, marketCapUsd: supplyWhole != null && priceUsd != null ? supplyWhole * priceUsd : null, tvlUsd,
   };
 }
@@ -382,21 +420,53 @@ async function tokenInfo(address) {
 
 /** The token a pool is "about": whichever side is not ETH or USDG. */
 async function baseOf(pool) {
-  const info = poolCache.get(lower(pool));
-  if (!info) return undefined;
-  return isMoney(info.token0) && !isMoney(info.token1) ? info.token1 : info.token0;
+  pool = lower(pool);
+  let t0, t1;
+  if (isV4PoolId(pool)) {
+    const key = poolKeyOf(STORE, pool);
+    if (!key) return undefined;
+    ({ token0: t0, token1: t1 } = tokensOf(key));
+  } else {
+    const info = poolCache.get(pool);
+    if (!info) return undefined;
+    ({ token0: t0, token1: t1 } = info);
+  }
+  return isMoney(t0) && !isMoney(t1) ? t1 : t0;
 }
 
-/** Every V3 pool for a token against ETH or USDG, deepest first. */
+/**
+ * Every pool for a token against ETH or USDG, deepest first: the V3 pools
+ * the resolver knows, then the V4 ETH pools the watcher has seen initialised.
+ * V4 pools with a hook or a hook-set fee stay out — a hook may veto or tax
+ * what the manager does, and the page cannot promise what it cannot see.
+ */
 export async function poolsForToken(token) {
   token = lower(token);
   const all = [...poolCache.cache.entries()];
-  const mine = all.filter(([, p]) => p && !p.miss && p.v3 && (p.token0 === token || p.token1 === token) && (isMoney(p.token0) || isMoney(p.token1)));
-  const liq = await batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "liquidity" })));
-  return mine
-    .map(([addr, p], i) => ({ pool: addr, fee: p.fee, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i] != null ? liq[i].toString() : "0" }))
+  // The other side must be ETH or USDG: the page quotes in money, never in another token.
+  const mine = all.filter(([, p]) => p && !p.miss && p.v3 && (p.token0 === token || p.token1 === token) && isMoney(p.token0 === token ? p.token1 : p.token0));
+  const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && isPlainEthPool(k) && k.currency1 === token);
+  const [liq, liq4] = await Promise.all([
+    batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "liquidity" }))),
+    v4.length ? v4LiquidityOf(v4.map((k) => k.poolId)) : [],
+  ]);
+  // A pool whose liquidity could not be read must not rank as empty: the stake
+  // page picks the deepest pool from this list, and a stake is created once per pool.
+  if ([...liq, ...liq4].some((x) => x == null)) throw new Error("The RPC did not answer for every pool; try again in a moment.");
+  const byLiq = (a, b) => (BigInt(b.liquidity) > BigInt(a.liquidity) ? 1 : BigInt(b.liquidity) < BigInt(a.liquidity) ? -1 : 0);
+  // Anyone can initialise a V4 pool for a few cents, so a token collects dozens
+  // of empty ones at absurd fee tiers. Offer the ones holding liquidity (at most
+  // eight); with none live, the sanest three so the first position can still be built.
+  const v4Rows = v4.map((k, i) => ({ pool: k.poolId, kind: "v4", venue: "v4", fee: k.fee, tickSpacing: k.tickSpacing, quote: WETH, liquidity: liq4[i].toString() })).sort(byLiq);
+  const live4 = v4Rows.filter((p) => BigInt(p.liquidity) > 0n).slice(0, 8);
+  const v4Shown = live4.length ? live4 : v4Rows.filter((p) => p.fee <= 100_000).sort((a, b) => a.fee - b.fee).slice(0, 3);
+  const rows = [
+    ...mine.map(([addr, p], i) => ({ pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote: p.token0 === token ? p.token1 : p.token0, liquidity: liq[i].toString() })),
+    ...v4Shown,
+  ];
+  return rows
     .map((p) => ({ ...p, quoteSymbol: p.quote === WETH ? "ETH" : "USDG" }))
-    .sort((a, b) => (BigInt(b.liquidity) > BigInt(a.liquidity) ? 1 : -1));
+    .sort(byLiq);
 }
 
 // ---------------------------------------------------------------- depth
@@ -406,43 +476,19 @@ export async function poolsForToken(token) {
  * net liquidity at every initialised tick, and walks outward from the current
  * active liquidity to rebuild the depth profile. Bucketed for the chart.
  */
-export async function poolDepth(pool, { spanTicks = 3000, buckets = 60 } = {}) {
+export async function poolDepth(pool, { spanTicks = 3000, buckets = 60, base = null } = {}) {
   pool = lower(pool);
-  return cached(`depth:${pool}:${spanTicks}:${buckets}`, 30_000, async () => {
-    const st = await poolState(pool);
+  return cached(`depth:${pool}:${base ?? ""}:${spanTicks}:${buckets}`, 30_000, async () => {
+    // Oriented to the token being LP'd, else the pool's non-money side, so the dollar
+    // figures use the ETH/USDG price rather than whatever the token's own quote happens to be.
+    const st = await poolState(pool, base ?? await baseOf(pool));
     const spacing = st.tickSpacing;
     const lo = alignTick(st.tick - spanTicks, spacing, "down");
     const hi = alignTick(st.tick + spanTicks, spacing, "up");
-    const wordOf = (t) => Math.floor(Math.floor(t / spacing) / 256);
-    const words = [];
-    for (let w = wordOf(lo); w <= wordOf(hi); w++) words.push(w);
-    const bitmaps = await batchCall(words.map((w) => ({ to: pool, abi: POOL_ABI, fn: "tickBitmap", args: [w] })));
-    const initialised = [];
-    words.forEach((w, i) => {
-      const bm = bitmaps[i];
-      if (!bm) return;
-      for (let b = 0; b < 256; b++) {
-        if ((bm >> BigInt(b)) & 1n) {
-          const t = (w * 256 + b) * spacing;
-          if (t >= lo && t <= hi) initialised.push(t);
-        }
-      }
-    });
-    initialised.sort((a, b) => a - b);
-    const nets = await batchCall(initialised.map((t) => ({ to: pool, abi: POOL_ABI, fn: "ticks", args: [t] })));
-    const netAt = new Map(initialised.map((t, i) => [t, nets[i] ? BigInt(nets[i][1]) : 0n]));
+    const { initialised, netAt } = st.kind === "v4" ? await v4TickProfile(pool, spacing, lo, hi) : await v3TickProfile(pool, spacing, lo, hi);
 
     // Active liquidity per tick, walking up and down from the current tick.
-    const L0 = BigInt(st.liquidity);
-    const above = initialised.filter((t) => t > st.tick);
-    const below = initialised.filter((t) => t <= st.tick).reverse();
-    const segs = []; // [from, to, L]
-    let L = L0, from = st.tick;
-    for (const t of above) { segs.push([from, t, L]); L += netAt.get(t); from = t; }
-    segs.push([from, hi, L]);
-    L = L0; let to = st.tick;
-    for (const t of below) { segs.push([t, to, L]); L -= netAt.get(t); to = t; }
-    segs.push([lo, to, L]);
+    const segs = segmentsOf({ tick: st.tick, liquidity: st.liquidity, initialised, netAt }, lo, hi); // [from, to, L]
 
     // Bucket into bars with the token amounts that liquidity represents.
     const width = (hi - lo) / buckets;
@@ -463,8 +509,30 @@ export async function poolDepth(pool, { spanTicks = 3000, buckets = 60 } = {}) {
       const price = st.base.isToken0 ? rawMid * sc : 1 / (rawMid * sc);
       bars.push({ tickLower: Math.round(a), tickUpper: Math.round(b), price, liquidity: avg.toString(), usd });
     }
-    return { pool, tick: st.tick, price: st.price, priceUsd: st.priceUsd, bars, initialisedTicks: initialised.length };
+    return { pool, kind: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd, bars, initialisedTicks: initialised.length };
   });
+}
+
+/** The initialised ticks in [lo, hi] and the net liquidity at each, read off a V3 pool's own bitmap. */
+async function v3TickProfile(pool, spacing, lo, hi) {
+  const wordOf = (t) => Math.floor(Math.floor(t / spacing) / 256);
+  const words = [];
+  for (let w = wordOf(lo); w <= wordOf(hi); w++) words.push(w);
+  const bitmaps = await batchCall(words.map((w) => ({ to: pool, abi: POOL_ABI, fn: "tickBitmap", args: [w] })));
+  const initialised = [];
+  words.forEach((w, i) => {
+    const bm = bitmaps[i];
+    if (!bm) return;
+    for (let b = 0; b < 256; b++) {
+      if ((bm >> BigInt(b)) & 1n) {
+        const t = (w * 256 + b) * spacing;
+        if (t >= lo && t <= hi) initialised.push(t);
+      }
+    }
+  });
+  initialised.sort((a, b) => a - b);
+  const nets = await batchCall(initialised.map((t) => ({ to: pool, abi: POOL_ABI, fn: "ticks", args: [t] })));
+  return { initialised, netAt: new Map(initialised.map((t, i) => [t, nets[i] ? BigInt(nets[i][1]) : 0n])) };
 }
 
 // -------------------------------------------------------------- planner
@@ -507,12 +575,15 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
   const band = Math.max(st.tickSpacing, 100);
   const deadline = Math.floor(Date.now() / 1000) + 900;
   const rungs = plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: r.amount0Min ?? 0n, amount1Min: r.amount1Min ?? 0n }));
+  // The V4 manager takes the pool's key where V3's takes its address; the rest of the call is the same.
+  const poolArg = st.kind === "v4" ? keyArg(st.key) : getAddress(st.pool);
+  const abi = venueFor(st.kind).abi;
   const build = (signed) => signed
-    ? encodeFunctionData({ abi: LADDER_ABI, functionName: "openLadderWithPermit", args: [getAddress(st.pool), rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline), signed] })
-    : encodeFunctionData({ abi: LADDER_ABI, functionName: "openLadder", args: [getAddress(st.pool), rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline)] });
+    ? encodeFunctionData({ abi, functionName: "openLadderWithPermit", args: [poolArg, rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline), signed] })
+    : encodeFunctionData({ abi, functionName: "openLadder", args: [poolArg, rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline)] });
   const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
   return {
-    pool: st.pool, tick: st.tick, price: st.price, priceUsd: st.priceUsd,
+    pool: st.pool, kind: st.kind, venue: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd,
     base: st.base, quote: st.quote,
     minTick: plan.minTick, maxTick: plan.maxTick,
     minPrice: Math.min(toPrice(plan.minTick), toPrice(plan.maxTick)), maxPrice: Math.max(toPrice(plan.minTick), toPrice(plan.maxTick)),
@@ -569,21 +640,30 @@ export function permitFromQuery(q) {
   return { value: BigInt(value), deadline: BigInt(deadline), v: Number(v), r, s };
 }
 
-/** How a deposit is paid: the WETH side as native ETH, anything else by allowance — or by permit when the caller signed one. */
+/**
+ * How a deposit is paid: the ETH side as native value, every ERC-20 side by
+ * allowance — or the token being LP'd by permit when the caller signed one.
+ * The V3 manager wraps the value into WETH itself; the V4 manager settles it
+ * as the pool's native currency. Either way the wallet sends ETH.
+ */
 async function fundingFor(st, total0, total1, build, deadline, owner, permit) {
+  const manager = getAddress(venueFor(st.kind).manager);
   const wethIsToken0 = st.token0 === WETH;
   const wethNeeded = st.token0 === WETH ? total0 : st.token1 === WETH ? total1 : 0n;
-  const other = st.token0 === WETH ? st.token1 : st.token0;
-  const otherNeeded = st.token0 === WETH ? total1 : total0;
+  // Every ERC-20 side with something to pay, the token being LP'd first: that is the one a permit can cover.
+  const sides = [[st.token0, total0], [st.token1, total1]].filter(([t, n]) => t !== WETH && n > 0n).sort(([a], [b]) => (a === st.base.address ? -1 : b === st.base.address ? 1 : 0));
+  const [other, otherNeeded] = sides[0] ?? [null, 0n];
   const needsToken = otherNeeded > 0n;
   const info = needsToken ? await permitInfo(other, owner).catch(() => ({ supported: false })) : { supported: false };
   const signed = needsToken && permit && info.supported ? { token: getAddress(other), value: permit.value, deadline: permit.deadline, v: permit.v, r: permit.r, s: permit.s } : null;
+  // With a signed permit no approve transaction is needed for that side; the signature rides in the calldata.
+  const approvals = sides.filter(([t]) => !(signed && t === other)).map(([t, n]) => ({ token: getAddress(t), amount: n.toString(), spender: manager }));
   return {
-    to: getAddress(LADDER_MANAGER), data: build(signed),
+    to: manager, venue: st.kind, data: build(signed),
     value: wethNeeded.toString(),
-    // With a signed permit no approve transaction is needed; the signature rides in the calldata.
-    approve: needsToken && !signed ? { token: getAddress(other), amount: otherNeeded.toString(), spender: getAddress(LADDER_MANAGER) } : null,
-    permit: needsToken ? { ...info, spender: getAddress(LADDER_MANAGER), value: otherNeeded.toString(), deadline, applied: !!signed } : null,
+    approve: approvals[0] ?? null,
+    approvals,
+    permit: needsToken ? { ...info, spender: manager, value: otherNeeded.toString(), deadline, applied: !!signed } : null,
     wethIsToken0, deadline,
   };
 }
@@ -593,10 +673,12 @@ async function fundingFor(st, total0, total1, build, deadline, owner, permit) {
  * the contract deepens each position rather than minting new ones — and the
  * shape is whatever the user picks for the amount being added.
  */
-export async function planAdd({ id, shape = "spot", baseAmount = 0n, quoteAmount = 0n, owner = null, permit = null }) {
-  const l = await call(LADDER_MANAGER, LADDER_ABI, "ladder", [BigInt(id)]);
+export async function planAdd({ id, venue = "v3", shape = "spot", baseAmount = 0n, quoteAmount = 0n, owner = null, permit = null }) {
+  const v = venueFor(venue);
+  const l = await call(v.manager, v.abi, "ladder", [BigInt(id)]);
   if (l.closedAt !== 0n) throw new Error("ladder is closed");
-  const st = await poolState(l.pool, await baseOf(l.pool));
+  const poolKey = v.poolOf(l);
+  const st = await poolState(poolKey, await baseOf(poolKey));
   const open = l.bins.filter((b) => b.open).map((b) => ({ tickLower: Number(b.tickLower), tickUpper: Number(b.tickUpper) })).sort((a, b) => a.tickLower - b.tickLower);
   const budget0 = st.base.isToken0 ? baseAmount : quoteAmount;
   const budget1 = st.base.isToken0 ? quoteAmount : baseAmount;
@@ -605,12 +687,12 @@ export async function planAdd({ id, shape = "spot", baseAmount = 0n, quoteAmount
   const deadline = Math.floor(Date.now() / 1000) + 900;
   const rungs = rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: 0n, amount1Min: 0n }));
   const build = (signed) => signed
-    ? encodeFunctionData({ abi: LADDER_ABI, functionName: "addLiquidityWithPermit", args: [BigInt(id), rungs, BigInt(deadline), signed] })
-    : encodeFunctionData({ abi: LADDER_ABI, functionName: "addLiquidity", args: [BigInt(id), rungs, BigInt(deadline)] });
+    ? encodeFunctionData({ abi: v.abi, functionName: "addLiquidityWithPermit", args: [BigInt(id), rungs, BigInt(deadline), signed] })
+    : encodeFunctionData({ abi: v.abi, functionName: "addLiquidity", args: [BigInt(id), rungs, BigInt(deadline)] });
   const sc = 10 ** (st.base.decimals - st.quote.decimals);
   const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : 1 / (raw * sc); };
   return {
-    id: String(id), pool: st.pool, tick: st.tick, price: st.price, priceUsd: st.priceUsd, base: st.base, quote: st.quote, shape,
+    id: String(id), venue: v.id, pool: st.pool, kind: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd, base: st.base, quote: st.quote, shape,
     bins: open.length, filled: rs.length,
     total0: total0.toString(), total1: total1.toString(),
     baseTotal: (st.base.isToken0 ? total0 : total1).toString(), quoteTotal: (st.base.isToken0 ? total1 : total0).toString(),
@@ -640,11 +722,13 @@ async function usdAt(token, ts) {
   const hours = Math.ceil(age / 3600) + 2;
   // Only our own tape is consulted; when it does not reach back to `ts` the
   // live price stands in rather than an eth_getLogs walk stalling the page.
+  // The deepest V3 pool for the pair, or failing that the deepest plain V4 one: a token that only trades in V4 still has a tape.
+  const tapePool = async (base, quote) => (await bestPool(base, quote)) ?? (await bestPoolV4(STORE, base, quote).catch(() => null));
   const closeAt = async (base, quote) => {
-    const found = await bestPool(base === "eth" ? WETH : base, quote === "eth" ? WETH : quote);
+    const found = await tapePool(base === "eth" ? WETH : base, quote === "eth" ? WETH : quote);
     const cov = found && STORE?.candleCoverage?.(found.pool);
     if (!cov || cov.from > ts) return null;
-    const c = await tradeCandles({ base, quote, bucketSec, hours, store: STORE });
+    const c = await tradeCandles({ base, quote, pool: found.kind === "v4" ? found.pool : null, bucketSec, hours, store: STORE });
     let last = null;
     for (const x of c.candles) { if (x.time <= ts) last = x; else break; }
     return last?.close ?? null;
@@ -652,8 +736,8 @@ async function usdAt(token, ts) {
   let usd = null;
   try {
     if (token === WETH) usd = await closeAt("eth", USDG);
-    else if (await bestPool(token, WETH)) { const inEth = await closeAt(token, "eth"); const eth = await usdAt(WETH, ts); usd = inEth != null && eth != null ? inEth * eth : null; }
-    else if (await bestPool(token, USDG)) usd = await closeAt(token, USDG);
+    else if (await tapePool(token, WETH)) { const inEth = await closeAt(token, "eth"); const eth = await usdAt(WETH, ts); usd = inEth != null && eth != null ? inEth * eth : null; }
+    else if (await tapePool(token, USDG)) usd = await closeAt(token, USDG);
   } catch { /* fall through to the live price */ }
   if (usd == null) usd = token === WETH ? await ethUsd().catch(() => null) : (await tokenInfo(token)).usdPerToken;
   usdAtCache.set(key, usd);
@@ -683,15 +767,16 @@ async function archiveFetch(method, params) {
   try { return await rpcFetch(method, params); } catch (e) { throw lastErr ?? e; }
 }
 
-async function ownerLogs(owner) {
-  const cur = logCache.get(owner) ?? { toBlock: LADDER_DEPLOY_BLOCK - 1, logs: [] };
+async function ownerLogs(owner, venue) {
+  const key = `${venue.id}:${owner}`;
+  const cur = logCache.get(key) ?? { toBlock: venue.deployBlock - 1, logs: [] };
   const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
   let from = cur.toBlock + 1;
   let span = 400_000;
   while (from <= head) {
     const to = Math.min(head, from + span - 1);
     try {
-      const part = await archiveFetch("eth_getLogs", [{ address: LADDER_MANAGER, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [MANAGER_TOPICS, null, pad32(owner)] }]);
+      const part = await archiveFetch("eth_getLogs", [{ address: venue.manager, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [venue.topics, null, pad32(owner)] }]);
       cur.logs.push(...part);
       from = to + 1;
     } catch (e) {
@@ -700,7 +785,7 @@ async function ownerLogs(owner) {
     }
   }
   cur.toBlock = head;
-  logCache.set(owner, cur);
+  logCache.set(key, cur);
   return cur.logs;
 }
 
@@ -725,13 +810,13 @@ async function blockTs(bn) {
  * what came out, fees claimed, gas paid. This is the ground truth the PnL
  * calendar and every position card are built from.
  */
-async function historyOf(owner) {
-  const logs = await ownerLogs(owner);
+async function historyOf(owner, venue) {
+  const logs = await ownerLogs(owner, venue);
   const byLadder = new Map();
-  const txs = new Map(); // hash → { ts, gasEth, events: [], npm: Map(tokenId → flows) }
+  const txs = new Map(); // hash → { ts, gasEth, events: [], npm: Map(tokenId → flows), deltas: Map(tokenId → liquidity delta) }
   for (const lg of logs) {
     let ev;
-    try { ev = decodeEventLog({ abi: LADDER_ABI, data: lg.data, topics: lg.topics }); } catch { continue; }
+    try { ev = decodeEventLog({ abi: venue.abi, data: lg.data, topics: lg.topics }); } catch { continue; }
     const id = ev.args.ladderId.toString();
     const tx = txs.get(lg.transactionHash) ?? { hash: lg.transactionHash, block: Number(BigInt(lg.blockNumber)), ts: 0, gasEth: 0, events: [] };
     tx.events.push({ name: ev.eventName, args: ev.args, ladderId: id });
@@ -744,22 +829,75 @@ async function historyOf(owner) {
     tx.ts = ts;
     tx.gasEth = r ? Number(BigInt(r.gasUsed) * BigInt(r.effectiveGasPrice ?? "0x0")) / 1e18 : 0;
     tx.npm = new Map();
+    tx.deltas = new Map();
     for (const lg of r?.logs ?? []) {
-      if (lower(lg.address) !== NPM) continue;
-      const name = NPM_TOPICS.get(lg.topics[0]);
-      if (!name) continue;
-      try {
-        const ev = decodeEventLog({ abi: NPM_EVENTS, data: lg.data, topics: lg.topics });
-        const tid = ev.args.tokenId.toString();
-        const f = tx.npm.get(tid) ?? { inc0: 0n, inc1: 0n, dec0: 0n, dec1: 0n, col0: 0n, col1: 0n };
-        if (name === "IncreaseLiquidity") { f.inc0 += ev.args.amount0; f.inc1 += ev.args.amount1; }
-        else if (name === "DecreaseLiquidity") { f.dec0 += ev.args.amount0; f.dec1 += ev.args.amount1; }
-        else { f.col0 += ev.args.amount0; f.col1 += ev.args.amount1; }
-        tx.npm.set(tid, f);
-      } catch { /* not ours */ }
+      if (venue.id === "v3") {
+        // The V3 position manager says what each bin took and gave, in token amounts.
+        if (lower(lg.address) !== NPM) continue;
+        const name = NPM_TOPICS.get(lg.topics[0]);
+        if (!name) continue;
+        try {
+          const ev = decodeEventLog({ abi: NPM_EVENTS, data: lg.data, topics: lg.topics });
+          const tid = ev.args.tokenId.toString();
+          const f = tx.npm.get(tid) ?? { inc0: 0n, inc1: 0n, dec0: 0n, dec1: 0n, col0: 0n, col1: 0n };
+          if (name === "IncreaseLiquidity") { f.inc0 += ev.args.amount0; f.inc1 += ev.args.amount1; }
+          else if (name === "DecreaseLiquidity") { f.dec0 += ev.args.amount0; f.dec1 += ev.args.amount1; }
+          else { f.col0 += ev.args.amount0; f.col1 += ev.args.amount1; }
+          tx.npm.set(tid, f);
+        } catch { /* not ours */ }
+      } else {
+        // The V4 singleton says only how much liquidity each bin gained or lost;
+        // amounts are reconstructed per ladder, where the pool's price is known.
+        if (lower(lg.address) !== V4.poolManager || lg.topics[0] !== MODIFY_LIQUIDITY_TOPIC) continue;
+        try {
+          const ev = decodeEventLog({ abi: [MODIFY_LIQUIDITY_EVENT], data: lg.data, topics: lg.topics });
+          if (lower(ev.args.sender) !== V4.positionManager) continue;
+          const tid = BigInt(ev.args.salt).toString();
+          tx.deltas.set(tid, (tx.deltas.get(tid) ?? 0n) + ev.args.liquidityDelta);
+        } catch { /* not ours */ }
+      }
     }
   }));
   return { byLadder, txs };
+}
+
+/**
+ * V4 bins' token flows from their liquidity deltas: each bin's amounts at the
+ * price the tape recorded for that minute, scaled so the bins of a deposit sum
+ * to exactly what the manager said went in. Without tape for that minute the
+ * current price stands in; the totals are still exact, only the split between
+ * bins is then approximate.
+ */
+async function flowsFromDeltas(tx, l, st, in0, in1, out0, out1) {
+  const flows = new Map();
+  const mine = [...tx.deltas].filter(([tid]) => l.bins.some((b) => b.tokenId.toString() === tid));
+  if (!mine.length) return flows;
+  const tick = (await tickAt(st.pool, tx.ts)) ?? st.tick;
+  const sqrtP = tickToSqrtPriceX96(tick);
+  const rawOf = (tid, dL) => {
+    const b = l.bins.find((x) => x.tokenId.toString() === tid);
+    return amountsForLiquidity(sqrtP, tickToSqrtPriceX96(Number(b.tickLower)), tickToSqrtPriceX96(Number(b.tickUpper)), dL < 0n ? -dL : dL);
+  };
+  const scaleTo = (rows, total0, total1) => {
+    const s0 = rows.reduce((n, r) => n + r.amount0, 0n), s1 = rows.reduce((n, r) => n + r.amount1, 0n);
+    return rows.map((r) => ({ tid: r.tid, amount0: s0 > 0n ? (r.amount0 * total0) / s0 : 0n, amount1: s1 > 0n ? (r.amount1 * total1) / s1 : 0n }));
+  };
+  const inc = mine.filter(([, d]) => d > 0n).map(([tid, d]) => ({ tid, ...rawOf(tid, d) }));
+  const dec = mine.filter(([, d]) => d < 0n).map(([tid, d]) => ({ tid, ...rawOf(tid, d) }));
+  for (const r of scaleTo(inc, in0, in1)) flows.set(r.tid, { ...(flows.get(r.tid) ?? { inc0: 0n, inc1: 0n, dec0: 0n, dec1: 0n, col0: 0n, col1: 0n }), inc0: r.amount0, inc1: r.amount1 });
+  for (const r of scaleTo(dec, out0, out1)) flows.set(r.tid, { ...(flows.get(r.tid) ?? { inc0: 0n, inc1: 0n, dec0: 0n, dec1: 0n, col0: 0n, col1: 0n }), dec0: r.amount0, dec1: r.amount1, closed: true });
+  return flows;
+}
+
+/** The pool's tick at a moment in the past, from our own minute candles; null when the tape does not reach it. */
+async function tickAt(pool, ts) {
+  const cov = STORE?.candleCoverage?.(pool);
+  if (!cov || cov.from > ts) return null;
+  const rows = STORE?.candlesFor?.(pool, Math.floor(ts / 60) * 60 - 6 * 3600) ?? [];
+  let last = null;
+  for (const c of rows) { if (c.bucket <= ts) last = c; else break; }
+  if (!last || !(last.close > 0)) return null;
+  return Math.floor(Math.log(last.close) / Math.log(1.0001));
 }
 
 /**
@@ -769,18 +907,36 @@ async function historyOf(owner) {
  */
 export async function positionsOf(store, owner) {
   owner = getAddress(owner);
-  return cached(`portfolio:${owner}`, 8_000, () => buildPortfolio(owner));
+  return cached(`portfolio:${owner}`, 8_000, async () => {
+    const [v3, v4] = await Promise.all([buildPortfolio(owner, V3_VENUE), buildPortfolio(owner, V4_VENUE)]);
+    return mergePortfolios(owner, [v3, v4]);
+  });
 }
 
-async function buildPortfolio(owner) {
-  const ids = await call(LADDER_MANAGER, LADDER_ABI, "laddersOf", [owner]);
+/** Both managers' ladders as one statement: cards interleave by age, the calendar and the totals add up. */
+function mergePortfolios(owner, parts) {
+  const ladders = parts.flatMap((p) => p.ladders).sort((a, b) => b.openedAt - a.openedAt);
+  const days = {};
+  for (const p of parts) for (const [d, row] of Object.entries(p.days)) {
+    const cur = days[d] ?? (days[d] = { pnlUsd: 0, pnlEth: 0, gasUsd: 0, closes: 0, collects: 0 });
+    for (const k of Object.keys(cur)) cur[k] += row[k] ?? 0;
+  }
+  const totals = parts.reduce((t, p) => { for (const k of Object.keys(t)) t[k] += p.totals[k] ?? 0; return t; }, { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, gasUsd: 0, open: 0, closed: 0 });
+  return {
+    owner, manager: LADDER_MANAGER, managers: { v3: LADDER_MANAGER, v4: LADDER_MANAGER_V4 }, ethUsd: parts.find((p) => p.ethUsd != null)?.ethUsd ?? null,
+    ladders, days, totals, historyError: parts.map((p) => p.historyError).filter(Boolean).join("; ") || null,
+  };
+}
+
+async function buildPortfolio(owner, venue) {
+  const ids = await call(venue.manager, venue.abi, "laddersOf", [owner]).catch((e) => { console.warn(`pools | ${venue.id} laddersOf ${owner} failed: ${e?.message ?? e}`); return []; });
   const usd = await ethUsd().catch(() => null);
-  const empty = { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: [], days: {}, totals: { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, open: 0, closed: 0 } };
+  const empty = { owner, venue: venue.id, manager: venue.manager, ethUsd: usd, ladders: [], days: {}, totals: { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, gasUsd: 0, open: 0, closed: 0 }, historyError: null };
   if (!ids.length) return empty;
   let historyError = null;
   const [ladders, hist] = await Promise.all([
-    batchCall(ids.map((id) => ({ to: LADDER_MANAGER, abi: LADDER_ABI, fn: "ladder", args: [id] }))),
-    historyOf(owner).catch((e) => { historyError = e?.message ?? String(e); console.warn(`pools | history for ${owner} unavailable: ${historyError}`); return { byLadder: new Map(), txs: new Map() }; }),
+    batchCall(ids.map((id) => ({ to: venue.manager, abi: venue.abi, fn: "ladder", args: [id] }))),
+    historyOf(owner, venue).catch((e) => { historyError = e?.message ?? String(e); console.warn(`pools | ${venue.id} history for ${owner} unavailable: ${historyError}`); return { byLadder: new Map(), txs: new Map() }; }),
   ]);
   const out = [];
   const days = {};
@@ -802,7 +958,8 @@ async function buildPortfolio(owner) {
     const l = ladders[i];
     if (!l) return;
     const id = ids[i].toString();
-    const st = await poolState(l.pool, await baseOf(l.pool)).catch(() => null);
+    const poolKey = venue.poolOf(l);
+    const st = await poolState(poolKey, await baseOf(poolKey)).catch(() => null);
     if (!st) return;
     const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals);
     const d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
@@ -818,15 +975,15 @@ async function buildPortfolio(owner) {
 
     // Live holdings per bin.
     const openBins = l.bins.map((b, k) => ({ ...b, index: k })).filter((b) => b.open);
-    const posRaw = await batchCall(openBins.map((b) => ({ to: NPM, abi: NPM_ABI, fn: "positions", args: [b.tokenId] })));
+    const posRaw = openBins.length ? await venue.binLiquidity(openBins) : [];
     const sqrtP = tickToSqrtPriceX96(st.tick);
     let held0 = 0n, held1 = 0n;
     const liveByIndex = new Map();
     posRaw.forEach((p, k) => {
-      if (!p) return;
-      const a = amountsForLiquidity(sqrtP, tickToSqrtPriceX96(Number(p[5])), tickToSqrtPriceX96(Number(p[6])), BigInt(p[7]));
+      if (!p || p.liquidity == null) return;
+      const a = amountsForLiquidity(sqrtP, tickToSqrtPriceX96(p.tickLower), tickToSqrtPriceX96(p.tickUpper), p.liquidity);
       held0 += a.amount0; held1 += a.amount1;
-      liveByIndex.set(openBins[k].index, { liquidity: p[7].toString(), amount0: a.amount0, amount1: a.amount1 });
+      liveByIndex.set(openBins[k].index, { liquidity: p.liquidity.toString(), amount0: a.amount0, amount1: a.amount1 });
     });
     const bins = l.bins.map((b, k) => {
       const live = liveByIndex.get(k);
@@ -844,7 +1001,7 @@ async function buildPortfolio(owner) {
     // What collect() would pay right now, net of the 1%.
     let fee0 = 0n, fee1 = 0n;
     if (l.closedAt === 0n) {
-      try { const [f0, f1] = await call(LADDER_MANAGER, LADDER_ABI, "collect", [ids[i]], owner); fee0 = BigInt(f0); fee1 = BigInt(f1); } catch { /* nothing accrued */ }
+      try { const [f0, f1] = await call(venue.manager, venue.abi, "collect", [ids[i]], owner); fee0 = BigInt(f0); fee1 = BigInt(f1); } catch { /* nothing accrued */ }
     }
 
     // History: cost basis per bin at deposit-time prices, realised PnL per close, gas.
@@ -860,6 +1017,13 @@ async function buildPortfolio(owner) {
       const opened = mine.find((e) => e.name === "LadderOpened"), added = mine.find((e) => e.name === "LiquidityAdded");
       const closed = mine.find((e) => e.name === "BinsClosed"), fees = mine.find((e) => e.name === "FeesCollected");
       const myTokenIds = new Set(l.bins.map((b) => b.tokenId.toString()));
+      if (venue.id === "v4" && tx.deltas?.size) {
+        // Per-bin amounts from the singleton's liquidity deltas, pinned to the manager's own totals.
+        const inA = opened ? [opened.args.deposited0, opened.args.deposited1] : added ? [added.args.added0, added.args.added1] : [0n, 0n];
+        const outA = closed ? [closed.args.principal0, closed.args.principal1] : [0n, 0n];
+        const flows = await flowsFromDeltas(tx, l, st, inA[0], inA[1], outA[0], outA[1]);
+        tx.npm = new Map([...tx.npm, ...flows]);
+      }
       if (opened || added) {
         let in0 = 0n, in1 = 0n;
         for (const [tid, f] of tx.npm) { if (myTokenIds.has(tid) && (f.inc0 || f.inc1)) { const u = await valAt(f.inc0, f.inc1, tx.ts); cost.set(tid, (cost.get(tid) ?? 0) + u); in0 += f.inc0; in1 += f.inc1; } }
@@ -871,7 +1035,7 @@ async function buildPortfolio(owner) {
         const f0 = fees ? fees.args.toOwner0 : 0n, f1 = fees ? fees.args.toOwner1 : 0n;
         const outUsd = await valAt(closed.args.principal0 + f0, closed.args.principal1 + f1, tx.ts);
         let closedCost = 0;
-        for (const [tid, f] of tx.npm) { if (myTokenIds.has(tid) && (f.dec0 || f.dec1 || (!f.inc0 && !f.inc1 && (f.col0 || f.col1)))) { closedCost += cost.get(tid) ?? 0; cost.delete(tid); } }
+        for (const [tid, f] of tx.npm) { if (myTokenIds.has(tid) && (f.closed || f.dec0 || f.dec1 || (!f.inc0 && !f.inc1 && (f.col0 || f.col1)))) { closedCost += cost.get(tid) ?? 0; cost.delete(tid); } }
         const pnl = outUsd - closedCost;
         realizedUsd += pnl; returnedUsd += outUsd;
         if (fees) claimedUsd += await valAt(f0, f1, tx.ts);
@@ -896,7 +1060,7 @@ async function buildPortfolio(owner) {
     const pnlUsd = unrealizedUsd + realizedUsd; // before gas; `netUsd` is after
     const openedAt = Number(l.openedAt), closedAt = Number(l.closedAt);
     out.push({
-      id, pool: l.pool, fee: st.fee, closed: !isOpen, openedAt, closedAt: closedAt || null,
+      id, venue: venue.id, manager: venue.manager, pool: poolKey, kind: st.kind, fee: st.fee, tickSpacing: st.tickSpacing, closed: !isOpen, openedAt, closedAt: closedAt || null,
       shape: SHAPES[Number(l.shape)] ?? "bidask", binCount: l.bins.length, openBins: Number(l.openBins),
       base: st.base, quote: st.quote, token0: st.token0, token1: st.token1, price: st.price, priceUsd: st.priceUsd, tick: st.tick,
       deposited0: l.deposited0.toString(), deposited1: l.deposited1.toString(), depositedUsd,
@@ -922,83 +1086,49 @@ async function buildPortfolio(owner) {
     depositedUsd: t.depositedUsd + (l.closed ? 0 : l.depositedUsd), pnlUsd: t.pnlUsd + l.pnlUsd, gasUsd: t.gasUsd + l.gasUsd,
     open: t.open + (l.closed ? 0 : 1), closed: t.closed + (l.closed ? 1 : 0),
   }), { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, gasUsd: 0, open: 0, closed: 0 });
-  return { owner, manager: LADDER_MANAGER, ethUsd: usd, ladders: out.sort((a, b) => b.openedAt - a.openedAt), days, totals, historyError };
+  return { owner, venue: venue.id, manager: venue.manager, ethUsd: usd, ladders: out.sort((a, b) => b.openedAt - a.openedAt), days, totals, historyError };
 }
 
 // ------------------------------------------------------------ platform
 
 const FEES_TOPIC = toEventSelector(LADDER_ABI.find((x) => x.type === "event" && x.name === "FeesCollected"));
-const feeLogCache = { toBlock: LADDER_DEPLOY_BLOCK - 1, logs: [] };
-/** Every FeesCollected the manager ever emitted, for every owner, read incrementally. */
-async function allFeeLogs() {
+const feeLogCache = new Map(); // venue id → { toBlock, logs }
+/** Every FeesCollected a manager ever emitted, for every owner, read incrementally. */
+async function allFeeLogs(venue) {
+  const cur = feeLogCache.get(venue.id) ?? { toBlock: venue.deployBlock - 1, logs: [] };
   const head = parseInt(await rpcFetch("eth_blockNumber", []), 16);
-  let from = feeLogCache.toBlock + 1, span = 400_000;
+  let from = cur.toBlock + 1, span = 400_000;
   while (from <= head) {
     const to = Math.min(head, from + span - 1);
     try {
-      const part = await archiveFetch("eth_getLogs", [{ address: LADDER_MANAGER, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [FEES_TOPIC] }]);
-      feeLogCache.logs.push(...part);
+      const part = await archiveFetch("eth_getLogs", [{ address: venue.manager, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16), topics: [FEES_TOPIC] }]);
+      cur.logs.push(...part);
       from = to + 1;
     } catch (e) {
       if (span <= 2_000) throw e;
       span = Math.floor(span / 4);
     }
   }
-  feeLogCache.toBlock = head;
-  return feeLogCache.logs;
+  cur.toBlock = head;
+  feeLogCache.set(venue.id, cur);
+  return cur.logs;
 }
 
 /**
  * The numbers in the header of every liquidity page — the same four Delta
  * shows: positions ever built, fees earned by LPs (owner share plus the 1%,
  * each valued the day it was collected), what is in open positions now, and
- * the ETH price. Stakes are folded in by the caller, which knows them.
+ * the ETH price. Both managers count; stakes are folded in by the caller,
+ * which knows them.
  */
 export async function platformStats({ stakesTvlUsd = 0, stakesFeesUsd = 0, stakes = 0 } = {}) {
   return cached("platform", 60_000, async () => {
-    const [countRaw, usd] = await Promise.all([call(LADDER_MANAGER, LADDER_ABI, "ladderCount").catch(() => 0n), ethUsd().catch(() => null)]);
-    const count = Number(countRaw);
-    const ids = Array.from({ length: count }, (_, i) => BigInt(i));
-    const ladders = count ? await batchCall(ids.map((id) => ({ to: LADDER_MANAGER, abi: LADDER_ABI, fn: "ladder", args: [id] }))) : [];
-    const byId = new Map(ladders.map((l, i) => [String(i), l]).filter(([, l]) => l));
-
-    // Open value: every live bin, priced at the pool's current tick.
-    const openBins = [];
-    for (const l of ladders) { if (!l || l.closedAt !== 0n) continue; for (const b of l.bins) if (b.open) openBins.push({ tokenId: b.tokenId, pool: lower(l.pool) }); }
-    const states = new Map();
-    for (const p of new Set(openBins.map((b) => b.pool))) states.set(p, await poolState(p, await baseOf(p)).catch(() => null));
-    const valNow = (st, a0, a1) => {
-      const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals), d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
-      const p0 = st.base.isToken0 ? st.priceUsd : st.quote.usdPerToken, p1 = st.base.isToken0 ? st.quote.usdPerToken : st.priceUsd;
-      return (Number(a0) / d0) * (p0 ?? 0) + (Number(a1) / d1) * (p1 ?? 0);
-    };
-    let ladderTvlUsd = 0;
-    const pos = openBins.length ? await batchCall(openBins.map((b) => ({ to: NPM, abi: NPM_ABI, fn: "positions", args: [b.tokenId] }))) : [];
-    pos.forEach((p, i) => {
-      const st = states.get(openBins[i].pool); if (!p || !st) return;
-      const a = amountsForLiquidity(tickToSqrtPriceX96(st.tick), tickToSqrtPriceX96(Number(p[5])), tickToSqrtPriceX96(Number(p[6])), BigInt(p[7]));
-      ladderTvlUsd += valNow(st, a.amount0, a.amount1);
-    });
-
-    // Fees ever collected, owner share plus treasury, at the price of the day.
-    let ladderFeesUsd = 0;
-    try {
-      const logs = await allFeeLogs();
-      for (const lg of logs) {
-        let ev; try { ev = decodeEventLog({ abi: LADDER_ABI, data: lg.data, topics: lg.topics }); } catch { continue; }
-        const l = byId.get(ev.args.ladderId.toString()); if (!l) continue;
-        const pool = lower(l.pool);
-        if (!states.has(pool)) states.set(pool, await poolState(pool, await baseOf(pool)).catch(() => null));
-        const st = states.get(pool); if (!st) continue;
-        const ts = await blockTs(lg.blockNumber);
-        const [u0, u1] = await Promise.all([usdAt(st.token0, ts), usdAt(st.token1, ts)]);
-        const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals), d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
-        ladderFeesUsd += (Number(ev.args.toOwner0 + ev.args.toTreasury0) / d0) * (u0 ?? 0) + (Number(ev.args.toOwner1 + ev.args.toTreasury1) / d1) * (u1 ?? 0);
-      }
-    } catch (e) { console.warn(`pools | platform fees unavailable: ${e?.message ?? e}`); }
-
+    const [usd, ...venues] = await Promise.all([ethUsd().catch(() => null), venueStats(V3_VENUE), venueStats(V4_VENUE)]);
+    const sum = (k) => venues.reduce((n, v) => n + v[k], 0);
+    const ladderFeesUsd = sum("feesUsd"), ladderTvlUsd = sum("tvlUsd");
     return {
-      totalPositions: count, openPositions: ladders.filter((l) => l && l.closedAt === 0n).length, stakes,
+      totalPositions: sum("count"), openPositions: sum("open"), stakes,
+      byVenue: Object.fromEntries(venues.map((v) => [v.venue, v])),
       totalFeesUsd: ladderFeesUsd + stakesFeesUsd, ladderFeesUsd, stakesFeesUsd,
       tvlUsd: ladderTvlUsd + stakesTvlUsd, ladderTvlUsd, stakesTvlUsd,
       ethUsd: usd, at: new Date().toISOString(),
@@ -1006,8 +1136,54 @@ export async function platformStats({ stakesTvlUsd = 0, stakesFeesUsd = 0, stake
   });
 }
 
-const mgr = () => getAddress(LADDER_MANAGER);
-export const collectCalldata = (id) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "collect", args: [BigInt(id)] }) });
-export const closeCalldata = (id) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "close", args: [BigInt(id)] }) });
-export const closeBinsCalldata = (id, indices) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "closeBins", args: [BigInt(id), indices.map((i) => BigInt(i))] }) });
-export const closeManyCalldata = (ids) => ({ to: mgr(), data: encodeFunctionData({ abi: LADDER_ABI, functionName: "closeMany", args: [ids.map((i) => BigInt(i))] }) });
+async function venueStats(venue) {
+  const countRaw = await call(venue.manager, venue.abi, "ladderCount").catch(() => 0n);
+  const count = Number(countRaw);
+  const ids = Array.from({ length: count }, (_, i) => BigInt(i));
+  const ladders = count ? await batchCall(ids.map((id) => ({ to: venue.manager, abi: venue.abi, fn: "ladder", args: [id] }))) : [];
+  const byId = new Map(ladders.map((l, i) => [String(i), l]).filter(([, l]) => l));
+
+  // Open value: every live bin, priced at the pool's current tick.
+  const openBins = [];
+  for (const l of ladders) { if (!l || l.closedAt !== 0n) continue; for (const b of l.bins) if (b.open) openBins.push({ tokenId: b.tokenId, tickLower: b.tickLower, tickUpper: b.tickUpper, pool: venue.poolOf(l) }); }
+  const states = new Map();
+  for (const p of new Set(openBins.map((b) => b.pool))) states.set(p, await poolState(p, await baseOf(p)).catch(() => null));
+  const valNow = (st, a0, a1) => {
+    const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals), d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
+    const p0 = st.base.isToken0 ? st.priceUsd : st.quote.usdPerToken, p1 = st.base.isToken0 ? st.quote.usdPerToken : st.priceUsd;
+    return (Number(a0) / d0) * (p0 ?? 0) + (Number(a1) / d1) * (p1 ?? 0);
+  };
+  let tvlUsd = 0;
+  const pos = openBins.length ? await venue.binLiquidity(openBins) : [];
+  pos.forEach((p, i) => {
+    const st = states.get(openBins[i].pool); if (!p || p.liquidity == null || !st) return;
+    const a = amountsForLiquidity(tickToSqrtPriceX96(st.tick), tickToSqrtPriceX96(p.tickLower), tickToSqrtPriceX96(p.tickUpper), p.liquidity);
+    tvlUsd += valNow(st, a.amount0, a.amount1);
+  });
+
+  // Fees ever collected, owner share plus treasury, at the price of the day.
+  let feesUsd = 0;
+  try {
+    const logs = await allFeeLogs(venue);
+    for (const lg of logs) {
+      let ev; try { ev = decodeEventLog({ abi: venue.abi, data: lg.data, topics: lg.topics }); } catch { continue; }
+      const l = byId.get(ev.args.ladderId.toString()); if (!l) continue;
+      const pool = venue.poolOf(l);
+      if (!states.has(pool)) states.set(pool, await poolState(pool, await baseOf(pool)).catch(() => null));
+      const st = states.get(pool); if (!st) continue;
+      const ts = await blockTs(lg.blockNumber);
+      const [u0, u1] = await Promise.all([usdAt(st.token0, ts), usdAt(st.token1, ts)]);
+      const d0 = 10 ** (st.base.isToken0 ? st.base.decimals : st.quote.decimals), d1 = 10 ** (st.base.isToken0 ? st.quote.decimals : st.base.decimals);
+      feesUsd += (Number(ev.args.toOwner0 + ev.args.toTreasury0) / d0) * (u0 ?? 0) + (Number(ev.args.toOwner1 + ev.args.toTreasury1) / d1) * (u1 ?? 0);
+    }
+  } catch (e) { console.warn(`pools | ${venue.id} platform fees unavailable: ${e?.message ?? e}`); }
+
+  return { venue: venue.id, manager: venue.manager, count, open: ladders.filter((l) => l && l.closedAt === 0n).length, tvlUsd, feesUsd };
+}
+
+const mgr = (venue) => getAddress(venueFor(venue).manager);
+const abiOf = (venue) => venueFor(venue).abi;
+export const collectCalldata = (id, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "collect", args: [BigInt(id)] }) });
+export const closeCalldata = (id, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "close", args: [BigInt(id)] }) });
+export const closeBinsCalldata = (id, indices, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "closeBins", args: [BigInt(id), indices.map((i) => BigInt(i))] }) });
+export const closeManyCalldata = (ids, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "closeMany", args: [ids.map((i) => BigInt(i))] }) });

@@ -286,7 +286,7 @@
       if (!token && !/^0x[0-9a-f]{40}$/.test(tokenParam)) { $("root").innerHTML = `<div class="empty">Unknown token. <a href="/pools" style="color:var(--accent)">Back to pools</a></div>`; return; }
       const list = await api(`/api/pools/token?token=${token?.address ?? tokenParam}`);
       pools = list.pools;
-      if (!pools.length) { $("root").innerHTML = `<div class="empty">${esc(token?.symbol ?? tokenParam)} has no Uniswap V3 pool against ETH or USDG yet.</div>`; return; }
+      if (!pools.length) { $("root").innerHTML = `<div class="empty">${esc(token?.symbol ?? tokenParam)} has no Uniswap V3 or V4 pool against ETH or USDG yet.</div>`; return; }
       if (!token) { // a token the list has not ranked yet: take its identity from the pool
         const st = await api(`/api/pools/state?pool=${pools[0].pool}&base=${tokenParam}`);
         token = { address: tokenParam, symbol: st.base.symbol, name: st.base.name, icon: st.base.icon, decimals: st.base.decimals };
@@ -333,7 +333,7 @@
               <div class="preview" id="preview">Set a range and an amount to see the ladder.</div>
               <button class="go" id="go">Connect wallet</button>
               <div class="result" id="result"></div>
-              <div class="feenote">Positions are minted into OrdoLadderManager and only your wallet can collect, add to, or close them. OrdoFi takes 1% of the swap fees you collect, never from your deposit. Sent through rpc.ordofi.network.</div>
+              <div class="feenote">Positions are minted into <span id="mgr-name">OrdoLadderManager</span> and only your wallet can collect, add to, or close them. OrdoFi takes 1% of the swap fees you collect, never from your deposit. Sent through rpc.ordofi.network.</div>
             </div>
           </div>
         </div>`;
@@ -363,17 +363,20 @@
       setInterval(() => { if (document.visibilityState === "visible") loadCandles(true); }, tfSec < 60 ? 5000 : 30000);
     }
 
-    // ---- pool groups: USDG pools, ETH pools (V3), with V4 shown as coming
+    // ---- pool groups: USDG pools and ETH pools on V3, ETH pools on V4 — the same three Delta shows
+    const GROUPS = [["v3", USDG, "USDG"], ["v3", WETH, "V3 ETH"], ["v4", WETH, "V4 ETH"]];
+    const fmtFee = (p) => p.fee == null ? "dyn" : `${(p.fee / 1e4).toFixed(2)}%`;
     function renderGroups() {
-      const byQuote = { [USDG]: [], [WETH]: [] };
-      for (const p of pools) (byQuote[p.quote] ?? (byQuote[p.quote] = [])).push(p);
+      const byGroup = new Map();
+      for (const p of pools) { const k = `${p.kind ?? "v3"}:${p.quote}`; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k).push(p); }
       const fmtLiq = (p) => { const l = Number(BigInt(p.liquidity)); return l > 0 ? "live" : "empty"; };
-      const groups = [[USDG, "USDG"], [WETH, "V3 ETH"]].filter(([q]) => byQuote[q]?.length);
-      $("groups").innerHTML = groups.map(([q, label]) => {
-        const ps = byQuote[q], cur = ps.find((p) => p.pool === pool);
-        return `<div class="grp ${cur ? "on" : ""}" data-q="${q}"><button><small>${label}</small><b>${cur ? `${(cur.fee / 1e4).toFixed(2)}%` : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
-          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${(p.fee / 1e4).toFixed(2)}%</span><small>${fmtLiq(p)}</small></button>`).join("")}</div></div>`;
-      }).join("") + `<div class="grp"><button disabled style="cursor:default;opacity:.55"><small>V4 ETH</small><b>soon</b></button></div>`;
+      $("groups").innerHTML = GROUPS.map(([kind, q, label]) => {
+        const ps = byGroup.get(`${kind}:${q}`);
+        if (!ps?.length) return kind === "v4" ? `<div class="grp"><button disabled style="cursor:default;opacity:.55" title="No V4 ETH pool for this token yet"><small>V4 ETH</small><b>none</b></button></div>` : "";
+        const cur = ps.find((p) => p.pool === pool);
+        return `<div class="grp ${cur ? "on" : ""}" data-q="${q}" data-k="${kind}"><button><small>${label}</small><b>${cur ? fmtFee(cur) : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
+          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· ts ${p.tickSpacing}</small>` : ""}</span><small>${fmtLiq(p)}</small></button>`).join("")}</div></div>`;
+      }).join("");
       $("groups").querySelectorAll(".grp > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
       $("groups").querySelectorAll(".menu button[data-p]").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));
     }
@@ -385,7 +388,8 @@
       state = await api(`/api/pools/state?pool=${pool}&base=${token.address}`);
       renderGroups();
       $("quote-sym").textContent = state.quote.symbol;
-      $("pool-note").textContent = `${(state.fee / 1e4).toFixed(2)}% fee · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
+      $("pool-note").textContent = `${state.kind === "v4" ? "Uniswap V4 · " : ""}${(state.fee / 1e4).toFixed(2)}% fee · tick spacing ${state.tickSpacing} · ${fmtPx(state.price)} ${state.quote.symbol}${state.priceUsd ? ` (${usd(state.priceUsd, 4)})` : ""}`;
+      $("mgr-name").textContent = state.kind === "v4" ? "OrdoLadderManagerV4" : "OrdoLadderManager";
       // Supply comes with the pool state, so the MC toggle never depends on the list.
       supply = state.base.totalSupply ?? supply;
       $("s-mc").textContent = usd(state.marketCapUsd); $("s-liq").textContent = usd(state.tvlUsd);
@@ -444,7 +448,8 @@
       if (!state) return;
       try {
         const q = state.quote.address === WETH ? "eth" : state.quote.address;
-        const d = await api(`/api/trade/candles?base=${token.address === WETH ? "eth" : token.address}&quote=${q}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}`);
+        // A V4 pool's chart is its own tape; for V3 the pair picks the deepest pool, as the trade terminal does.
+        const d = await api(`/api/trade/candles?base=${token.address === WETH ? "eth" : token.address}&quote=${q}&bucketSec=${tfSec}&hours=${HOURS[tfSec]}${state.kind === "v4" ? `&pool=${pool}` : ""}`);
         candlesQ = d.candles;
         const keep = quiet ? chart.timeScale().getVisibleLogicalRange() : null;
         setSeriesData();
@@ -509,7 +514,7 @@
       wrap.addEventListener("touchstart", start, { passive: false }); window.addEventListener("touchmove", move, { passive: true }); window.addEventListener("touchend", end);
     }
     async function loadDepth() {
-      try { depth = await api(`/api/pools/depth?pool=${pool}&span=${Math.round(Math.log(3) / Math.log(1.0001))}&buckets=90`); } catch { depth = null; }
+      try { depth = await api(`/api/pools/depth?pool=${pool}&base=${token.address}&span=${Math.round(Math.log(3) / Math.log(1.0001))}&buckets=90`); } catch { depth = null; }
       requestAnimationFrame(drawOverlay);
     }
     function drawShape() {
@@ -532,16 +537,15 @@
 
     // ---- planner
     let planSeq = 0;
-    async function replan(extra) {
+    async function replan() {
       if (!state) return;
-      const signed = extra && typeof extra === "object" && extra.permitV ? extra : null; // an event object is not a permit
       const seq = ++planSeq;
       const baseAmt = parseUnits($("amt-base").value, state.base.decimals), quoteAmt = parseUnits($("amt-quote").value, state.quote.decimals);
       const go = $("go");
       if (!wallet.account) { go.textContent = "Connect wallet"; go.disabled = false; }
       if ((baseAmt ?? 0n) === 0n && (quoteAmt ?? 0n) === 0n) { plan = null; $("preview").textContent = "Set a range and an amount to see the ladder."; if (wallet.account) { go.textContent = "Build position"; go.disabled = true; } return; }
       try {
-        const q = new URLSearchParams({ pool, base: token.address, minPrice: rangeLo(), maxPrice: rangeHi(), shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps, ...(wallet.account ? { owner: wallet.account } : {}), ...(signed ?? {}) });
+        const q = new URLSearchParams({ pool, base: token.address, minPrice: rangeLo(), maxPrice: rangeHi(), shape, bins, baseAmount: (baseAmt ?? 0n).toString(), quoteAmount: (quoteAmt ?? 0n).toString(), slippageBps });
         const p = await api(`/api/pools/plan?${q}`);
         if (seq !== planSeq) return;
         plan = p;
@@ -550,7 +554,7 @@
         const usdTot = Number(bt) * (state.priceUsd ?? 0) + Number(qt) * (state.quote.usdPerToken ?? 0);
         $("preview").innerHTML = `<canvas id="pv" width="600" height="112"></canvas>
           <b>${p.rungs.length}</b> positions · <b>${fmtDisp(disp(p.minPrice))}</b> – <b>${fmtDisp(disp(p.maxPrice))}</b> ${mode === "mc" ? "market cap" : "USD"}<br/>
-          uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}${p.tx.approve ? (p.tx.permit?.supported ? `<br/>${esc(token.symbol)} is allowed by signature — no approval transaction` : `<br/>needs a one-time ${esc(token.symbol)} approval first`) : p.tx.permit?.applied ? `<br/>${esc(token.symbol)} allowed by your signature` : ""}`;
+          uses <b>${num(bt, 6)} ${esc(token.symbol)}</b> + <b>${num(qt, 6)} ${esc(state.quote.symbol)}</b>${usdTot ? ` ≈ <b>${usd(usdTot)}</b>` : ""}${p.tx.approve ? `<br/>needs a one-time ${(p.tx.approvals ?? [p.tx.approve]).map((a) => esc(a.token.toLowerCase() === token.address ? token.symbol : state.quote.symbol)).join(" and ")} approval first` : ""}`;
         const cv = $("pv"), ctx = cv.getContext("2d"), W = cv.width, H = cv.height, mx = Math.max(...p.rungs.map((r) => r.weight));
         p.rungs.slice().sort((x, y) => x.priceLower - y.priceLower).forEach((r, i) => { const w = W / p.rungs.length, h = (r.weight / mx) * (H - 4); ctx.fillStyle = r.side === "both" ? "#ff6414" : "rgba(255,100,20,.45)"; ctx.fillRect(i * w + 2, H - h, w - 4, h); });
         if (wallet.account) { go.textContent = "Build position"; go.disabled = false; }
@@ -566,20 +570,13 @@
     }
     async function buildNow() {
       try {
-        let signed = null;
-        if (plan.tx.approve) {
-          const pm = plan.tx.permit;
-          if (pm?.supported && pm.nonce != null) {
-            // The token allows an allowance by signature: one signature, no approval transaction.
-            setResult(`Sign to allow ${esc(token.symbol)} — a signature, not a transaction…`);
-            try { signed = await wallet.signPermit(pm); } catch (e) { if (rejected(e)) throw e; signed = null; }
-          }
-          if (!signed) { setResult(`Approve ${esc(token.symbol)} in your wallet…`); await wallet.ensureAllowance(plan.tx.approve.token, plan.tx.approve.spender, plan.tx.approve.amount, (h) => setResult(`Approving ${txLink(h)}…`)); }
+        for (const a of plan.tx.approvals ?? (plan.tx.approve ? [plan.tx.approve] : [])) {
+          const sym = a.token.toLowerCase() === token.address ? token.symbol : state.quote.symbol;
+          setResult(`Approve ${esc(sym)} in your wallet…`); await wallet.ensureAllowance(a.token, a.spender, a.amount, (h) => setResult(`Approving ${esc(sym)} ${txLink(h)}…`));
         }
-        await replan(signed); // the plan was made for a price; take a fresh one right before signing, carrying the permit
+        await replan(); // the plan was made for a price; take a fresh one right before signing
         $("go").disabled = true; // replan re-enables; stay locked until the block
         if (!plan?.tx) throw new Error("the plan changed while you were signing — check the amounts and try again");
-        if (signed && plan.tx.approve) throw new Error("the signature could not be used — try again, or approve instead");
         setResult(`Confirm in your wallet…`);
         const rec = await wallet.send(plan.tx, (h) => setResult(`Building ${txLink(h)} — waiting for the block…`));
         setResult(`Built ${plan.rungs.length} positions · ${txLink(rec.hash)}`);

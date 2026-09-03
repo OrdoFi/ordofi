@@ -804,10 +804,35 @@ export async function bestPool(base, quote) {
   withLiq.sort((a, b) => (a.liq > b.liq ? -1 : 1));
   const chosen = withLiq[0];
   const token0 = (await call(chosen.pool, POOL_ABI, "token0")).toLowerCase();
-  const out = { at: Date.now(), pool: chosen.pool, fee: chosen.fee, base0: token0 === base.toLowerCase() };
+  const out = { at: Date.now(), pool: chosen.pool, kind: "v3", fee: chosen.fee, base0: token0 === base.toLowerCase() };
   poolAddrCache.set(key, out);
   return out;
 }
+
+/**
+ * A V4 pool by its id, in the shape `bestPool` returns, for a pair the caller
+ * already knows. The key is what the watcher recorded from Initialize; native
+ * ETH in it is WETH to every reader here.
+ */
+export function v4PoolFor(store, poolId, base, quote) {
+  const p = store?.v4Pool?.(poolId.toLowerCase());
+  if (!p) return null;
+  const c0 = p.currency0 === V4.nativeCurrency ? WETH : p.currency0, c1 = p.currency1;
+  if (!((c0 === base && c1 === quote) || (c1 === base && c0 === quote))) return null;
+  return { at: Date.now(), pool: p.poolId, kind: "v4", fee: p.fee === V4.dynamicFeeFlag ? null : p.fee, tickSpacing: p.tickSpacing, base0: c0 === base };
+}
+
+/** The deepest V4 ETH pool without a hook for a pair, by live liquidity — the V4 stand-in for `bestPool`. */
+export async function bestPoolV4(store, base, quote) {
+  const rows = store?.v4PoolsForPair?.(base === WETH ? V4.nativeCurrency : base, quote === WETH ? V4.nativeCurrency : quote) ?? [];
+  const plain = rows.filter((p) => p.hooks === V4.nativeCurrency && p.fee !== V4.dynamicFeeFlag);
+  if (!plain.length) return null;
+  const liq = await Promise.all(plain.map((p) => call(V4.stateView, STATE_VIEW_LIQ_ABI, "getLiquidity", [p.poolId]).catch(() => 0n)));
+  let best = 0;
+  liq.forEach((l, i) => { if (l > liq[best]) best = i; });
+  return v4PoolFor(store, plain[best].poolId, base, quote);
+}
+const STATE_VIEW_LIQ_ABI = [{ type: "function", name: "getLiquidity", stateMutability: "view", inputs: [{ type: "bytes32" }], outputs: [{ type: "uint128" }] }];
 
 /**
  * OHLC of base priced in quote, bucketed by minutes, over the last `spanBlocks`
@@ -820,11 +845,12 @@ export async function bestPool(base, quote) {
  * backfills the older minutes; the walk is also the sole source for pools the
  * recorder has not seen yet.
  */
-export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 72_000, hours = null, store = null }) {
+export async function tradeCandles({ base, quote, pool = null, bucketSec = 60, spanBlocks = 72_000, hours = null, store = null }) {
   const b = (base === NATIVE ? WETH : base).toLowerCase();
   const q = (quote === NATIVE ? WETH : quote).toLowerCase();
-  const found = await bestPool(b, q);
-  if (!found) throw new Error("no direct V3 pool for this pair");
+  // A caller naming a V4 pool gets that pool's own tape; otherwise the deepest V3 pool for the pair.
+  const found = pool && isV4PoolId(pool) ? v4PoolFor(store, pool, b, q) : await bestPool(b, q);
+  if (!found) throw new Error(pool ? "unknown V4 pool" : "no direct V3 pool for this pair");
 
   const [infoBase, infoQuote] = await Promise.all([getTokenInfo(b), getTokenInfo(q)]);
   const now = Math.floor(Date.now() / 1000);
@@ -852,7 +878,7 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
     }
     const candles = [...buckets.values()].sort((a, c) => a.time - c.time);
     return {
-      pool: found.pool, fee: found.fee,
+      pool: found.pool, kind: found.kind ?? "v3", fee: found.fee,
       base: { address: b, symbol: infoBase.symbol }, quote: { address: q, symbol: infoQuote.symbol },
       bucketSec, spanBlocks, source: "tape", truncated: false, coverage: null, backfill: null,
       swaps: rows.length, volumeQuote: candles.reduce((n, c) => n + c.vol, 0),
@@ -905,6 +931,7 @@ export async function tradeCandles({ base, quote, bucketSec = 60, spanBlocks = 7
 
   return {
     pool: found.pool,
+    kind: found.kind ?? "v3",
     fee: found.fee,
     base: { address: b, symbol: infoBase.symbol },
     quote: { address: q, symbol: infoQuote.symbol },
@@ -949,13 +976,12 @@ async function candlesFromLogs(found, infoB, infoQ, bucketSec, spanBlocks, befor
     const lo = Math.max(floor, hi - span + 1);
     budget--;
     try {
+      // A V4 pool's swaps are the singleton's, filtered by the PoolId topic; the
+      // data words that matter (amounts, then sqrtPriceX96) sit where V3 puts them.
       const part = await rpcFetch("eth_getLogs", [
-        {
-          address: found.pool,
-          topics: [V3_SWAP_TOPIC],
-          fromBlock: "0x" + lo.toString(16),
-          toBlock: "0x" + hi.toString(16),
-        },
+        found.kind === "v4"
+          ? { address: V4.poolManager, topics: [V4.swapTopic, found.pool], fromBlock: "0x" + lo.toString(16), toBlock: "0x" + hi.toString(16) }
+          : { address: found.pool, topics: [V3_SWAP_TOPIC], fromBlock: "0x" + lo.toString(16), toBlock: "0x" + hi.toString(16) },
       ]);
       logs.push(...part);
       hi = lo - 1;

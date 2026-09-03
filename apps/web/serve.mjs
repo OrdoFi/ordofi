@@ -643,6 +643,8 @@ async function handle(req, res) {
       const data = await tradeCandles({
         base: (url.searchParams.get("base") ?? "").toLowerCase(),
         quote: (url.searchParams.get("quote") ?? "").toLowerCase(),
+        // A V4 PoolId names the pool outright; the pair alone would pick the deepest V3 pool.
+        pool: /^0x[0-9a-fA-F]{64}$/.test(url.searchParams.get("pool") ?? "") ? url.searchParams.get("pool").toLowerCase() : null,
         bucketSec: [5, 30].includes(Number(url.searchParams.get("bucketSec"))) ? Number(url.searchParams.get("bucketSec")) : Math.max(60, Math.min(86_400, Number(url.searchParams.get("bucketSec") ?? 60))),
         spanBlocks: Math.max(6000, Math.min(200_000, Number(url.searchParams.get("spanBlocks") ?? 72_000))),
         hours: url.searchParams.has("hours") ? Math.max(1, Math.min(24 * 400, Number(url.searchParams.get("hours")))) : null,
@@ -748,7 +750,11 @@ async function handle(req, res) {
     try {
       const q = url.searchParams;
       const addr = (k) => { const v = q.get(k) ?? ""; if (!/^0x[0-9a-fA-F]{40}$/.test(v)) throw new Error(`bad ${k}`); return v; };
+      /** A pool is a V3 address or a V4 PoolId (32 bytes). */
+      const poolKey = (k) => { const v = q.get(k) ?? ""; if (!/^0x[0-9a-fA-F]{40}$/.test(v) && !/^0x[0-9a-fA-F]{64}$/.test(v)) throw new Error(`bad ${k}`); return v.toLowerCase(); };
       const big = (k) => { const v = q.get(k); if (v == null || v === "") return 0n; if (!/^\d+$/.test(v)) throw new Error(`bad ${k}`); return BigInt(v); };
+      /** Which manager a ladder lives in; V3 unless said otherwise. */
+      const venue = () => (q.get("venue") === "v4" ? "v4" : "v3");
       let body;
       if (path === "/api/pools") body = await poolsList(store);
       else if (path === "/api/pools/platform") {
@@ -758,10 +764,10 @@ async function handle(req, res) {
       }
       else if (path === "/api/pools/search") body = await searchAll(store, q.get("q") ?? "");
       else if (path === "/api/pools/token") body = { token: q.get("token"), pools: await poolsForToken(addr("token")) };
-      else if (path === "/api/pools/state") body = await poolState(addr("pool"), q.get("base") ?? undefined);
-      else if (path === "/api/pools/depth") body = await poolDepth(addr("pool"), { spanTicks: Math.max(200, Math.min(20_000, Number(q.get("span") ?? 3000))), buckets: Math.max(10, Math.min(120, Number(q.get("buckets") ?? 60))) });
+      else if (path === "/api/pools/state") body = await poolState(poolKey("pool"), q.get("base") ?? undefined);
+      else if (path === "/api/pools/depth") body = await poolDepth(poolKey("pool"), { spanTicks: Math.max(200, Math.min(20_000, Number(q.get("span") ?? 3000))), buckets: Math.max(10, Math.min(120, Number(q.get("buckets") ?? 60))), base: q.get("base") ? addr("base") : null });
       else if (path === "/api/pools/plan") body = await planPosition({
-        pool: addr("pool"), base: q.get("base") ?? undefined,
+        pool: poolKey("pool"), base: q.get("base") ?? undefined,
         minPrice: Number(q.get("minPrice")), maxPrice: Number(q.get("maxPrice")),
         shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "bidask",
         bins: Math.max(1, Math.min(40, Number(q.get("bins") ?? 40))),
@@ -772,16 +778,16 @@ async function handle(req, res) {
         permit: permitFromQuery(q),
       });
       else if (path === "/api/pools/plan-add") body = await planAdd({
-        id: big("id"), shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "spot",
+        id: big("id"), venue: venue(), shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "spot",
         baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
         owner: q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null,
         permit: permitFromQuery(q),
       });
       else if (path === "/api/pools/positions") body = await positionsOf(store, addr("owner"));
-      else if (path === "/api/pools/collect") body = collectCalldata(big("id"));
-      else if (path === "/api/pools/close") body = closeCalldata(big("id"));
-      else if (path === "/api/pools/close-bins") body = closeBinsCalldata(big("id"), (q.get("indices") ?? "").split(",").filter((x) => /^\d+$/.test(x)));
-      else if (path === "/api/pools/close-many") body = closeManyCalldata((q.get("ids") ?? "").split(",").filter((x) => /^\d+$/.test(x)));
+      else if (path === "/api/pools/collect") body = collectCalldata(big("id"), venue());
+      else if (path === "/api/pools/close") body = closeCalldata(big("id"), venue());
+      else if (path === "/api/pools/close-bins") body = closeBinsCalldata(big("id"), (q.get("indices") ?? "").split(",").filter((x) => /^\d+$/.test(x)), venue());
+      else if (path === "/api/pools/close-many") body = closeManyCalldata((q.get("ids") ?? "").split(",").filter((x) => /^\d+$/.test(x)), venue());
       else if (path === "/api/pools/stakes") body = await stakesList(q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null);
       else if (path === "/api/pools/stake") body = await stakeView(addr("vault"), q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null);
       else if (path === "/api/pools/stake-quote") body = await stakeQuote({
@@ -790,7 +796,7 @@ async function handle(req, res) {
         from: q.get("from") ? addr("from") : null,
         permit: permitFromQuery(q),
       });
-      else if (path === "/api/pools/stake-create") body = await stakeCreatePlan(addr("token"));
+      else if (path === "/api/pools/stake-create") body = await stakeCreatePlan(addr("token"), q.has("venue") ? venue() : null);
       else if (path === "/api/pools/stake-unstake") body = farmWithdrawCalldata(addr("farm"), big("shares"));
       else if (path === "/api/pools/stake-withdraw") body = await vaultWithdrawPlan({
         vault: addr("vault"), shares: big("shares"), to: addr("to"), from: q.get("from") ? addr("from") : null,

@@ -261,6 +261,20 @@ export const V4 = {
   swapTopic: "0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f",
   /** LP fee value that marks a hook-controlled, dynamic fee. */
   dynamicFeeFlag: 0x800000,
+  /**
+   * Ordo's own V4 contracts on Robinhood Chain. The ladder manager mints
+   * shaped liquidity through the PositionManager; the stake factory attaches
+   * a full-range vault + farm to hookless ETH pools and owns the zap.
+   */
+  // Second deployment: the first approved Permit2 for the exact token amount,
+  // which Solady tokens refuse (their Permit2 allowance is fixed at infinity).
+  ladderManager: "0x2b0e53c9f869de1fe7c5b43abaabaa90e23c073b",
+  ladderDeployBlock: 52_996_505,
+  stakeFactory: "0x9a4a6420c027a0bafa0a55464196cf5d966122d2",
+  stakeZap: "0xfbf1ad9bd14aa0353d753b2cdd5536b41a8c786a",
+  stakeDeployBlock: 52_996_797,
+  /** The V4 ETH pool: native ETH / USDG, 0.01%, tick spacing 1, no hook. */
+  ethUsdgPoolId: "0x24107d152f14a76d292123265ae3f3c71f863fc2f4ef7ba49d64e78d28ea379e",
 } as const;
 
 /** A V4 PoolId is 32 bytes; a V2/V3 pool key is a 20-byte address. */
