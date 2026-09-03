@@ -614,16 +614,20 @@ export async function poolsForToken(token) {
   // as view-only: its market is real, but a hook may veto or tax what the manager
   // does, and the page cannot promise what it cannot see.
   const v4 = (STORE?.v4PoolsFor?.(token) ?? []).map((p) => poolKeyOf(STORE, p.poolId)).filter((k) => k && (k.native0 || lower(k.currency0) === USDG || lower(k.currency1) === USDG) && (lower(k.currency0) === token || lower(k.currency1) === token) && !isMoney(token));
-  const [liq, slots, liq4, sqrt4, usd] = await Promise.all([
+  const [liq, slots, liq4, sqrt4, usd, info, ref] = await Promise.all([
     batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "liquidity" }))),
     batchCall(mine.map(([addr]) => ({ to: addr, abi: POOL_ABI, fn: "slot0" }))),
     v4.length ? v4LiquidityOf(v4.map((k) => k.poolId)) : [],
     v4.length ? sqrtPricesOf(v4.map((k) => k.poolId)) : [],
     ethUsd().catch(() => null),
+    tokenInfo(token),
+    // The token's price where it actually trades, from the ranked list (cached, so free).
+    poolsList(STORE).then((l) => l.all.find((r) => r.token === token)?.priceUsd ?? null).catch(() => null),
   ]);
   // A pool whose liquidity could not be read must not rank as empty: the stake
   // page picks the deepest pool from this list, and a stake is created once per pool.
   if ([...liq, ...slots, ...liq4, ...sqrt4].some((x) => x == null)) throw new Error("The RPC did not answer for every pool; try again in a moment.");
+  const quoteUsd = (quote) => (quote === WETH ? usd : 1);
   // Raw liquidity is not comparable across fee tiers or prices, so pools are ranked
   // by what the quote side is worth at the current price, in ETH: L/√P of the
   // currency0 side or L·√P of currency1, whichever is the money. A pool holding
@@ -635,12 +639,23 @@ export async function poolsForToken(token) {
     const q = quoteIs0 ? Number(L) / s : Number(L) * s;
     return quote === WETH ? q / 1e18 : usd ? q / 1e6 / usd : q / 1e6 / 4000;
   };
+  // The pool's own price in USD per token, from its sqrtPrice and the two decimals.
+  const priceUsdOf = (sqrtPriceX96, quote, quoteIs0) => {
+    const s = Number(sqrtPriceX96) / 2 ** 96;
+    if (!(s > 0) || !quoteUsd(quote)) return null;
+    const raw = s * s, scale = 10 ** (info.decimals - (quote === WETH ? 18 : 6));
+    return (quoteIs0 ? scale / raw : raw * scale) * quoteUsd(quote);
+  };
+  // A pool priced far from where the token trades is not a market: a position
+  // built there at its price is a gift to the first arbitrageur. It ranks as
+  // empty and is flagged, so the page can say so instead of offering it.
+  const offMarket = (priceUsd) => ref != null && priceUsd != null && Math.abs(Math.log(priceUsd / ref)) > Math.log(3);
   const DUST_ETH = 0.005;
-  const live = (p) => p.depthEth >= DUST_ETH;
+  const live = (p) => p.depthEth >= DUST_ETH && !p.offMarket;
   // With nothing live the tier a new market should start at comes first: 1% for
   // a volatile token, then the other standard tiers; a made-up tier last.
-  const tierRank = (fee) => { const i = [10000, 3000, 500, 100].indexOf(fee); return i < 0 ? 4 : i; };
-  const byDepth = (a, b) => (live(a) !== live(b) ? (live(a) ? -1 : 1) : live(a) ? b.depthEth - a.depthEth : tierRank(a.fee) - tierRank(b.fee) || (b.fee ?? 0) - (a.fee ?? 0));
+  const tierRank = (fee) => { const i = [10000, 3000, 500, 100].indexOf(fee); return i < 0 ? 4 + Math.abs(Math.log((fee || 1) / 10000)) : i; };
+  const byDepth = (a, b) => (live(a) !== live(b) ? (live(a) ? -1 : 1) : live(a) ? b.depthEth - a.depthEth : tierRank(a.fee) - tierRank(b.fee));
   // Anyone can initialise a V4 pool for a few cents, so a token collects dozens
   // of empty ones at absurd fee tiers. Offer the ones holding liquidity (at most
   // eight); with none live, the sanest three so the first position can still be built.
@@ -649,8 +664,8 @@ export async function poolsForToken(token) {
   const v4Quote = (k) => { const { token0, token1 } = tokensOf(k); return token0 === token ? token1 : token0; };
   // A zero-fee pool pays LPs nothing; a hook-set fee is unknown here and reported as null.
   const v4Rows = v4.map((k, i) => {
-    const quote = v4Quote(k);
-    return { pool: k.poolId, kind: "v4", venue: "v4", fee: k.dynamicFee ? null : k.fee, tickSpacing: k.tickSpacing, quote, liquidity: liq4[i].toString(), depthEth: depthOf(liq4[i], sqrt4[i], quote, lower(k.currency0) !== token), buildable: isPlainMoneyPool(k, USDG), hooked: k.hooked, dynamicFee: k.dynamicFee };
+    const quote = v4Quote(k), quoteIs0 = lower(k.currency0) !== token, priceUsd = priceUsdOf(sqrt4[i], quote, quoteIs0);
+    return { pool: k.poolId, kind: "v4", venue: "v4", fee: k.dynamicFee ? null : k.fee, tickSpacing: k.tickSpacing, quote, liquidity: liq4[i].toString(), depthEth: depthOf(liq4[i], sqrt4[i], quote, quoteIs0), priceUsd, offMarket: offMarket(priceUsd), buildable: isPlainMoneyPool(k, USDG) && !offMarket(priceUsd), hooked: k.hooked, dynamicFee: k.dynamicFee };
   }).filter((p) => p.fee == null || (p.fee > 0 && p.fee <= 100_000)).sort(byDepth);
   // Per quote asset: the live ones (at most eight), then up to three empty ones
   // at the sanest fees, so a tier nobody has seeded can still be the first.
@@ -661,8 +676,8 @@ export async function poolsForToken(token) {
   }
   const rows = [
     ...mine.map(([addr, p], i) => {
-      const quote = p.token0 === token ? p.token1 : p.token0;
-      return { pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote, liquidity: liq[i].toString(), depthEth: depthOf(liq[i], slots[i][0], quote, p.token0 !== token), buildable: true, hooked: false, dynamicFee: false };
+      const quote = p.token0 === token ? p.token1 : p.token0, quoteIs0 = p.token0 !== token, priceUsd = priceUsdOf(slots[i][0], quote, quoteIs0);
+      return { pool: addr, kind: "v3", venue: "v3", fee: p.fee, tickSpacing: null, quote, liquidity: liq[i].toString(), depthEth: depthOf(liq[i], slots[i][0], quote, quoteIs0), priceUsd, offMarket: offMarket(priceUsd), buildable: !offMarket(priceUsd), hooked: false, dynamicFee: false };
     }),
     ...v4Shown,
   ];

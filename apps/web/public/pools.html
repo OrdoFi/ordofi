@@ -309,7 +309,7 @@
       // (even view-only — it is the price people mean); else the deepest pool that can be built into.
       const want = new URLSearchParams(location.search).get("pool");
       const main = (await tokenRow())?.pool;
-      pool = pools.find((p) => p.pool === want)?.pool ?? pools.find((p) => p.pool === main)?.pool ?? (pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools[0]).pool;
+      pool = pools.find((p) => p.pool === want)?.pool ?? pools.find((p) => p.pool === main)?.pool ?? (pools.find((p) => p.buildable !== false) ?? pools[0]).pool; // the list comes deepest first, dust and off-market pools last
 
       $("root").innerHTML = `
         <div id="lq-shell"></div>
@@ -384,7 +384,7 @@
     const GROUPS = [["usdg", "USDG", (p) => p.quote === USDG], ["v3eth", "V3 ETH", (p) => p.quote === WETH && (p.kind ?? "v3") === "v3"], ["v4eth", "V4 ETH", (p) => p.quote === WETH && p.kind === "v4"]];
     const fmtFee = (p) => p.fee == null ? "dyn" : `${(p.fee / 1e4).toFixed(2)}%`;
     function renderGroups() {
-      const fmtLiq = (p) => { const l = Number(BigInt(p.liquidity)); return l > 0 ? "live" : "empty"; };
+      const fmtLiq = (p) => p.offMarket ? "off market" : p.depthEth >= 0.005 ? `${p.depthEth >= 100 ? p.depthEth.toFixed(0) : p.depthEth >= 1 ? p.depthEth.toFixed(1) : p.depthEth.toFixed(3)} ETH` : Number(BigInt(p.liquidity)) > 0 ? "dust" : "empty";
       // A V4 ETH pool that can be built into is what a stake and a plain ladder need; when
       // the token has none, the group offers to create one — a few cents of gas, and this
       // page places the first position right after.
@@ -393,8 +393,8 @@
         const ps = pools.filter(is);
         if (!ps.length) return key === "v4eth" ? `<div class="grp create"><button data-create="1" title="Create a V4 ETH pool for this token"><small>V4 ETH</small><b>create</b><span>+</span></button></div>` : "";
         const cur = ps.find((p) => p.pool === pool);
-        return `<div class="grp ${cur ? "on" : ""}" data-g="${key}"><button><small>${label}</small><b>${cur ? fmtFee(cur) : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
-          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}${p.hooked ? " · hook" : ""}</small>` : ""}</span><small>${p.buildable === false ? "view only" : fmtLiq(p)}</small></button>`).join("")}${key === "v4eth" ? createRow : ""}</div></div>`;
+        return `<div class="grp ${cur ? "on" : ""}" data-g="${key}"><button><small>${label}</small><b>${cur ? `${fmtFee(cur)}${cur.depthEth >= 0.005 && !cur.offMarket ? ` · ${fmtLiq(cur)}` : ""}` : `${ps.length} pool${ps.length > 1 ? "s" : ""}`}</b><span>▾</span></button>
+          <div class="menu">${ps.map((p) => `<button data-p="${p.pool}" class="${p.pool === pool ? "on" : ""}"><span>${esc(token.symbol)}/${p.quoteSymbol} ${fmtFee(p)}${p.kind === "v4" ? ` <small>· V4 · ts ${p.tickSpacing}${p.hooked ? " · hook" : ""}</small>` : ""}</span><small>${p.offMarket ? "off market" : p.buildable === false ? "view only" : fmtLiq(p)}</small></button>`).join("")}${key === "v4eth" ? createRow : ""}</div></div>`;
       }).join("");
       $("groups").querySelectorAll(".grp:not(.create) > button:not([disabled])").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); const g = b.parentElement; const was = g.classList.contains("open"); $("groups").querySelectorAll(".grp").forEach((x) => x.classList.remove("open")); if (!was) g.classList.add("open"); }));
       $("groups").querySelectorAll(".menu button[data-p]").forEach((b) => b.addEventListener("click", () => selectPool(b.dataset.p)));
@@ -474,8 +474,9 @@
       // A hooked or hook-priced pool is a market to watch, not one the manager can mint into.
       $("go").disabled = !canBuild();
       if (!canBuild()) {
-        const other = pools.find((p) => p.buildable !== false && BigInt(p.liquidity) > 0n) ?? pools.find((p) => p.buildable !== false);
-        $("preview").innerHTML = `This pool runs a V4 hook${state.dynamicFee ? " that sets its own fee" : ""}. A hook can change or refuse what happens on a mint, so OrdoFi shows this market but does not build into it.${other ? ` <a href="#" id="pick-buildable" style="color:var(--accent)">Build in ${esc(token.symbol)}/${other.quoteSymbol} ${fmtFee(other)}${other.kind === "v4" ? " V4" : ""} instead →</a>` : " None of this token's other pools can be built into yet."}`;
+        const other = pools.find((p) => p.buildable !== false);
+        const why = pools.find((p) => p.pool === pool)?.offMarket ? `This pool is priced ${state.priceUsd ? usd(state.priceUsd, 4) : "far"} per ${esc(token.symbol)}, nowhere near where ${esc(token.symbol)} trades, and it has no liquidity to bring it back. A position built here would be filled at that price by the first arbitrageur, so OrdoFi does not build into it.` : `This pool runs a V4 hook${state.dynamicFee ? " that sets its own fee" : ""}. A hook can change or refuse what happens on a mint, so OrdoFi shows this market but does not build into it.`;
+        $("preview").innerHTML = `${why}${other ? ` <a href="#" id="pick-buildable" style="color:var(--accent)">Build in ${esc(token.symbol)}/${other.quoteSymbol} ${fmtFee(other)}${other.kind === "v4" ? " V4" : ""} instead →</a>` : " None of this token's other pools can be built into yet."}`;
         $("pick-buildable")?.addEventListener("click", (e) => { e.preventDefault(); selectPool(other.pool); });
         $("go").textContent = "View only";
       } else if ($("go").textContent === "View only") $("go").textContent = wallet.account ? "Build position" : "Connect wallet";
@@ -674,7 +675,7 @@
 
     // ---- planner
     let planSeq = 0;
-    const canBuild = () => !!state && !state.hooks && !state.dynamicFee;
+    const canBuild = () => !!state && !state.hooks && !state.dynamicFee && !pools.find((p) => p.pool === pool)?.offMarket;
     async function replan() {
       if (!state || !canBuild()) return;
       const seq = ++planSeq;
