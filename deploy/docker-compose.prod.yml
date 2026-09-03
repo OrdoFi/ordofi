@@ -133,7 +133,9 @@ services:
   # switched on. A process of its own so app.ordofi.network never shares a
   # thread with a market rebuild, and so either can be restarted alone.
   liquidity:
-    build: { context: .., dockerfile: deploy/Dockerfile }
+    # The image `web` builds (compose names it after the project directory);
+    # `docker compose build web` — or deploy/preview.sh — refreshes both.
+    image: deploy-web
     working_dir: /app/apps/web
     command: ["node", "--inspect=127.0.0.1:9229", "serve.mjs"]
     environment:
