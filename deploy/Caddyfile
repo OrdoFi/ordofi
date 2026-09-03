@@ -26,7 +26,17 @@ app.ordofi.network {
 ordoliquidity.app {
 	@root path /
 	redir @root /pools 302
-	reverse_proxy liquidity:3000
+	# Only the liquidity product lives here: its three pages, the API they call,
+	# and the static files they load. Trade, stealth, desk, docs, explorer and
+	# the rest of the app stay on app.ordofi.network — anything else asked for
+	# on this host is sent there, path intact.
+	@liquidity path /pools /pools/* /stakes /positions /api/* /vendor/* /*.js /*.css /*.png /*.svg /*.ico /*.webmanifest /*.woff2
+	handle @liquidity {
+		reverse_proxy liquidity:3000
+	}
+	handle {
+		redir https://app.ordofi.network{uri} 302
+	}
 	encode zstd gzip
 }
 

@@ -81,6 +81,7 @@ nav .wrap { display: flex; align-items: center; justify-content: space-between; 
 .nav-links a { color: var(--text-dim); font-size: 14px; font-weight: 500; transition: color .15s; }
 .nav-links a:hover { color: var(--accent); }
 .nav-links a.here { color: var(--accent); }
+.nav-links a.nav-ext { color: var(--muted); font-size: 13px; }
 .btn {
   background: var(--accent); color: #fff; padding: 9px 18px; border-radius: 0;
   font-weight: 600; font-size: 13.5px; white-space: nowrap; font-family: var(--sans);

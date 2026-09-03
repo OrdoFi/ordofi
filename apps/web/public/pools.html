@@ -232,7 +232,7 @@
   <nav>
     <div class="wrap">
       <a class="logo logo-liq" href="/pools" aria-label="ordo liquidity"><img src="/ordo-liquidity.png" alt="ordo liquidity" width="680" height="154" /></a>
-      <div class="nav-links"><a href="/">Home</a><a href="/trade">Trade</a><a href="/pools" class="here">Pools</a><a href="/stakes">Stakes</a><a href="/positions">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/docs">Docs</a></div>
+      <div class="nav-links"><a href="/pools" class="here">Pools</a><a href="/stakes">Stakes</a><a href="/positions">Positions</a><a href="https://app.ordofi.network" class="nav-ext" title="Trade, Stealth, Desk and the docs live on the OrdoFi app">OrdoFi app ↗</a></div>
       <div class="nav-side"><a class="btn ghost" id="nav-connect" href="#" style="padding:7px 16px;font-size:13px">Connect</a></div>
     </div>
   </nav>
@@ -379,7 +379,7 @@
       // The header comes up from the ranked row (one small read) while the pools are
       // still being found, so the page is recognisably the token's within a moment.
       const header = (t) => `<div id="lq-shell"></div>
-        <div class="head">${logo(t)}<div><h1>${esc(t.symbol ?? "")}</h1><div class="nm">${esc(t.name ?? "")}${t.name ? " · " : ""}Robinhood Chain</div><div class="meta"><span class="mono">${esc(t.address)}</span> · <a href="${EXPLORER}/token/${esc(t.address)}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${esc(t.address)}">trade</a></div></div></div>`;
+        <div class="head">${logo(t)}<div><h1>${esc(t.symbol ?? "")}</h1><div class="nm">${esc(t.name ?? "")}${t.name ? " · " : ""}Robinhood Chain</div><div class="meta"><span class="mono">${esc(t.address)}</span> · <a href="${EXPLORER}/token/${esc(t.address)}" target="_blank" rel="noopener">explorer</a> · <a href="https://app.ordofi.network/trade?base=${esc(t.address)}">trade</a></div></div></div>`;
       if (/^0x[0-9a-f]{40}$/.test(tokenParam)) {
         $("root").innerHTML = `${header({ address: tokenParam, symbol: tokenParam.slice(2, 6).toUpperCase() })}<div class="panel skeleton" style="height:420px"></div>`;
         mountShell($("lq-shell"), { page: "pools" });
@@ -403,7 +403,7 @@
           <div class="panel"><div class="empty" style="padding:34px 20px;text-align:left;line-height:1.6">
             <b style="display:block;font-size:15px;margin-bottom:6px">No pool to build on yet</b>
             ${esc(sym)} has no Uniswap V3 or V4 pool against ETH or USDG on Robinhood Chain, and a position needs one to live in. Pools are created on Uniswap by whoever first seeds them; once one exists it appears here within a minute.<br/>
-            <span style="display:inline-flex;gap:14px;margin-top:14px"><a href="/pools" style="color:var(--accent)">← back to pools</a><a href="/trade?base=${esc(tokenParam)}" style="color:var(--accent)">try the trade page</a></span>
+            <span style="display:inline-flex;gap:14px;margin-top:14px"><a href="/pools" style="color:var(--accent)">← back to pools</a><a href="https://app.ordofi.network/trade?base=${esc(tokenParam)}" style="color:var(--accent)">try the trade page</a></span>
           </div></div>`;
         mountShell($("lq-shell"), { page: "pools" });
         return;
@@ -421,7 +421,7 @@
       $("root").innerHTML = `
         <div id="lq-shell"></div>
         <div class="head">${logo(token)}
-          <div><h1>${esc(token.symbol)}</h1><div class="nm">${esc(token.name ?? "")} · Robinhood Chain</div><div class="meta"><span class="mono">${token.address}</span> <button id="copy-addr">copy</button> · <a href="${EXPLORER}/token/${token.address}" target="_blank" rel="noopener">explorer</a> · <a href="/trade?base=${token.address}">trade</a></div></div></div>
+          <div><h1>${esc(token.symbol)}</h1><div class="nm">${esc(token.name ?? "")} · Robinhood Chain</div><div class="meta"><span class="mono">${token.address}</span> <button id="copy-addr">copy</button> · <a href="${EXPLORER}/token/${token.address}" target="_blank" rel="noopener">explorer</a> · <a href="https://app.ordofi.network/trade?base=${token.address}">trade</a></div></div></div>
         <div class="grid">
           <div class="left">
             <div class="panel">
@@ -850,12 +850,12 @@
   <footer class="site-footer">
     <div class="wrap">
       <div class="footer-grid">
-        <div class="footer-brand"><div class="logo logo-liq"><img src="/ordo-liquidity.png" alt="ordo liquidity" width="680" height="154" /></div><p>The execution layer for Robinhood Chain.</p></div>
-        <div class="footer-col"><h5>Product</h5><a href="/trade">Trade</a><a href="/pools">Pools</a><a href="/positions">Positions</a><a href="/stealth">Stealth</a><a href="/desk">Desk</a><a href="/explorer">Explorer</a><a href="/docs">Documentation</a></div>
-        <div class="footer-col"><h5>Participate</h5><a href="/searchers">For searchers</a><a href="/apps">For apps &amp; wallets</a><a href="/operators">For node operators</a></div>
-        <div class="footer-col"><h5>Resources</h5><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a><a href="/docs#quickstart">Quickstart</a></div>
+        <div class="footer-brand"><div class="logo logo-liq"><img src="/ordo-liquidity.png" alt="ordo liquidity" width="680" height="154" /></div><p>Shaped liquidity on Robinhood Chain. Pick a token, set a range, choose a shape, earn the fees.</p></div>
+        <div class="footer-col"><h5>Liquidity</h5><a href="/pools">Pools</a><a href="/stakes">Stakes</a><a href="/positions">Positions</a></div>
+        <div class="footer-col"><h5>Contracts</h5><a href="https://robinhoodchain.blockscout.com/address/0xf9b15283AcbDd693d39d23AccDA7213d8d46a9E2" target="_blank" rel="noopener">Ladder manager · V3</a><a href="https://robinhoodchain.blockscout.com/address/0x2B0E53c9f869dE1Fe7C5b43ABAaBaa90e23C073b" target="_blank" rel="noopener">Ladder manager · V4</a><a href="https://robinhoodchain.blockscout.com/address/0xCe7b7a31151D3c5F7a2894842f8e1F26A05b70dA" target="_blank" rel="noopener">Stake factory · V3</a><a href="https://robinhoodchain.blockscout.com/address/0x9a4A6420C027a0BAFA0A55464196cf5D966122D2" target="_blank" rel="noopener">Stake factory · V4</a></div>
+        <div class="footer-col"><h5>OrdoFi</h5><a href="https://app.ordofi.network" target="_blank" rel="noopener">The OrdoFi app</a><a href="https://app.ordofi.network/docs" target="_blank" rel="noopener">Docs</a><a href="https://github.com/OrdoFi/ordofi" target="_blank" rel="noopener">GitHub</a></div>
       </div>
-      <div class="footer-bottom"><div class="disclaimer">© 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc.</div><div class="socials"><a href="/docs">Docs</a></div></div>
+      <div class="footer-bottom"><div class="disclaimer">© 2026 OrdoFi Labs. Not affiliated with Robinhood Markets, Inc. Contracts are unaudited; use amounts you can afford to lose.</div><div class="socials"><a href="https://rpc.ordofi.network" target="_blank" rel="noopener">rpc.ordofi.network</a></div></div>
     </div>
   </footer>
 </body>
