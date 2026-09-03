@@ -14,6 +14,7 @@
  * Universal Router's command encoding and comes later.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { marketStats } from "./market-stats.mjs";
 import { join } from "node:path";
 import { encodeFunctionData, decodeFunctionResult, encodePacked, toEventSelector } from "viem";
 import { rpcFetch, V4, isV4PoolId } from "@ordofi/core";
@@ -390,11 +391,11 @@ const IMPORTED_FILE = join(DATA_DIR, "imported-tokens.json");
 const imported = new Set(loadJson(IMPORTED_FILE, []));
 
 /** Pools the recorder saw trading in the last day (busiest first), plus the arb-contested set. */
-function activePoolList(store) {
+async function activePoolList(store) {
   const since = Math.floor(Date.now() / 1000) - 86_400;
   const seen = new Set();
   const out = [];
-  for (const r of store?.marketStats?.(since) ?? []) {
+  for (const r of await marketStats(store, since)) {
     const p = r.pool.toLowerCase();
     if (!seen.has(p)) { seen.add(p); out.push({ pool: p, swaps: r.swaps }); }
   }
@@ -425,7 +426,7 @@ async function buildTokenList(store) {
 
   // 1. Pools that demonstrably traded today. Composition comes from the pool
   //    cache; unknown pools are queued busiest-first and join the next build.
-  const active0 = activePoolList(store);
+  const active0 = await activePoolList(store);
   const described = describePools(store, active0.map((a) => a.pool));
   for (const { pool, swaps } of active0) {
     const info = described.get(pool);
@@ -557,8 +558,8 @@ let marketsCache = null; // { at, data }
 export async function tradeMarkets(store) {
   if (marketsCache && Date.now() - marketsCache.at < 60_000) return marketsCache.data;
   const now = Math.floor(Date.now() / 1000);
-  const day = store?.marketStats?.(now - 86_400) ?? [];
-  const hour = new Map((store?.marketStats?.(now - 3_600) ?? []).map((r) => [r.pool, r]));
+  const [day, hourRows] = await Promise.all([marketStats(store, now - 86_400), marketStats(store, now - 3_600)]);
+  const hour = new Map(hourRows.map((r) => [r.pool, r]));
   const tokens = await tradeTokens(store);
   const tokenByAddr = new Map(tokens.map((t) => [t.address, t]));
   const describe = (a) => {
@@ -639,8 +640,8 @@ export async function tradeMarkets(store) {
 /** Shared with the pools module so both see one cache of pool metadata. */
 export const poolCache = pools;
 
-export function warmTradeCaches(store) {
-  for (const { pool } of activePoolList(store).slice(0, 600)) if (!isV4PoolId(pool)) pools.enqueue(pool);
+export async function warmTradeCaches(store) {
+  for (const { pool } of (await activePoolList(store)).slice(0, 600)) if (!isV4PoolId(pool)) pools.enqueue(pool);
   return tradeTokens(store);
 }
 

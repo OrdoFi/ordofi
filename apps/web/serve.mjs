@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { setMarketDb } from "./market-stats.mjs";
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
@@ -35,6 +36,7 @@ const DB_FILE = process.env.ORDO_DB ?? join(import.meta.dirname, "../../data/ord
 let store = null;
 try {
   store = new OrdoStore(DB_FILE);
+  setMarketDb(DB_FILE);
 } catch (e) {
   console.warn(`web | index unavailable (${e.message}); falling back to NDJSON`);
 }
