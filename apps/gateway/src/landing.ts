@@ -166,11 +166,17 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
     return d.result;
   };
   const fmtUp = (s) => s >= 86400 ? (s / 86400).toFixed(1) + "d" : s >= 3600 ? (s / 3600).toFixed(1) + "h" : Math.round(s / 60) + "m";
+  // Round trip = one eth_chainId, which is answered at the nearest edge with no
+  // upstream work behind it: the network's share of every call. The head is
+  // fetched alongside but not timed; its window is one block, so a lone
+  // browser polling every 10 s mostly misses the edge and would be measuring
+  // the trip to the origin and its upstream instead.
   async function probe() {
-    const t0 = performance.now();
     try {
-      const [chain, head] = await Promise.all([rpc("eth_chainId"), rpc("eth_blockNumber")]);
-      const rtt = Math.round(performance.now() - t0);
+      const t0 = performance.now();
+      const chainP = rpc("eth_chainId").then((c) => ({ c, ms: performance.now() - t0 }));
+      const [{ c: chain, ms }, head] = await Promise.all([chainP, rpc("eth_blockNumber")]);
+      const rtt = Math.round(ms);
       const ok = chain === "${chainIdHex}";
       $("st-status").textContent = ok ? "live" : "wrong chain";
       $("st-status").className = "v " + (ok ? "ok" : "bad");
@@ -199,7 +205,9 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
       $("st-srch").innerHTML = int(h.activeSearchers24h) + "<small>last 24h · " + int(h.searchersAllTime) + " all time</small>";
     } catch { /* cosmetic */ }
   }
-  probe(); setInterval(probe, 10000);
+  // The first probe pays the TLS handshake; the second, two seconds later, is
+  // the number a wallet on a warm connection sees.
+  probe(); setTimeout(probe, 2000); setInterval(probe, 10000);
   headline(); setInterval(headline, 60000);
 
   $("add").addEventListener("click", async () => {

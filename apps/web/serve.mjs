@@ -307,19 +307,25 @@ async function onchainStats(address) {
  * the index has nothing to say.
  *
  * Scanned in chunks from the deployment block, because one range that wide is
- * exactly what the public endpoints refuse.
+ * exactly what the public endpoints refuse. Scanned once: the chain only grows,
+ * so each refresh asks for the blocks since the last one, and the scan runs
+ * behind the request, never in front of it — measured on the box, a visitor
+ * who arrived as the old two-minute cache expired waited 73 s for forty
+ * sequential eth_getLogs calls before the page showed a number.
  */
 const DEPLOY_BLOCK = BigInt(process.env.ORDO_SETTLEMENT_BLOCK ?? 51544378);
 const LOG_CHUNK = 50_000n;
-let settledLogsCache = null;
+const LOGS_REFRESH_MS = 120_000;
+let settledLogsCache = null; // { at, logs, scannedTo }
+let settledLogsScan = null;
 
-async function settledLogs(address) {
-  if (settledLogsCache && Date.now() - settledLogsCache.at < 120_000) return settledLogsCache.logs;
-
+async function scanSettledLogs(address) {
   const head = BigInt(await rpcFetch("eth_blockNumber", []));
   const topic = toEventSelector(SETTLED_EVENT);
-  const out = [];
-  for (let from = DEPLOY_BLOCK; from <= head; from += LOG_CHUNK) {
+  const prev = settledLogsCache;
+  const out = prev ? [...prev.logs] : [];
+  let from = prev ? BigInt(prev.scannedTo) + 1n : DEPLOY_BLOCK;
+  for (; from <= head; from += LOG_CHUNK) {
     const upper = from + LOG_CHUNK - 1n;
     const to = upper > head ? head : upper;
     const logs = await rpcFetch("eth_getLogs", [
@@ -334,9 +340,28 @@ async function settledLogs(address) {
       const decoded = decodeEventLog({ abi: [SETTLED_EVENT], data: l.data, topics: l.topics });
       out.push({ ...decoded, txHash: l.transactionHash, block: Number(BigInt(l.blockNumber)) });
     }
+    // Remember progress chunk by chunk, so an aborted scan resumes rather than restarts.
+    settledLogsCache = { at: prev?.at ?? 0, logs: out, scannedTo: to.toString() };
   }
-  settledLogsCache = { at: Date.now(), logs: out };
+  settledLogsCache = { at: Date.now(), logs: out, scannedTo: head.toString() };
   return out;
+}
+
+/**
+ * The logs as last scanned; a scan is started (once) when they are older than
+ * LOGS_REFRESH_MS, and the first ever scan is the only one anyone waits for.
+ */
+async function settledLogs(address) {
+  const fresh = settledLogsCache && Date.now() - settledLogsCache.at < LOGS_REFRESH_MS;
+  if (!fresh && !settledLogsScan) {
+    settledLogsScan = scanSettledLogs(address)
+      .catch(() => settledLogsCache?.logs ?? [])
+      .finally(() => {
+        settledLogsScan = null;
+      });
+  }
+  if (settledLogsCache) return settledLogsCache.logs;
+  return settledLogsScan;
 }
 
 async function onchainStatsFresh(address) {
@@ -460,6 +485,114 @@ function issueAllowed(ip) {
   return true;
 }
 
+const STATS_TTL_MS = 15_000;
+let statsMemo = null; // { at, body }
+let statsRefresh = null;
+
+/**
+ * The current /api/stats body. The first caller after boot builds it; from
+ * then on every caller reads the last one and a refresh runs behind the
+ * request once it is older than STATS_TTL_MS. A failed refresh keeps the
+ * previous figures rather than showing a visitor an error.
+ */
+async function statsBody() {
+  const stale = !statsMemo || Date.now() - statsMemo.at > STATS_TTL_MS;
+  if (stale && !statsRefresh) {
+    statsRefresh = buildStats()
+      .then((b) => {
+        statsMemo = { at: Date.now(), body: b };
+        return b;
+      })
+      .catch(() => statsMemo?.body ?? JSON.stringify({ error: "stats unavailable" }))
+      .finally(() => {
+        statsRefresh = null;
+      });
+  }
+  if (statsMemo) return statsMemo.body;
+  return statsRefresh;
+}
+
+async function buildStats() {
+  const routed = routedSummary(store);
+  const rep = loadReport();
+  let onchain = { deployed: false };
+  try {
+    onchain = await onchainStats(SETTLEMENT);
+  } catch {
+    /* ignore */
+  }
+  const usdEth = await ethUsd().catch(() => null);
+  const active24h = activeSearchers24h();
+  const num = (s) => (s == null ? 0 : Number(s));
+  const toUsd = (eth) => (usdEth == null ? null : Math.round(eth * usdEth * 100) / 100);
+  // What the auction actually charged searchers and settled on-chain — not
+  // the arbitrage the watcher merely observed, which is a different number
+  // and a much larger one.
+  const capturedEth = onchain.deployed ? num(onchain.totals.totalSettledEth) : 0;
+  const returnedEth = onchain.deployed ? num(onchain.totals.rebatesToUsersEth) + num(onchain.totals.rebatesToAppsEth) : 0;
+  const observed = await observedMev();
+  // The split the contract enforces; displayed from configuration, as the
+  // settlement figures are.
+  const rebateUser = Number(process.env.ORDO_REBATE_USER ?? 0.9);
+  const rebateApp = Number(process.env.ORDO_REBATE_APP ?? 0.05);
+  const rebateSplit = { user: rebateUser, app: rebateApp, protocol: Math.round(Math.max(0, 1 - rebateUser - rebateApp) * 1e6) / 1e6 };
+  return (
+    JSON.stringify({
+      chain: { name: "Robinhood Chain", chainId: 4663 },
+      arbs: rep?.totals?.arbs ?? 0,
+      searchers: rep?.totals?.uniqueSearchers ?? 0,
+      activeSearchers24h: active24h,
+      pools: rep?.totals?.uniquePools ?? 0,
+      swaps: rep?.totals?.swaps ?? 0,
+      // null until the sample is long enough to extrapolate honestly.
+      arbsPerDay: rep?.perDay?.arbs == null ? null : Math.round(rep.perDay.arbs),
+      ethUsd: usdEth,
+      routed: routed.available
+        ? { transactions: routed.transactions.confirmed, transactions24h: routed.transactions.confirmed24h, volumeUsd: routed.volumeUsd, volume24hUsd: routed.volume24hUsd, since: routed.since }
+        : null,
+      settlement: onchain.deployed
+        ? {
+            deployed: true,
+            address: onchain.address,
+            settlements: onchain.totals.settlements,
+            totalSettledEth: onchain.totals.totalSettledEth,
+            rebatesToUsersEth: onchain.totals.rebatesToUsersEth,
+            rebatesToAppsEth: onchain.totals.rebatesToAppsEth,
+            protocolFeesEth: onchain.totals.protocolFeesEth,
+            totalBondedEth: onchain.totals.totalBondedEth,
+            stale: Boolean(onchain.stale),
+          }
+        : { deployed: false },
+      // Arbitrage seen landing on-chain, priced in quote assets only (a floor).
+      // Observed is not captured: it is the market, not the revenue.
+      mevObserved: { ...observed, floor: true },
+      rebateSplit,
+      // The five figures the dashboards lead with, precomputed so an
+      // embedding site does not repeat the arithmetic or the caveats.
+      headline: {
+        protectedVolumeUsd: routed.available ? routed.volumeUsd : 0,
+        protectedVolume24hUsd: routed.available ? routed.volume24hUsd : 0,
+        transactions: routed.available ? routed.transactions.confirmed : 0,
+        transactions24h: routed.available ? routed.transactions.confirmed24h : 0,
+        mevObservedUsd24h: observed.usd24h,
+        mevObservedArbs24h: observed.arbs24h,
+        mevObservedUsd: observed.usdAllTime,
+        mevObservedArbs: observed.arbsAllTime,
+        rebateSplit,
+        mevCapturedEth: capturedEth,
+        mevCapturedUsd: toUsd(capturedEth),
+        settlements: onchain.deployed ? onchain.totals.settlements : 0,
+        rebatesReturnedEth: returnedEth,
+        rebatesReturnedUsd: toUsd(returnedEth),
+        activeSearchers24h: active24h,
+        searchersAllTime: rep?.totals?.uniqueSearchers ?? 0,
+        since: routed.available ? routed.since : null,
+      },
+      updatedAt: new Date().toISOString(),
+    })
+  );
+}
+
 async function handle(req, res) {
   let path = (req.url ?? "/").split("?")[0];
   const url = new URL(req.url ?? "/", "http://x");
@@ -476,89 +609,17 @@ async function handle(req, res) {
     }
   }
 
-  // Compact, embed-friendly stats for the marketing site.
+  // Compact, embed-friendly stats for the marketing site. Served from memory:
+  // the figures are refreshed behind the request every STATS_TTL_MS, so a
+  // visitor never waits on a chain read (rpc.ordofi.network's landing page and
+  // the home page both poll this from every browser).
   if (path === "/api/stats") {
-    const routed = routedSummary(store);
-    const rep = loadReport();
-    let onchain = { deployed: false };
-    try {
-      onchain = await onchainStats(SETTLEMENT);
-    } catch {
-      /* ignore */
-    }
-    const usdEth = await ethUsd().catch(() => null);
-    const active24h = activeSearchers24h();
-    const num = (s) => (s == null ? 0 : Number(s));
-    const toUsd = (eth) => (usdEth == null ? null : Math.round(eth * usdEth * 100) / 100);
-    // What the auction actually charged searchers and settled on-chain — not
-    // the arbitrage the watcher merely observed, which is a different number
-    // and a much larger one.
-    const capturedEth = onchain.deployed ? num(onchain.totals.totalSettledEth) : 0;
-    const returnedEth = onchain.deployed ? num(onchain.totals.rebatesToUsersEth) + num(onchain.totals.rebatesToAppsEth) : 0;
-    const observed = await observedMev();
-    // The split the contract enforces; displayed from configuration, as the
-    // settlement figures are.
-    const rebateUser = Number(process.env.ORDO_REBATE_USER ?? 0.9);
-    const rebateApp = Number(process.env.ORDO_REBATE_APP ?? 0.05);
-    const rebateSplit = { user: rebateUser, app: rebateApp, protocol: Math.round(Math.max(0, 1 - rebateUser - rebateApp) * 1e6) / 1e6 };
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify({
-        chain: { name: "Robinhood Chain", chainId: 4663 },
-        arbs: rep?.totals?.arbs ?? 0,
-        searchers: rep?.totals?.uniqueSearchers ?? 0,
-        activeSearchers24h: active24h,
-        pools: rep?.totals?.uniquePools ?? 0,
-        swaps: rep?.totals?.swaps ?? 0,
-        // null until the sample is long enough to extrapolate honestly.
-        arbsPerDay: rep?.perDay?.arbs == null ? null : Math.round(rep.perDay.arbs),
-        ethUsd: usdEth,
-        routed: routed.available
-          ? { transactions: routed.transactions.confirmed, transactions24h: routed.transactions.confirmed24h, volumeUsd: routed.volumeUsd, volume24hUsd: routed.volume24hUsd, since: routed.since }
-          : null,
-        settlement: onchain.deployed
-          ? {
-              deployed: true,
-              address: onchain.address,
-              settlements: onchain.totals.settlements,
-              totalSettledEth: onchain.totals.totalSettledEth,
-              rebatesToUsersEth: onchain.totals.rebatesToUsersEth,
-              rebatesToAppsEth: onchain.totals.rebatesToAppsEth,
-              protocolFeesEth: onchain.totals.protocolFeesEth,
-              totalBondedEth: onchain.totals.totalBondedEth,
-              stale: Boolean(onchain.stale),
-            }
-          : { deployed: false },
-        // Arbitrage seen landing on-chain, priced in quote assets only (a floor).
-        // Observed is not captured: it is the market, not the revenue.
-        mevObserved: { ...observed, floor: true },
-        rebateSplit,
-        // The five figures the dashboards lead with, precomputed so an
-        // embedding site does not repeat the arithmetic or the caveats.
-        headline: {
-          protectedVolumeUsd: routed.available ? routed.volumeUsd : 0,
-          protectedVolume24hUsd: routed.available ? routed.volume24hUsd : 0,
-          transactions: routed.available ? routed.transactions.confirmed : 0,
-          transactions24h: routed.available ? routed.transactions.confirmed24h : 0,
-          mevObservedUsd24h: observed.usd24h,
-          mevObservedArbs24h: observed.arbs24h,
-          mevObservedUsd: observed.usdAllTime,
-          mevObservedArbs: observed.arbsAllTime,
-          rebateSplit,
-          mevCapturedEth: capturedEth,
-          mevCapturedUsd: toUsd(capturedEth),
-          settlements: onchain.deployed ? onchain.totals.settlements : 0,
-          rebatesReturnedEth: returnedEth,
-          rebatesReturnedUsd: toUsd(returnedEth),
-          activeSearchers24h: active24h,
-          searchersAllTime: rep?.totals?.uniqueSearchers ?? 0,
-          since: routed.available ? routed.since : null,
-        },
-        updatedAt: new Date().toISOString(),
-      }),
-    );
+    const body = await statsBody();
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=10" });
+    res.end(body);
     return;
   }
+
 
   // Self-serve credential issuance. The key is returned exactly once and only
   // its hash is stored, so there is nothing here worth stealing later. Per-IP
@@ -1004,6 +1065,12 @@ setStakesStore(store);
 // Receipts for transactions the gateway forwarded, priced for the public counter.
 setInterval(() => resolveRouted(store).catch((e) => console.warn(`web | routed: ${e.message}`)), 10_000).unref?.();
 resolveRouted(store).catch(() => {});
+
+// The public counters, built once now so the first visitor reads them from
+// memory like everyone after, and kept fresh from a timer so a quiet hour does
+// not leave the next visitor holding the refresh.
+statsBody().catch(() => {});
+setInterval(() => statsBody().catch(() => {}), STATS_TTL_MS).unref?.();
 
 // If ETH ever lands on address(1) or its neighbours again, from anyone's
 // transaction, it is logged (and posted to ORDO_ALERT_WEBHOOK) within a minute.
