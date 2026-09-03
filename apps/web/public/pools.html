@@ -462,7 +462,8 @@
         layout: { background: { color: "transparent" }, textColor: "#6f6a62", fontFamily: "Fira Code, monospace", fontSize: 10 },
         grid: { vertLines: { color: "rgba(0,0,0,0.04)" }, horzLines: { color: "rgba(0,0,0,0.04)" } },
         rightPriceScale: { borderColor: "#dedad1", scaleMargins: { top: 0.06, bottom: 0.24 } },
-        timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: tfSec < 60, rightOffset: 4, barSpacing: 7 },
+        // The right offset keeps the latest candles clear of the depth profile drawn along that edge.
+        timeScale: { borderColor: "#dedad1", timeVisible: true, secondsVisible: tfSec < 60, rightOffset: 18, barSpacing: 7 },
         crosshair: { mode: 0, vertLine: { color: "rgba(29,22,22,.25)", labelBackgroundColor: "#1d1616" }, horzLine: { color: "rgba(29,22,22,.25)", labelBackgroundColor: "#1d1616" } },
         autoSize: true,
       });
@@ -506,7 +507,7 @@
         candlesQ = d.candles;
         const keep = quiet ? chart.timeScale().getVisibleLogicalRange() : null;
         setSeriesData();
-        if (keep) chart.timeScale().setVisibleLogicalRange(keep); else chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candlesQ.length - 140), to: candlesQ.length + 4 });
+        if (keep) chart.timeScale().setVisibleLogicalRange(keep); else chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candlesQ.length - 120), to: candlesQ.length + 18 });
         chart.applyOptions({ timeScale: { secondsVisible: tfSec < 60 } });
         // An untraded pool's price is wherever its creator left it; the gap to the market is worth knowing before a range is set around it.
         const gap = borrowed && candlesQ.at(-1)?.close ? state.price / candlesQ.at(-1).close - 1 : 0;
