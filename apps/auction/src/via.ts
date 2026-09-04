@@ -66,6 +66,10 @@ export function viaHtml(opts: {
   .status .v { font-family:var(--display); font-size:26px; font-weight:500; margin-top:6px; letter-spacing:-.01em; }
   .status .v small { font-family:var(--mono); font-size:11px; color:var(--muted); font-weight:400; display:block; margin-top:5px; line-height:1.5; }
   .status .v.ok { color:var(--ok); } .status .v.bad { color:var(--bad); }
+  .summary { border:1px solid var(--border); border-top:none; padding:18px 24px; color:var(--dim); font-size:14.5px; }
+  .summary b { font-weight:600; }
+  table.quiet td { color:var(--muted); }
+  .more { margin-top:14px; font-size:13.5px; color:var(--muted); }
   section { padding:60px 0; border-bottom:1px solid var(--border); }
   h2 { font-family:var(--display); font-weight:500; font-size:30px; letter-spacing:-.015em; margin-bottom:10px; }
   .lede { color:var(--muted); font-size:15.5px; max-width:680px; margin-bottom:26px; }
@@ -109,20 +113,21 @@ export function viaHtml(opts: {
 
 <header><div class="wrap">
   <div class="eyebrow">Verifiable Inclusion Auction</div>
-  <h1>The back-run is <em>sold</em>, and the person it would have cost keeps 90%.</h1>
-  <p class="sub">On a chain with no mempool, the value in your swap is taken by whoever lands right after it. Sent via Ordo, that right is auctioned to bonded searchers instead — and every bid is signed, every round is published, and the whole history is anchored on-chain, so you do not have to take our word for any of it.</p>
+  <h1>If there is nothing to extract, <em>nothing is extracted.</em></h1>
+  <p class="sub">Every transaction through Ordo is simulated, then offered to bonded searchers. Most wallet sends have no back-run in them — the auction closes empty, the transaction still lands, and the user is charged nothing extra. When a searcher does bid, 90% of what they pay goes to the person whose transaction created it. Every outcome is signed and anchored on-chain, including the empty ones.</p>
 </div></header>
 
 <div class="wrap"><div class="status">
-  <div><div class="k">Auctioneer</div><div class="v mono" id="st-auctioneer" style="font-size:15px">—</div></div>
-  <div><div class="k">Rounds published</div><div class="v" id="st-count">—</div></div>
+  <div><div class="k">Taken from users</div><div class="v ok" id="st-taken">—</div></div>
+  <div><div class="k">Receipts published</div><div class="v" id="st-count">—</div></div>
   <div><div class="k">Anchored on-chain</div><div class="v" id="st-anchored">—</div></div>
-  <div><div class="k">Searchers connected</div><div class="v" id="st-searchers">—</div></div>
-</div></div>
+  <div><div class="k">Searchers watching</div><div class="v" id="st-searchers">—</div></div>
+</div>
+<div class="summary" id="st-summary">loading…</div></div>
 
 <section><div class="wrap">
-  <h2>Rounds</h2>
-  <p class="lede">Every closed round, newest first: all bids received, who won, and the second price the winner was actually charged. A round with no bids closed without a sale and cost the user nothing. Rounds won by <span class="tag house">house</span> were won by the searcher OrdoFi runs itself — the auction is new, and until outside searchers compete in it those rounds are us bidding, not a market clearing.</p>
+  <h2>What closed</h2>
+  <p class="lede">A sold round shows the winner and the second price they were charged. An unsold round is the common case on this flow: a searcher looked, found nothing worth paying for, and the user's transaction went out as it was. Rounds won by <span class="tag house">house</span> were won by the searcher OrdoFi runs itself — those are us bidding, not a market clearing.</p>
   <div id="rounds"><div class="empty">loading…</div></div>
 </div></section>
 
@@ -214,43 +219,76 @@ auditReceipt(ack, receipt)   <span class="c">// packages/core/src/receipt.ts</sp
     const [root, health, list] = await Promise.all([
       fetch("/receipts/root").then((r) => r.json()).catch(() => null),
       fetch("/health").then((r) => r.json()).catch(() => null),
-      fetch("/receipts?n=25").then((r) => r.json()).catch(() => null),
+      fetch("/receipts?n=200").then((r) => r.json()).catch(() => null),
     ]);
 
+    const rs = list && Array.isArray(list.receipts) ? list.receipts : [];
+    const sold = rs.filter((r) => r.winner);
+    const empty = rs.filter((r) => !r.winner);
+    const takenWei = sold.reduce((n, r) => n + BigInt(r.clearingPriceWei || 0), 0n);
+
     if (root) {
-      $("st-auctioneer").innerHTML = short(root.auctioneer) + "<small>signs every bid and round</small>";
-      $("st-count").innerHTML = root.count.toLocaleString() + "<small>root " + short(root.root) + "</small>";
+      $("st-count").innerHTML = root.count.toLocaleString() + "<small>signed · root " + short(root.root) + "</small>";
       const gap = root.count - root.anchoredCount;
       $("st-anchored").innerHTML = root.anchoredCount.toLocaleString() +
         "<small>" + (gap > 0 ? gap + " not yet committed" : "the whole history") + "</small>";
     }
+    $("st-taken").innerHTML = (takenWei === 0n ? "$0.00" : eth(takenWei.toString()) + " ETH") +
+      "<small>" + (takenWei === 0n ? "no user was overcharged" : "second-price proceeds, this page") + "</small>";
     if (health) {
       const s = health.stats || {};
-      const n = (v, one, many) => (v ?? 0) + " " + ((v ?? 0) === 1 ? one : many);
       $("st-searchers").innerHTML = (health.searchers ?? 0) +
-        "<small>" + n(s.opportunities, "opportunity", "opportunities") + " · " + n(s.bids, "bid", "bids") + " · " + (s.settled ?? 0) + " settled</small>";
+        "<small>" + (s.bids ?? 0) + " bids · " + (s.settled ?? 0) + " settled</small>";
+    }
+    if (root) {
+      const n = root.count;
+      const a = root.anchoredCount;
+      $("st-summary").innerHTML = "<b>" + n.toLocaleString() + " transactions</b> went through the auction. " +
+        (sold.length ? sold.length + " had a bidder. " : "None of the recent ones had a bidder — typical for transfers and dust swaps. ") +
+        a.toLocaleString() + " receipts are already immutable on-chain. Auctioneer " + short(root.auctioneer) + " signed every one.";
     }
 
-    const rs = list && Array.isArray(list.receipts) ? list.receipts : [];
     if (!rs.length) {
-      $("rounds").innerHTML = '<div class="empty">No rounds have closed yet. Opportunities are created by transactions sent through <span class="mono">rpc.ordofi.network</span>; when one arrives, it appears here with every bid it drew.</div>';
+      $("rounds").innerHTML = '<div class="empty">No rounds have closed yet. Transactions sent through <span class="mono">rpc.ordofi.network</span> appear here as they settle.</div>';
       return;
     }
-    const rows = rs.map((r) => {
+
+    const row = (r) => {
       const bids = Array.isArray(r.bids) ? r.bids : [];
       const top = bids.map((b) => eth(b.bidWei)).sort((a, b) => Number(b) - Number(a))[0];
       const isHouse = HOUSE && r.winner && r.winner.toLowerCase() === HOUSE;
+      const outcome = r.winner
+        ? short(r.winner) + (isHouse ? '<span class="tag house">house</span>' : "")
+        : '<span style="color:var(--muted)">nothing extracted</span>';
+      const bidCell = bids.length
+        ? bids.length + '<span class="mono" style="color:var(--muted)"> · top ' + top + " ETH</span>"
+        : "looked, passed";
       return "<tr>" +
         '<td class="mono"><a href="/receipts/' + esc(r.opportunityId) + '">' + short(r.opportunityId) + "</a></td>" +
-        "<td>" + bids.length + (bids.length ? '<span class="mono" style="color:var(--muted)"> · top ' + top + " ETH</span>" : "") + "</td>" +
-        '<td class="mono">' + (r.winner ? short(r.winner) + (isHouse ? '<span class="tag house">house</span>' : "") : '<span style="color:var(--muted)">no sale</span>') + "</td>" +
-        "<td>" + (r.winner ? eth(r.clearingPriceWei) + " ETH" : "—") + "</td>" +
+        "<td>" + bidCell + "</td>" +
+        '<td class="mono">' + outcome + "</td>" +
+        "<td>" + (r.winner ? eth(r.clearingPriceWei) + " ETH" : "$0 extra") + "</td>" +
         '<td class="hide-s">' + (r.winner ? eth((BigInt(r.clearingPriceWei) * 90n / 100n).toString()) + " ETH" : "—") + "</td>" +
         '<td class="hide-s mono" style="color:var(--muted)">' + ago(r.closedAt) + "</td>" +
         "</tr>";
-    }).join("");
-    $("rounds").innerHTML = "<table><thead><tr><th>Round</th><th>Bids</th><th>Winner</th><th>Charged</th>" +
-      '<th class="hide-s">To the user</th><th class="hide-s">Closed</th></tr></thead><tbody>' + rows + "</tbody></table>";
+    };
+
+    let html = "";
+    if (sold.length) {
+      html += "<table><thead><tr><th>Sold</th><th>Bids</th><th>Winner</th><th>Charged</th>" +
+        '<th class="hide-s">To the user</th><th class="hide-s">Closed</th></tr></thead><tbody>' +
+        sold.map(row).join("") + "</tbody></table>";
+    }
+    if (empty.length) {
+      const shown = empty.slice(0, 8);
+      const hidden = empty.length - shown.length;
+      html += (sold.length ? '<p class="more">' + empty.length + " closed with nothing to extract — still signed, still on the log.</p>" : "") +
+        '<table class="' + (sold.length ? "quiet" : "") + '"><thead><tr><th>Round</th><th>Searchers</th><th>Outcome</th><th>User paid</th>' +
+        '<th class="hide-s">Rebate</th><th class="hide-s">Closed</th></tr></thead><tbody>' +
+        shown.map(row).join("") + "</tbody></table>" +
+        (hidden > 0 ? '<p class="more">' + hidden + " older empty rounds on <a href=\"/receipts\">/receipts</a>.</p>" : "");
+    }
+    $("rounds").innerHTML = html;
   }
 
   refresh();
