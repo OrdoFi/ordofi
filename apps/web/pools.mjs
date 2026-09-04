@@ -3,7 +3,7 @@ import { sparkCloses } from "./market-stats.mjs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decodeEventLog, encodeFunctionData, getAddress, parseAbiItem, toEventSelector } from "viem";
-import { rpcFetch, rpcOnce, V4, isV4PoolId } from "@ordofi/core";
+import { rpcFetch, rpcOnce, V4, LIQUIDITY, isV4PoolId } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
 import {
   alignTick,
@@ -124,6 +124,14 @@ const NPM_EVENTS = [
   parseAbiItem("event Collect(uint256 indexed tokenId, address recipient, uint256 amount0, uint256 amount1)"),
 ];
 const MANAGER_TOPICS = LADDER_ABI.filter((x) => x.type === "event").map((e) => toEventSelector(e));
+
+/** What the second generation adds, shared by the V3 and V4 managers. */
+const GEN2_ABI = [
+  { type: "function", name: "compound", stateMutability: "payable", inputs: [{ name: "ladderId", type: "uint256" }, RUNG_TUPLE, { name: "deadline", type: "uint256" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
+  { type: "function", name: "compoundWithPermit", stateMutability: "payable", inputs: [{ name: "ladderId", type: "uint256" }, RUNG_TUPLE, { name: "deadline", type: "uint256" }, PERMIT_TUPLE], outputs: [{ type: "uint256" }, { type: "uint256" }] },
+  { type: "function", name: "collectMany", stateMutability: "nonpayable", inputs: [{ type: "uint256[]" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
+  { type: "function", name: "GENERATION", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
+];
 const NPM_TOPICS = new Map(NPM_EVENTS.map((e) => [toEventSelector(e), e.name]));
 const NPM_ABI = [
   {
@@ -143,8 +151,8 @@ const NPM_ABI = [
  * position manager answers per token id with its range; V4's answers with
  * liquidity alone and the range comes from our own bin record.
  */
-const V3_VENUE = {
-  id: "v3", manager: LADDER_MANAGER, abi: LADDER_ABI, deployBlock: LADDER_DEPLOY_BLOCK,
+const V3_SHAPE = {
+  kind: "v3",
   topics: MANAGER_TOPICS,
   async binLiquidity(bins) {
     const raw = await batchCall(bins.map((b) => ({ to: NPM, abi: NPM_ABI, fn: "positions", args: [b.tokenId] })));
@@ -152,8 +160,8 @@ const V3_VENUE = {
   },
   poolOf: (l) => lower(l.pool),
 };
-const V4_VENUE = {
-  id: "v4", manager: LADDER_MANAGER_V4, abi: LADDER_V4_ABI, deployBlock: LADDER_V4_DEPLOY_BLOCK,
+const V4_SHAPE = {
+  kind: "v4",
   topics: LADDER_V4_TOPICS,
   async binLiquidity(bins) {
     const raw = await batchCall(bins.map((b) => ({ to: V4.positionManager, abi: POSM_ABI, fn: "getPositionLiquidity", args: [b.tokenId] })));
@@ -161,8 +169,26 @@ const V4_VENUE = {
   },
   poolOf: (l) => lower(l.poolId),
 };
-const VENUE = { v3: V3_VENUE, v4: V4_VENUE };
+/**
+ * One venue object per manager generation. A ladder lives for good in the
+ * generation that opened it, so every action carries the venue id it came
+ * with ("v3", "v3g2", "v4", "v4g2"); new ladders open in the latest. The env
+ * overrides keep pointing the first generation at a redeploy, as before.
+ */
+const gens = (kind, shape, baseAbi, list) => list.map((g, i) => ({
+  ...shape, gen: g.gen, id: g.gen === 1 ? kind : `${kind}g${g.gen}`,
+  manager: i === 0 ? (kind === "v3" ? LADDER_MANAGER : LADDER_MANAGER_V4) : getAddress(g.address),
+  deployBlock: i === 0 ? (kind === "v3" ? LADDER_DEPLOY_BLOCK : LADDER_V4_DEPLOY_BLOCK) : g.deployBlock,
+  abi: g.gen >= 2 ? [...baseAbi, ...GEN2_ABI] : baseAbi,
+}));
+const VENUE_LIST = [...gens("v3", V3_SHAPE, LADDER_ABI, LIQUIDITY.ladders.v3), ...gens("v4", V4_SHAPE, LADDER_V4_ABI, LIQUIDITY.ladders.v4)];
+const VENUE = Object.fromEntries(VENUE_LIST.map((v) => [v.id, v]));
+const V3_VENUE = VENUE.v3, V4_VENUE = VENUE.v4;
 const venueFor = (venue) => VENUE[venue] ?? V3_VENUE;
+/** Where new ladders open: the latest generation of a kind. */
+const latestVenue = (kind) => VENUE_LIST.filter((v) => v.kind === (kind === "v4" ? "v4" : "v3")).at(-1);
+/** Every generation's manager address, for the page and the wallet's allowance checks. */
+export const MANAGERS = Object.fromEntries(VENUE_LIST.map((v) => [v.id, v.manager]));
 
 const cache = new Map();
 async function cached(key, ttlMs, fn) {
@@ -351,7 +377,7 @@ export async function poolsList(store, windowSec = 86_400) {
     // The header cards: busiest by trades and by volume.
     const mostTraded = rows.slice().sort((a, b) => b.trades24 - a.trades24)[0] ?? null;
     const highestVolume = all[0] ?? null;
-    return { trending, established, all, featured: { mostTraded, highestVolume }, totals, manager: LADDER_MANAGER, managers: { v3: LADDER_MANAGER, v4: LADDER_MANAGER_V4 }, at: new Date().toISOString() };
+    return { trending, established, all, featured: { mostTraded, highestVolume }, totals, manager: LADDER_MANAGER, managers: MANAGERS, at: new Date().toISOString() };
   });
 }
 
@@ -924,13 +950,14 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
   const rungs = plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: r.amount0Min ?? 0n, amount1Min: r.amount1Min ?? 0n }));
   // The V4 manager takes the pool's key where V3's takes its address; the rest of the call is the same.
   const poolArg = st.kind === "v4" ? keyArg(st.key) : getAddress(st.pool);
-  const abi = venueFor(st.kind).abi;
+  const v = latestVenue(st.kind); // new ladders open in the newest manager
+  const abi = v.abi;
   const build = (signed) => signed
     ? encodeFunctionData({ abi, functionName: "openLadderWithPermit", args: [poolArg, rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline), signed] })
     : encodeFunctionData({ abi, functionName: "openLadder", args: [poolArg, rungs, shapeCode(shape), st.tick - band, st.tick + band, BigInt(deadline)] });
   const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : sc / raw; };
   return {
-    pool: st.pool, kind: st.kind, venue: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd,
+    pool: st.pool, kind: st.kind, venue: v.id, manager: v.manager, tick: st.tick, price: st.price, priceUsd: st.priceUsd,
     base: st.base, quote: st.quote,
     minTick: plan.minTick, maxTick: plan.maxTick,
     minPrice: Math.min(toPrice(plan.minTick), toPrice(plan.maxTick)), maxPrice: Math.max(toPrice(plan.minTick), toPrice(plan.maxTick)),
@@ -939,7 +966,7 @@ export async function planPosition({ pool, base, minPrice, maxPrice, shape = "bi
     baseTotal: (st.base.isToken0 ? plan.total0 : plan.total1).toString(),
     quoteTotal: (st.base.isToken0 ? plan.total1 : plan.total0).toString(),
     rungs: plan.rungs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight, side: r.side ?? (r.amount0 > 0n && r.amount1 > 0n ? "both" : r.amount0 > 0n ? "token0" : "token1") })),
-    tx: rungs.length ? await fundingFor(st, plan.total0, plan.total1, build, deadline, owner, permit) : null,
+    tx: rungs.length ? await fundingFor(v, st, plan.total0, plan.total1, build, deadline, owner, permit) : null,
   };
 }
 
@@ -993,12 +1020,15 @@ export function permitFromQuery(q) {
  * The V3 manager wraps the value into WETH itself; the V4 manager settles it
  * as the pool's native currency. Either way the wallet sends ETH.
  */
-async function fundingFor(st, total0, total1, build, deadline, owner, permit) {
-  const manager = getAddress(venueFor(st.kind).manager);
+async function fundingFor(v, st, total0, total1, build, deadline, owner, permit, held0 = 0n, held1 = 0n) {
+  const manager = getAddress(v.manager);
+  // What the caller must bring: the rungs' totals less what the manager already
+  // holds for them (a compound keeps the owner's fee share in the contract).
+  const need0 = total0 > held0 ? total0 - held0 : 0n, need1 = total1 > held1 ? total1 - held1 : 0n;
   const wethIsToken0 = st.token0 === WETH;
-  const wethNeeded = st.token0 === WETH ? total0 : st.token1 === WETH ? total1 : 0n;
+  const wethNeeded = st.token0 === WETH ? need0 : st.token1 === WETH ? need1 : 0n;
   // Every ERC-20 side with something to pay, the token being LP'd first: that is the one a permit can cover.
-  const sides = [[st.token0, total0], [st.token1, total1]].filter(([t, n]) => t !== WETH && n > 0n).sort(([a], [b]) => (a === st.base.address ? -1 : b === st.base.address ? 1 : 0));
+  const sides = [[st.token0, need0], [st.token1, need1]].filter(([t, n]) => t !== WETH && n > 0n).sort(([a], [b]) => (a === st.base.address ? -1 : b === st.base.address ? 1 : 0));
   const [other, otherNeeded] = sides[0] ?? [null, 0n];
   const needsToken = otherNeeded > 0n;
   const info = needsToken ? await permitInfo(other, owner).catch(() => ({ supported: false })) : { supported: false };
@@ -1006,7 +1036,7 @@ async function fundingFor(st, total0, total1, build, deadline, owner, permit) {
   // With a signed permit no approve transaction is needed for that side; the signature rides in the calldata.
   const approvals = sides.filter(([t]) => !(signed && t === other)).map(([t, n]) => ({ token: getAddress(t), amount: n.toString(), spender: manager }));
   return {
-    to: manager, venue: st.kind, data: build(signed),
+    to: manager, venue: v.id, data: build(signed),
     value: wethNeeded.toString(),
     approve: approvals[0] ?? null,
     approvals,
@@ -1044,7 +1074,49 @@ export async function planAdd({ id, venue = "v3", shape = "spot", baseAmount = 0
     total0: total0.toString(), total1: total1.toString(),
     baseTotal: (st.base.isToken0 ? total0 : total1).toString(), quoteTotal: (st.base.isToken0 ? total1 : total0).toString(),
     rungs: rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString(), weight: r.weight, side: r.side })),
-    tx: rungs.length ? await fundingFor(st, total0, total1, build, deadline, owner, permit) : null,
+    tx: rungs.length ? await fundingFor(v, st, total0, total1, build, deadline, owner, permit) : null,
+  };
+}
+
+/**
+ * Delta's "compound my fees": what the ladder has earned but not claimed goes
+ * back into its bins, in one transaction, with whatever extra the user adds.
+ * Only a second-generation ladder can; the manager collects the fees, takes
+ * its 1% as on any claim, and keeps the owner's share as funding, so the
+ * caller brings only the difference. Amounts here are the *extra*; the plan
+ * reports the fees it found and the totals that will go in.
+ */
+export async function planCompound({ id, venue, shape = "spot", baseAmount = 0n, quoteAmount = 0n, owner = null, permit = null }) {
+  const v = venueFor(venue);
+  if (v.gen < 2) throw new Error("this position lives in the first manager, which cannot compound — claim, then add");
+  const l = await call(v.manager, v.abi, "ladder", [BigInt(id)]);
+  if (l.closedAt !== 0n) throw new Error("ladder is closed");
+  const from = owner ?? l.owner;
+  // The fees as the manager would pay them out right now (its 1% already off), by a dry collect from the owner.
+  const [fee0, fee1] = await call(v.manager, v.abi, "collect", [BigInt(id)], from).catch(() => [0n, 0n]);
+  const poolKey = v.poolOf(l);
+  const st = await poolState(poolKey, await baseOf(poolKey));
+  const open = l.bins.filter((b) => b.open).map((b) => ({ tickLower: Number(b.tickLower), tickUpper: Number(b.tickUpper) })).sort((a, b) => a.tickLower - b.tickLower);
+  const budget0 = (st.base.isToken0 ? baseAmount : quoteAmount) + fee0;
+  const budget1 = (st.base.isToken0 ? quoteAmount : baseAmount) + fee1;
+  if (budget0 === 0n && budget1 === 0n) throw new Error("nothing to compound: no unclaimed fees and nothing added");
+  const rs = allocateRungs(open, st.tick, shape, budget0, budget1);
+  const total0 = rs.reduce((n, r) => n + r.amount0, 0n), total1 = rs.reduce((n, r) => n + r.amount1, 0n);
+  const deadline = Math.floor(Date.now() / 1000) + 900;
+  const rungs = rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, amount0: r.amount0, amount1: r.amount1, amount0Min: 0n, amount1Min: 0n }));
+  const build = (signed) => signed
+    ? encodeFunctionData({ abi: v.abi, functionName: "compoundWithPermit", args: [BigInt(id), rungs, BigInt(deadline), signed] })
+    : encodeFunctionData({ abi: v.abi, functionName: "compound", args: [BigInt(id), rungs, BigInt(deadline)] });
+  const sc = 10 ** (st.base.decimals - st.quote.decimals);
+  const toPrice = (t) => { const raw = tickToPrice(t); return st.base.isToken0 ? raw * sc : sc / raw; };
+  const fees = { base: (st.base.isToken0 ? fee0 : fee1).toString(), quote: (st.base.isToken0 ? fee1 : fee0).toString() };
+  return {
+    id: String(id), venue: v.id, pool: st.pool, kind: st.kind, tick: st.tick, price: st.price, priceUsd: st.priceUsd, base: st.base, quote: st.quote, shape,
+    bins: open.length, filled: rs.length, fees,
+    total0: total0.toString(), total1: total1.toString(),
+    baseTotal: (st.base.isToken0 ? total0 : total1).toString(), quoteTotal: (st.base.isToken0 ? total1 : total0).toString(),
+    rungs: rs.map((r) => ({ tickLower: r.tickLower, tickUpper: r.tickUpper, priceLower: Math.min(toPrice(r.tickLower), toPrice(r.tickUpper)), priceUpper: Math.max(toPrice(r.tickLower), toPrice(r.tickUpper)), amount0: r.amount0.toString(), amount1: r.amount1.toString() })),
+    tx: rungs.length ? await fundingFor(v, st, total0, total1, build, deadline, owner, permit, fee0, fee1) : null,
   };
 }
 
@@ -1178,7 +1250,7 @@ async function historyOf(owner, venue) {
     tx.npm = new Map();
     tx.deltas = new Map();
     for (const lg of r?.logs ?? []) {
-      if (venue.id === "v3") {
+      if (venue.kind === "v3") {
         // The V3 position manager says what each bin took and gave, in token amounts.
         if (lower(lg.address) !== NPM) continue;
         const name = NPM_TOPICS.get(lg.topics[0]);
@@ -1255,8 +1327,8 @@ async function tickAt(pool, ts) {
 export async function positionsOf(store, owner) {
   owner = getAddress(owner);
   return cached(`portfolio:${owner}`, 8_000, async () => {
-    const [v3, v4] = await Promise.all([buildPortfolio(owner, V3_VENUE), buildPortfolio(owner, V4_VENUE)]);
-    return mergePortfolios(owner, [v3, v4]);
+    const parts = await Promise.all(VENUE_LIST.map((v) => buildPortfolio(owner, v)));
+    return mergePortfolios(owner, parts);
   });
 }
 
@@ -1270,7 +1342,7 @@ function mergePortfolios(owner, parts) {
   }
   const totals = parts.reduce((t, p) => { for (const k of Object.keys(t)) t[k] += p.totals[k] ?? 0; return t; }, { valueUsd: 0, unclaimedUsd: 0, claimedUsd: 0, depositedUsd: 0, pnlUsd: 0, gasUsd: 0, open: 0, closed: 0 });
   return {
-    owner, manager: LADDER_MANAGER, managers: { v3: LADDER_MANAGER, v4: LADDER_MANAGER_V4 }, ethUsd: parts.find((p) => p.ethUsd != null)?.ethUsd ?? null,
+    owner, manager: LADDER_MANAGER, managers: MANAGERS, ethUsd: parts.find((p) => p.ethUsd != null)?.ethUsd ?? null,
     ladders, days, totals, historyError: parts.map((p) => p.historyError).filter(Boolean).join("; ") || null,
   };
 }
@@ -1364,7 +1436,7 @@ async function buildPortfolio(owner, venue) {
       const opened = mine.find((e) => e.name === "LadderOpened"), added = mine.find((e) => e.name === "LiquidityAdded");
       const closed = mine.find((e) => e.name === "BinsClosed"), fees = mine.find((e) => e.name === "FeesCollected");
       const myTokenIds = new Set(l.bins.map((b) => b.tokenId.toString()));
-      if (venue.id === "v4" && tx.deltas?.size) {
+      if (venue.kind === "v4" && tx.deltas?.size) {
         // Per-bin amounts from the singleton's liquidity deltas, pinned to the manager's own totals.
         const inA = opened ? [opened.args.deposited0, opened.args.deposited1] : added ? [added.args.added0, added.args.added1] : [0n, 0n];
         const outA = closed ? [closed.args.principal0, closed.args.principal1] : [0n, 0n];
@@ -1470,7 +1542,7 @@ async function allFeeLogs(venue) {
  */
 export async function platformStats({ stakesTvlUsd = 0, stakesFeesUsd = 0, stakes = 0 } = {}) {
   return cached("platform", 60_000, async () => {
-    const [usd, ...venues] = await Promise.all([ethUsd().catch(() => null), venueStats(V3_VENUE), venueStats(V4_VENUE)]);
+    const [usd, ...venues] = await Promise.all([ethUsd().catch(() => null), ...VENUE_LIST.map((v) => venueStats(v))]);
     const sum = (k) => venues.reduce((n, v) => n + v[k], 0);
     const ladderFeesUsd = sum("feesUsd"), ladderTvlUsd = sum("tvlUsd");
     return {
@@ -1533,4 +1605,10 @@ const abiOf = (venue) => venueFor(venue).abi;
 export const collectCalldata = (id, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "collect", args: [BigInt(id)] }) });
 export const closeCalldata = (id, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "close", args: [BigInt(id)] }) });
 export const closeBinsCalldata = (id, indices, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "closeBins", args: [BigInt(id), indices.map((i) => BigInt(i))] }) });
+/** Claim across several ladders of one generation in one transaction; first-generation managers have no such call. */
+export const collectManyCalldata = (ids, venue = "v3") => {
+  const v = venueFor(venue);
+  if (v.gen < 2) throw new Error("positions in the first manager are claimed one at a time");
+  return { to: getAddress(v.manager), venue: v.id, data: encodeFunctionData({ abi: v.abi, functionName: "collectMany", args: [ids.map((i) => BigInt(i))] }) };
+};
 export const closeManyCalldata = (ids, venue = "v3") => ({ to: mgr(venue), venue: venueFor(venue).id, data: encodeFunctionData({ abi: abiOf(venue), functionName: "closeMany", args: [ids.map((i) => BigInt(i))] }) });

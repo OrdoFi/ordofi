@@ -1,5 +1,5 @@
 import { decodeFunctionResult, encodeFunctionData, getAddress } from "viem";
-import { rpcFetch, V4 } from "@ordofi/core";
+import { rpcFetch, V4, LIQUIDITY } from "@ordofi/core";
 import { ethUsd } from "@ordofi/core/pricing";
 import { proveDelivery, proofToJson } from "@ordofi/core/guard";
 import { amountsForLiquidity, tickToSqrtPriceX96 } from "@ordofi/core/liquidity";
@@ -54,6 +54,9 @@ const FARM_ABI = [
   { type: "function", name: "withdraw", stateMutability: "nonpayable", inputs: [{ type: "uint256" }], outputs: [] },
   { type: "function", name: "getReward", stateMutability: "nonpayable", inputs: [], outputs: [] },
   { type: "function", name: "exit", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  // Second generation only.
+  { type: "function", name: "compound", stateMutability: "nonpayable", inputs: [{ name: "minTokenOut", type: "uint256" }], outputs: [{ type: "uint256" }] },
+  { type: "function", name: "GENERATION", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
 ];
 const ZAP_PERMIT = { name: "pm", type: "tuple", components: [{ name: "value", type: "uint256" }, { name: "deadline", type: "uint256" }, { name: "v", type: "uint8" }, { name: "r", type: "bytes32" }, { name: "s", type: "bytes32" }] };
 const ZAP_ABI = [
@@ -63,6 +66,11 @@ const ZAP_ABI = [
   { type: "function", name: "zapBoth", stateMutability: "payable", inputs: [{ type: "address" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "zapTokenWithPermit", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, ZAP_PERMIT], outputs: [{ type: "uint256" }] },
   { type: "function", name: "zapBothWithPermit", stateMutability: "payable", inputs: [{ type: "address" }, { type: "uint256" }, ZAP_PERMIT], outputs: [{ type: "uint256" }] },
+];
+/** Second-generation zaps leave in one call. V3 takes its floors as uint256, V4 as uint128 (the PositionManager's own type). */
+const ZAP_OUT_ABI = (v4) => [
+  { type: "function", name: "zapOut", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }, { type: v4 ? "uint128" : "uint256" }, { type: v4 ? "uint128" : "uint256" }], outputs: [{ type: "uint256" }, { type: "uint256" }] },
+  { type: "function", name: "zapOutToETH", stateMutability: "nonpayable", inputs: [{ type: "address" }, { type: "uint256" }, { type: "uint256" }], outputs: [{ type: "uint256" }] },
 ];
 async function call(to, abi, functionName, args = []) {
   const data = await rpcFetch("eth_call", [{ to, data: encodeFunctionData({ abi, functionName, args }) }, "latest"]);
@@ -84,6 +92,20 @@ async function zapAddress() { if (!ZAP) ZAP = getAddress(await call(STAKE_FACTOR
 let ZAP_V4 = process.env.ORDO_STAKE_ZAP_V4 ? getAddress(process.env.ORDO_STAKE_ZAP_V4) : getAddress(V4.stakeZap);
 async function zapAddressV4() { if (!ZAP_V4) ZAP_V4 = getAddress(await call(STAKE_FACTORY_V4, STAKE_FACTORY_V4_ABI, "zap")); return ZAP_V4; }
 const zapFor = (venue) => (venue === "v4" ? zapAddressV4() : zapAddress());
+
+/**
+ * Every factory generation, per venue. A stake lives for good in the
+ * generation that created it (its farm and zap are that generation's), so the
+ * list reads all of them and new stakes go to the last. The first generation
+ * keeps its env overrides; later ones come from @ordofi/core.
+ */
+const STAKE_GENS = {
+  v3: LIQUIDITY.stakes.v3.map((g, i) => ({ venue: "v3", gen: g.gen, factory: i === 0 ? getAddress(STAKE_FACTORY) : getAddress(g.factory), zap: i === 0 ? null : getAddress(g.zap), abi: FACTORY_ABI })),
+  v4: LIQUIDITY.stakes.v4.map((g, i) => ({ venue: "v4", gen: g.gen, factory: i === 0 ? getAddress(STAKE_FACTORY_V4) : getAddress(g.factory), zap: i === 0 ? null : getAddress(g.zap), abi: STAKE_FACTORY_V4_ABI })),
+};
+const latestGen = (venue) => STAKE_GENS[venue].at(-1);
+/** A generation's zap: the first generation's may be overridden by env, so it is read the old way. */
+const zapOfGen = (g) => (g.zap ? Promise.resolve(g.zap) : zapFor(g.venue));
 
 /** Live state of one stake: TVL, rate, stream, plus the caller's share if `owner` is given. */
 export async function stakeState(entry, owner) {
@@ -114,7 +136,7 @@ export async function stakeState(entry, owner) {
   const streaming = Number(finish) > now;
   const weekly = streaming ? ratePerSec * 7 * 86_400 : 0;
   const out = {
-    token: entry.token, pool: entry.pool, kind: st.kind, venue, vault: entry.vault, farm: entry.farm, createdAt: Number(entry.createdAt), creator: entry.creator,
+    token: entry.token, pool: entry.pool, kind: st.kind, venue, gen: entry.gen ?? 1, factory: entry.factory ?? null, zap: entry.zap ?? null, vault: entry.vault, farm: entry.farm, createdAt: Number(entry.createdAt), creator: entry.creator,
     symbol: st.base.symbol, name: st.base.name, icon: st.base.icon, decimals: st.base.decimals, fee: st.fee, tickSpacing: st.tickSpacing,
     price: st.price, priceUsd: st.priceUsd, ethUsd: st.quote.usdPerToken,
     reference: ref && Number(ref[1]) > 0 ? { tick: Number(ref[0]), at: Number(ref[1]), usable: ref[2], price: refPrice(st, Number(ref[0])) } : null,
@@ -148,14 +170,18 @@ function refPrice(st, tick) {
 /** Every stake either factory has created, each tagged with its venue; the V4 ones name their pool by PoolId. */
 async function allEntries() {
   return cached("stakes:entries", 30_000, async () => {
-    const [v3, v4] = await Promise.all([
-      call(STAKE_FACTORY, FACTORY_ABI, "allStakes"),
-      call(STAKE_FACTORY_V4, STAKE_FACTORY_V4_ABI, "allStakes").catch((e) => { console.warn(`stakes | V4 factory unavailable: ${e?.message ?? e}`); return []; }),
-    ]);
-    return [
-      ...v3.map((e) => ({ venue: "v3", token: lower(e.token), pool: lower(e.pool), vault: e.vault, farm: e.farm, createdAt: e.createdAt, creator: e.creator })),
-      ...v4.map((e) => ({ venue: "v4", token: lower(e.token), pool: lower(e.poolId), vault: e.vault, farm: e.farm, createdAt: e.createdAt, creator: e.creator })),
-    ];
+    const gens = [...STAKE_GENS.v3, ...STAKE_GENS.v4];
+    const lists = await Promise.all(gens.map(async (g) => {
+      const [rows, zap] = await Promise.all([
+        call(g.factory, g.abi, "allStakes").catch((e) => { console.warn(`stakes | ${g.venue} gen ${g.gen} factory unavailable: ${e?.message ?? e}`); return []; }),
+        zapOfGen(g).catch(() => null),
+      ]);
+      return rows.map((e) => ({
+        venue: g.venue, gen: g.gen, factory: g.factory, zap, token: lower(e.token), pool: lower(g.venue === "v4" ? e.poolId : e.pool),
+        vault: e.vault, farm: e.farm, createdAt: e.createdAt, creator: e.creator,
+      }));
+    }));
+    return lists.flat();
   });
 }
 
@@ -166,7 +192,11 @@ export async function stakesList(owner) {
   rows.sort((a, b) => b.tvlWeth - a.tvlWeth);
   const totals = { tvlWeth: rows.reduce((n, r) => n + r.tvlWeth, 0), stakes: rows.length, rewardsWeth: rows.reduce((n, r) => n + r.totalRewardsWeth, 0) };
   const [zap, zapV4] = await Promise.all([zapAddress().catch(() => null), zapAddressV4().catch(() => null)]);
-  return { factory: STAKE_FACTORY, factories: { v3: STAKE_FACTORY, v4: STAKE_FACTORY_V4 }, zap, zaps: { v3: zap, v4: zapV4 }, stakes: rows, totals, ethUsd: await ethUsd().catch(() => null) };
+  return {
+    factory: STAKE_FACTORY, factories: { v3: STAKE_FACTORY, v4: STAKE_FACTORY_V4 }, zap, zaps: { v3: zap, v4: zapV4 },
+    generations: Object.fromEntries(Object.entries(STAKE_GENS).map(([k, gs]) => [k, gs.map((g) => ({ gen: g.gen, factory: g.factory, zap: g.zap }))])),
+    stakes: rows, totals, ethUsd: await ethUsd().catch(() => null),
+  };
 }
 
 /** One stake by vault address, with the owner's view. */
@@ -185,7 +215,7 @@ export async function stakeView(vault, owner) {
  */
 export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 0n, tokenAmount = 0n, slippageBps = 100, from = null, permit = null }) {
   const s = await stakeView(vault);
-  const zap = await zapFor(s.venue);
+  const zap = s.zap ?? await zapFor(s.venue);
   const token = s.token;
   const tokenIsIn = asset === "token";
   let quote = null, minOut = 0n, data, value = 0n, approve = null;
@@ -322,6 +352,81 @@ export async function vaultWithdrawPlan({ vault, shares, to, from = null, slippa
   };
 }
 export const claimCalldata = (farm) => ({ to: getAddress(farm), data: encodeFunctionData({ abi: FARM_ABI, functionName: "getReward" }) });
+
+/**
+ * Re-stake what the farm owes `from`, in one transaction and with nothing
+ * taken: half the WETH becomes the token in the pool, both are deposited, the
+ * new shares are staked. Second-generation farms only; the first generation
+ * claims, approves and zaps, and the page still offers that path for them.
+ * `minTokenOut` is the swapped half's quote less the slippage, as on a deposit.
+ */
+export async function stakeCompoundPlan({ vault, from, slippageBps = 100 }) {
+  const s = await stakeView(vault, from);
+  if ((s.gen ?? 1) < 2) throw new Error("this stake was created before compounding in one call existed — claim, then deposit the WETH");
+  const exact = from ? await call(s.farm, FARM_ABI, "earned", [getAddress(from)]) : 0n;
+  if (exact === 0n) throw new Error("nothing earned yet");
+  const half = exact / 2n;
+  const q = await swapLegQuote(s, false, half);
+  const bps = BigInt(Math.max(10, Math.min(2000, Math.round(slippageBps))));
+  const minOut = q ? (q.amountOut * (10_000n - bps)) / 10_000n : 0n;
+  const tx = { to: getAddress(s.farm), data: encodeFunctionData({ abi: FARM_ABI, functionName: "compound", args: [minOut] }) };
+  // The proof: the caller's staked balance (the farm answers balanceOf) grows, and nothing is asked of their wallet.
+  const check = await proven({ from, tx, expect: [{ asset: getAddress(s.farm), min: 1n }], pay: [] });
+  return {
+    vault: s.vault, farm: s.farm, venue: s.venue, gen: s.gen, symbol: s.symbol, decimals: s.decimals,
+    rewardWeth: exact.toString(), rewardWethNum: Number(exact) / 1e18,
+    swap: q ? { half: half.toString(), tokenOut: q.amountOut.toString(), minTokenOut: minOut.toString(), impactBps: q.impactBps, via: q.via } : null,
+    slippageBps: Number(bps),
+    ...check,
+    tx: check.guard.ok ? tx : null,
+  };
+}
+
+/**
+ * Leave a stake in one transaction. "both": unstake and redeem to ETH and the
+ * token (plus pending rewards). "eth": the same, then the token side sold in
+ * the pool, so only ETH comes back. Second-generation stakes only — their zap
+ * is allowed to unstake for the holder. Floors are the pro-rata slice less the
+ * slippage, as on a plain withdrawal; for "eth" the floor is on the total.
+ */
+export async function stakeExitPlan({ vault, shares, from, mode = "both", slippageBps = 100 }) {
+  shares = BigInt(shares);
+  if (shares <= 0n) throw new Error("nothing to withdraw");
+  const s = await stakeView(vault, from);
+  if ((s.gen ?? 1) < 2 || !s.zap) throw new Error("this stake was created before one-transaction exits existed — unstake, then withdraw");
+  const supply = BigInt(s.shares);
+  if (supply === 0n) throw new Error("the vault has no shares");
+  const staked = from ? await call(s.farm, FARM_ABI, "balanceOf", [getAddress(from)]) : 0n;
+  if (from && shares > staked) throw new Error("more than is staked; shares held loose in the wallet are withdrawn from the vault directly");
+  const bps = BigInt(Math.max(0, Math.min(5000, Math.round(slippageBps))));
+  const wethPart = (BigInt(s.wethHeld) * shares) / supply;
+  const tokenPart = (BigInt(s.tokenHeld) * shares) / supply;
+  const abi = ZAP_OUT_ABI(s.venue === "v4");
+  let tx, expect, minimum, quote = null;
+  if (mode === "eth") {
+    const q = tokenPart > 0n ? await swapLegQuote(s, true, tokenPart) : { amountOut: 0n, impactBps: 0, via: "none" };
+    if (!q) throw new Error("the pool cannot take the token side in one swap; withdraw to both coins instead");
+    const total = wethPart + q.amountOut;
+    const minEth = (total * (10_000n - bps)) / 10_000n;
+    tx = { to: s.zap, data: encodeFunctionData({ abi, functionName: "zapOutToETH", args: [getAddress(vault), shares, minEth] }) };
+    expect = [{ asset: "eth", min: minEth }];
+    minimum = { eth: minEth.toString() };
+    quote = { tokenIn: tokenPart.toString(), ethOut: q.amountOut.toString(), impactBps: q.impactBps, via: q.via, totalEth: total.toString() };
+  } else {
+    const minWeth = (wethPart * (10_000n - bps)) / 10_000n;
+    const minToken = (tokenPart * (10_000n - bps)) / 10_000n;
+    tx = { to: s.zap, data: encodeFunctionData({ abi, functionName: "zapOut", args: [getAddress(vault), shares, minWeth, minToken] }) };
+    expect = [{ asset: "eth", min: minWeth }, { asset: getAddress(s.token), min: minToken }];
+    minimum = { weth: minWeth.toString(), token: minToken.toString() };
+  }
+  const check = await proven({ from, tx, expect, pay: [] });
+  return {
+    vault: s.vault, farm: s.farm, zap: s.zap, venue: s.venue, gen: s.gen, symbol: s.symbol, decimals: s.decimals, mode, shares: shares.toString(), slippageBps: Number(bps),
+    expected: { weth: wethPart.toString(), token: tokenPart.toString() }, minimum, quote,
+    ...check,
+    tx: check.guard.ok ? tx : null,
+  };
+}
 export const harvestCalldata = (vault) => ({ to: getAddress(vault), data: encodeFunctionData({ abi: VAULT_ABI, functionName: "harvest" }) });
 
 /**
@@ -346,17 +451,19 @@ export async function stakeCreatePlan(token, venue = null) {
     throw new Error("this token has no Uniswap V3 or V4 pool against ETH yet");
   }
   const info = (await tradeTokens(STORE)).find((t) => t.address === token);
-  let existing, tx;
+  // A pool gets one stake across every generation: a second would split its depositors.
+  const known = (await allEntries()).find((e) => e.venue === venue && e.pool === lower(pool.pool));
+  const existing = known ? { vault: known.vault, farm: known.farm } : { vault: "0x0000000000000000000000000000000000000000", farm: null };
+  const g = latestGen(venue);
+  let tx;
   if (venue === "v4") {
     const st = await poolState(pool.pool, token);
-    existing = await call(STAKE_FACTORY_V4, STAKE_FACTORY_V4_ABI, "stakeForPool", [pool.pool]);
-    tx = { to: getAddress(STAKE_FACTORY_V4), data: encodeFunctionData({ abi: STAKE_FACTORY_V4_ABI, functionName: "createStake", args: [keyArg(st.key)] }) };
+    tx = { to: g.factory, data: encodeFunctionData({ abi: STAKE_FACTORY_V4_ABI, functionName: "createStake", args: [keyArg(st.key)] }) };
   } else {
-    existing = await call(STAKE_FACTORY, FACTORY_ABI, "stakeForPool", [getAddress(pool.pool)]);
-    tx = { to: getAddress(STAKE_FACTORY), data: encodeFunctionData({ abi: FACTORY_ABI, functionName: "createStake", args: [getAddress(pool.pool)] }) };
+    tx = { to: g.factory, data: encodeFunctionData({ abi: FACTORY_ABI, functionName: "createStake", args: [getAddress(pool.pool)] }) };
   }
   return {
-    token, venue, symbol: info?.symbol ?? null, name: info?.name ?? null, pool: pool.pool, kind: pool.kind, fee: pool.fee, tickSpacing: pool.tickSpacing, liquidity: pool.liquidity,
+    token, venue, gen: g.gen, factory: g.factory, symbol: info?.symbol ?? null, name: info?.name ?? null, pool: pool.pool, kind: pool.kind, fee: pool.fee, tickSpacing: pool.tickSpacing, liquidity: pool.liquidity,
     venues: Object.fromEntries(Object.entries(options).map(([k, p]) => [k, p ? { pool: p.pool, fee: p.fee, liquidity: p.liquidity } : null])),
     exists: lower(existing.vault) !== "0x0000000000000000000000000000000000000000" ? { vault: existing.vault, farm: existing.farm } : null,
     tx,

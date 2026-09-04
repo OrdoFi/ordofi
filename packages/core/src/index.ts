@@ -297,6 +297,40 @@ export const V4 = {
   ethUsdgPoolId: "0x24107d152f14a76d292123265ae3f3c71f863fc2f4ef7ba49d64e78d28ea379e",
 } as const;
 
+/**
+ * Every generation of Ordo's liquidity contracts on Robinhood Chain, oldest
+ * first. A generation is a set of deployments that share an ABI; positions and
+ * stakes live in the generation that created them for good, so the UI reads
+ * all of them and opens new ones in the last.
+ *
+ * Gen 1 (3 Sep): open/add/collect/close ladders; stake vault + farm + zap.
+ * Gen 2 (4 Sep): ladders gain compound(id, rungs) and collectMany(ids); farms
+ * compound rewards in one call and let their zap unstake for a holder, zaps
+ * gain zapOut (both coins) and zapOutToETH (single).
+ */
+export const LIQUIDITY = {
+  ladders: {
+    v3: [
+      { gen: 1, address: "0xf9b15283acbdd693d39d23accda7213d8d46a9e2", deployBlock: 52_895_364 },
+      { gen: 2, address: "0xb584cf37d421500a91312231b79ad8dbd5ccffb0", deployBlock: 54_168_157 },
+    ],
+    v4: [
+      { gen: 1, address: "0x2b0e53c9f869de1fe7c5b43abaabaa90e23c073b", deployBlock: 52_996_505 },
+      { gen: 2, address: "0xeb7018d6e68874496dbef643948c7252b5e5ceaf", deployBlock: 54_168_229 },
+    ],
+  },
+  stakes: {
+    v3: [
+      { gen: 1, factory: "0xce7b7a31151d3c5f7a2894842f8e1f26a05b70da", zap: "0x8a424d43dc4d44e80b93a31cb955dc86490ba8ac", deployBlock: 52_646_559 },
+      { gen: 2, factory: "0xcb79b20cc4502f781cc01e500e56669e6f78169a", zap: "0x37f46f192f0ae4ed9a11e167c2b8ac3ec807cf4f", deployBlock: 54_168_412 },
+    ],
+    v4: [
+      { gen: 1, factory: "0x9a4a6420c027a0bafa0a55464196cf5d966122d2", zap: "0xfbf1ad9bd14aa0353d753b2cdd5536b41a8c786a", deployBlock: 52_996_797 },
+      { gen: 2, factory: "0x8998a5b9e9a0475db43d06e90755bd813e34d3cc", zap: "0xe7cd8a0e7f4e2502e75ce8cdb4ff29d989b2f58e", deployBlock: 54_168_807 },
+    ],
+  },
+} as const;
+
 /** A V4 PoolId is 32 bytes; a V2/V3 pool key is a 20-byte address. */
 export function isV4PoolId(key: string): boolean {
   return /^0x[0-9a-fA-F]{64}$/.test(key);

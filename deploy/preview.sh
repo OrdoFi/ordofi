@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The hidden preview of the liquidity pages (Pools, Stakes, Positions) on the
 # app server: same image and data volume as production, ORDO_POOLS_ENABLED=1,
-# bound to 127.0.0.1:3005 only. Reach it through an SSH tunnel:
+# bound to 127.0.0.1:3006 only (3005 is the live liquidity service). Reach it through an SSH tunnel:
 #
-#   ssh -N -L 3005:127.0.0.1:3005 ordofi
+#   ssh -N -L 3006:127.0.0.1:3006 ordofi
 #
 # Run from the repo root on the server after pulling:
 #
@@ -23,7 +23,7 @@ fi
 set -a; . ./.env; set +a
 docker rm -f web-preview >/dev/null 2>&1 || true
 docker run -d --name web-preview --restart unless-stopped --network deploy_default \
-  -p 127.0.0.1:3005:3000 -v deploy_ordo-data:/app/data \
+  -p 127.0.0.1:3006:3000 -v deploy_ordo-data:/app/data \
   -e SERVICE=web -e ORDO_WEB_PORT=3000 -e ORDO_POOLS_ENABLED=1 \
   -e ORDO_RPC_URL="${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}" \
   -e ORDO_RPC_URLS="${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}" \
@@ -39,4 +39,4 @@ docker run -d --name web-preview --restart unless-stopped --network deploy_defau
   -w /app/apps/web \
   deploy-web node --inspect=127.0.0.1:9229 serve.mjs >/dev/null
 sleep 4
-curl -s -o /dev/null -w "preview http://127.0.0.1:3005/pools -> %{http_code}\n" http://127.0.0.1:3005/pools
+curl -s -o /dev/null -w "preview http://127.0.0.1:3006/pools -> %{http_code}\n" http://127.0.0.1:3006/pools

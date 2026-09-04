@@ -12,8 +12,8 @@ import { gzipSync } from "node:zlib";
 import { tradeTokens, tradeQuote, tradeCandles, CHAIN as TRADE_CHAIN, tradePair, tradeTrades, tradeBalances, tradeMarkets, tradeToken, resolverStats, warmTradeCaches } from "./trade.mjs";
 import { stealthFeed, stealthMetaFor, stealthBalances } from "./stealth.mjs";
 import { resolveRouted, routedSummary } from "./routed.mjs";
-import { poolsList, poolsPage, poolsRow, poolsSparks, searchIndex, iconImage, warmPoolsList, poolCreatePlan, poolState, poolsForToken, poolDepth, planPosition, planAdd, positionsOf, collectCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
-import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawPlan, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
+import { poolsList, poolsPage, poolsRow, poolsSparks, searchIndex, iconImage, warmPoolsList, poolCreatePlan, poolState, poolsForToken, poolDepth, planPosition, planAdd, planCompound, positionsOf, collectCalldata, collectManyCalldata, closeCalldata, closeBinsCalldata, closeManyCalldata, setPoolsStore, platformStats, permitFromQuery, LADDER_MANAGER } from "./pools.mjs";
+import { stakesList, stakeView, stakeQuote, stakeCreatePlan, farmWithdrawCalldata, vaultWithdrawPlan, stakeCompoundPlan, stakeExitPlan, claimCalldata, harvestCalldata, setStakesStore } from "./stakes.mjs";
 
 /** JSON reply, gzipped when the client accepts it — the token list is large. */
 function sendJson(req, res, status, body, headers = {}) {
@@ -877,8 +877,10 @@ async function handle(req, res) {
       /** A pool is a V3 address or a V4 PoolId (32 bytes). */
       const poolKey = (k) => { const v = q.get(k) ?? ""; if (!/^0x[0-9a-fA-F]{40}$/.test(v) && !/^0x[0-9a-fA-F]{64}$/.test(v)) throw new Error(`bad ${k}`); return v.toLowerCase(); };
       const big = (k) => { const v = q.get(k); if (v == null || v === "") return 0n; if (!/^\d+$/.test(v)) throw new Error(`bad ${k}`); return BigInt(v); };
-      /** Which manager a ladder lives in; V3 unless said otherwise. */
-      const venue = () => (q.get("venue") === "v4" ? "v4" : "v3");
+      /** Which manager a ladder lives in: a kind ("v3", "v4") or a generation of one ("v3g2", "v4g2"); V3 unless said otherwise. */
+      const venue = () => (/^v[34](g[0-9])?$/.test(q.get("venue") ?? "") ? q.get("venue") : "v3");
+      /** The stake pages send a plain kind. */
+      const kind = () => (String(q.get("venue") ?? "").startsWith("v4") ? "v4" : "v3");
       let body;
       if (path === "/api/pools") body = await poolsPage(store, Number(q.get("window")) || 86_400);
       else if (path === "/api/pools/sparks") body = await poolsSparks(store, Number(q.get("window")) || 86_400);
@@ -916,8 +918,15 @@ async function handle(req, res) {
         owner: q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null,
         permit: permitFromQuery(q),
       });
+      else if (path === "/api/pools/plan-compound") body = await planCompound({
+        id: big("id"), venue: venue(), shape: ["spot", "curve", "bidask"].includes(q.get("shape")) ? q.get("shape") : "spot",
+        baseAmount: big("baseAmount"), quoteAmount: big("quoteAmount"),
+        owner: q.get("owner") && /^0x[0-9a-fA-F]{40}$/.test(q.get("owner")) ? q.get("owner") : null,
+        permit: permitFromQuery(q),
+      });
       else if (path === "/api/pools/positions") body = await positionsOf(store, addr("owner"));
       else if (path === "/api/pools/collect") body = collectCalldata(big("id"), venue());
+      else if (path === "/api/pools/collect-many") body = collectManyCalldata((q.get("ids") ?? "").split(",").filter((x) => /^\d+$/.test(x)), venue());
       else if (path === "/api/pools/close") body = closeCalldata(big("id"), venue());
       else if (path === "/api/pools/close-bins") body = closeBinsCalldata(big("id"), (q.get("indices") ?? "").split(",").filter((x) => /^\d+$/.test(x)), venue());
       else if (path === "/api/pools/close-many") body = closeManyCalldata((q.get("ids") ?? "").split(",").filter((x) => /^\d+$/.test(x)), venue());
@@ -929,13 +938,18 @@ async function handle(req, res) {
         from: q.get("from") ? addr("from") : null,
         permit: permitFromQuery(q),
       });
-      else if (path === "/api/pools/stake-create") body = await stakeCreatePlan(addr("token"), q.has("venue") ? venue() : null);
+      else if (path === "/api/pools/stake-create") body = await stakeCreatePlan(addr("token"), q.has("venue") ? kind() : null);
       else if (path === "/api/pools/stake-unstake") body = farmWithdrawCalldata(addr("farm"), big("shares"));
       else if (path === "/api/pools/stake-withdraw") body = await vaultWithdrawPlan({
         vault: addr("vault"), shares: big("shares"), to: addr("to"), from: q.get("from") ? addr("from") : null,
         slippageBps: Math.max(10, Math.min(2000, Number(q.get("slippageBps") ?? 100))),
       });
       else if (path === "/api/pools/stake-claim") body = claimCalldata(addr("farm"));
+      else if (path === "/api/pools/stake-compound") body = await stakeCompoundPlan({ vault: addr("vault"), from: q.get("from") ? addr("from") : null, slippageBps: Math.max(10, Math.min(2000, Number(q.get("slippageBps") ?? 100))) });
+      else if (path === "/api/pools/stake-exit") body = await stakeExitPlan({
+        vault: addr("vault"), shares: big("shares"), from: q.get("from") ? addr("from") : null, mode: q.get("mode") === "eth" ? "eth" : "both",
+        slippageBps: Math.max(0, Math.min(5000, Number(q.get("slippageBps") ?? 100))),
+      });
       else if (path === "/api/pools/stake-harvest") body = harvestCalldata(addr("vault"));
       else throw new Error("unknown pools endpoint");
       sendJson(req, res, 200, body, { "cache-control": path === "/api/pools" ? "public, max-age=15" : "no-store" });
