@@ -152,10 +152,13 @@ export class SwapStats {
     if (!this.file || !existsSync(this.file)) return;
     try {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as SwapTotals;
-      // A different set of contracts means a different history, and the saved
-      // position would skip the blocks the newcomer lived in. Start over.
+      // Resume only if the saved tally answers the same question. A different
+      // set of contracts, or a start block moved earlier to take in a
+      // deployment that was being missed, both leave history behind the saved
+      // position — which only ever moves forward, so it would never be read.
       const was = (saved.addresses ?? (saved.address ? [saved.address] : [])).map((a) => a.toLowerCase()).sort().join(",");
-      if (was === [...this.t.addresses].sort().join(",")) this.t = { ...this.t, ...saved, addresses: this.t.addresses, address: this.t.address };
+      const sameSet = was === [...this.t.addresses].sort().join(",");
+      if (sameSet && saved.fromBlock === this.t.fromBlock) this.t = { ...this.t, ...saved, addresses: this.t.addresses, address: this.t.address };
     } catch {
       /* unreadable: rescan from the deploy block */
     }

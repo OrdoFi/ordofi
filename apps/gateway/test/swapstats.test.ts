@@ -124,4 +124,9 @@ test("adding a past deployment rescans rather than trusting a position that skip
   const resumed = new SwapStats(rpc, [OLD, ADDR], 100, file, 5_000, 40);
   assert.equal(resumed.totals().scannedTo, 12_100, "order names the live contract; it does not change what was counted");
   assert.equal(resumed.totals().address, OLD, "…but the first given is still the one the page links to");
+
+  // Moving the start block earlier puts history behind a position that only
+  // moves forward. Resuming there would never read it.
+  const earlier = new SwapStats(rpc, [OLD, ADDR], 50, file, 5_000, 40);
+  assert.equal(earlier.totals().scannedTo, 49, "rescan from the new start, not from the old position");
 });
