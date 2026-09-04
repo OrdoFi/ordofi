@@ -231,11 +231,50 @@ setInterval(() => {
     .catch((e) => console.warn(`[bot] refresh failed: ${(e as Error).message}`));
 }, 30_000);
 
+/**
+ * A won bid means a backrun goes out, and a backrun that loses its race still
+ * pays gas. Nothing about losing is visible to the strategy — the quote looked
+ * fine, the edge was simply taken first — so a bad run has no natural end. The
+ * arb bot has had this cap since it was written; the bidding bot did not, and
+ * the difference only matters once there is money in the wallet.
+ */
+const DAILY_GAS_CAP = parseEther(process.env.ORDO_SEARCHER_DAILY_GAS_CAP_ETH ?? "0.01");
+const gasLedger: { at: number; wei: bigint }[] = [];
+let breakerLogged = false;
+
+function gasBurnedToday(): bigint {
+  const cutoff = Date.now() - 86_400_000;
+  while (gasLedger.length && gasLedger[0].at < cutoff) gasLedger.shift();
+  return gasLedger.reduce((n, e) => n + e.wei, 0n);
+}
+
+/** Charged when a bid is submitted: it is the moment we commit to paying for a transaction. */
+function chargeGas(wei: bigint): void {
+  gasLedger.push({ at: Date.now(), wei });
+}
+
+function breakerTripped(): boolean {
+  const burned = gasBurnedToday();
+  if (burned < DAILY_GAS_CAP) {
+    breakerLogged = false;
+    return false;
+  }
+  if (!breakerLogged) {
+    breakerLogged = true;
+    console.error(
+      `[bot] BREAKER — ${formatEther(burned)} ETH of gas committed in the last 24h, cap ${formatEther(DAILY_GAS_CAP)}. ` +
+        `Bidding stops until that rolls off or the process is restarted.`,
+    );
+  }
+  return true;
+}
+
 const searcher = new OrdoSearcher({
   auctionWsUrl: AUCTION_WS,
   privateKey: KEY,
   settlementAddress: SETTLEMENT,
   onOpportunity: async (opp) => {
+    if (breakerTripped()) return null;
     // Everything here happens inside the bid window, so the only network calls
     // are quotes; the pool's pair and its fee tiers were looked up the first
     // time this pool appeared and are remembered.
@@ -253,6 +292,7 @@ const searcher = new OrdoSearcher({
     }
 
     const backrunRawTx = await signedBackrun(decision.best, decision.bidWei);
+    chargeGas(gasCostWei());
     console.log(
       `[bot] bidding ${formatEther(decision.bidWei)} ETH on ${opp.id.slice(0, 8)} — ${decision.reason} (${Date.now() - started}ms)`,
     );
@@ -263,4 +303,7 @@ const searcher = new OrdoSearcher({
 console.log(`OrdoFi searcher bot | ${account.address}`);
 console.log(`OrdoFi searcher bot | auction=${AUCTION_WS} settlement=${SETTLEMENT || "(none — bids will be unsettleable)"}`);
 console.log(`OrdoFi searcher bot | max bid ${formatEther(MAX_BID)} ETH · bond target ${formatEther(BOND_TARGET)} ETH`);
+console.log(
+  `OrdoFi searcher bot | trade budget ${formatEther(TRADE_BUDGET)} ETH · bids ${BID_SHARE_PCT}% of the net edge · stops after ${formatEther(DAILY_GAS_CAP)} ETH of gas in 24h`,
+);
 searcher.connect();
