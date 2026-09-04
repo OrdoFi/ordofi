@@ -487,8 +487,18 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (tokIn.usd != null && tokOut.usd) { const recv = $("recv"); recv.classList.remove("dim"); recv.classList.add("busy"); tweenTo(recv, (inn * tokIn.usd) / tokOut.usd, tokOut.decimals); }
     const req = { tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: hex(amountIn), amountOutMinimum: "0x0", recipient: account || DEAD, nativeOut: !!tokOut.native };
     if (!tokIn.native) req.from = account || DEAD;
+    // Two requests at once: the price alone comes back in one round trip and is
+    // painted immediately; the full answer with the back-run search replaces it.
+    const fast = rpc("ordo_quoteSwap", [{ ...req, skipReclaim: true }]).catch(() => null);
+    const full = rpc("ordo_quoteSwap", [req]);
+    fast.then((q) => {
+      if (id !== quoting || quote || !q || BigInt(q.amountOut) === 0n) return;
+      quote = { ...q, amountIn, provisional: true };
+      paintQuote();
+      $("mev-v").textContent = "…"; $("mev-note").textContent = "checking what comes back…";
+    });
     let q;
-    try { q = await rpc("ordo_quoteSwap", [req]); }
+    try { q = await full; }
     catch (e) { if (id !== quoting) return; resetQuote(/no route/i.test(e.message) ? "no pool connects these two tokens" : e.message.slice(0, 90)); return; }
     if (id !== quoting) return;
     setBusy(false);
@@ -546,6 +556,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
       const a = await allowance(tokIn).catch(() => 0n);
       if (a < quote.amountIn) { needsApprove = true; go.textContent = "Approve " + tokIn.symbol; go.disabled = false; return; }
     }
+    if (quote.provisional) { go.textContent = "Checking for MEV…"; go.disabled = true; return; }
     go.textContent = quote.reclaim ? "Swap and keep the MEV" : "Swap";
     go.disabled = false;
   }

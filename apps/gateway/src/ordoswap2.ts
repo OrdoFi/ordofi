@@ -101,7 +101,7 @@ async function liquidityOf(rpc: Rpc, poolIds: string[]): Promise<Map<string, big
   await Promise.all(
     poolIds.map(async (id) => {
       try {
-        const r = (await rpc("eth_call", [{ to: STATE_VIEW, data: encodeFunctionData({ abi: STATE_VIEW_ABI, functionName: "getLiquidity", args: [id as Hex] }) }, "latest"])) as Hex;
+        const r = (await limited(() => rpc("eth_call", [{ to: STATE_VIEW, data: encodeFunctionData({ abi: STATE_VIEW_ABI, functionName: "getLiquidity", args: [id as Hex] }) }, "latest"]))) as Hex;
         out.set(id.toLowerCase(), BigInt(r));
       } catch {
         out.set(id.toLowerCase(), 0n);
@@ -119,6 +119,8 @@ export interface SwapRequest {
   recipient: Hex;
   nativeOut: boolean;
   from?: Hex;
+  /** Price the route only; do not search for a back-run. The fast first answer a page shows. */
+  skipReclaim?: boolean;
 }
 
 export interface SwapQuote {
@@ -313,11 +315,31 @@ function revertBytes(err: unknown): Hex | null {
   return m ? (m[1] as Hex) : null;
 }
 
+/**
+ * At most this many simulations in flight at once. Every quote() and
+ * liquidity read is an eth_call the upstream has to execute; a dozen fired in
+ * the same millisecond trips its per-second limit, and the retries and the
+ * fall-back to a public endpoint cost far more than queueing would have.
+ */
+const MAX_INFLIGHT = 6;
+let inflight = 0;
+const waiters: (() => void)[] = [];
+async function limited<T>(fn: () => Promise<T>): Promise<T> {
+  if (inflight >= MAX_INFLIGHT) await new Promise<void>((r) => waiters.push(r));
+  inflight++;
+  try {
+    return await fn();
+  } finally {
+    inflight--;
+    waiters.shift()?.();
+  }
+}
+
 /** One `quote()` eth_call; the value stands in for an ether input. */
 async function quoteCall(rpc: Rpc, ordoSwap: Hex, legs: Leg[], amountIn: bigint, reclaim: typeof NO_RECLAIM, valueFrom: Hex | null) {
   const data = encodeFunctionData({ abi: ORDO_SWAP2_ABI, functionName: "quote", args: [legs, amountIn, reclaim] });
   try {
-    await rpc("eth_call", [valueFrom ? { from: valueFrom, to: ordoSwap, data, value: hex(amountIn) } : { to: ordoSwap, data }, "latest"]);
+    await limited(() => rpc("eth_call", [valueFrom ? { from: valueFrom, to: ordoSwap, data, value: hex(amountIn) } : { to: ordoSwap, data }, "latest"]));
     return null;
   } catch (e) {
     const b = revertBytes(e);
@@ -425,6 +447,7 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   // ---- the back-run: only for a single hop against ether ----
   const single = chosen.route.pools.length === 1;
   const etherOut = tokenOut === WETH;
+  if (req.skipReclaim) return plain(req, ordoSwap, chosen, "price only; the back-run search was not run");
   if (!single || (!etherIn && !etherOut)) {
     return plain(req, ordoSwap, chosen, single ? "back-run search covers single-hop swaps against ETH (v1)" : `back-run search covers single-hop swaps; this one routes through ${chosen.route.hops[0].tokenOut === USDG ? "USDG" : "ETH"}`);
   }
@@ -517,7 +540,7 @@ interface SimCall {
 async function simulate(rpc: Rpc, blocks: { from: Hex; to: Hex; data: Hex; value?: Hex }[][]): Promise<SimCall[][]> {
   let res: any;
   try {
-    res = await rpc("eth_simulateV1", [{ blockStateCalls: blocks.map((calls) => ({ calls })), validation: false, traceTransfers: false }, "latest"]);
+    res = await limited(() => rpc("eth_simulateV1", [{ blockStateCalls: blocks.map((calls) => ({ calls })), validation: false, traceTransfers: false }, "latest"]));
   } catch (e) {
     throw new RpcError(-32000, `ordo_quoteSwap: could not simulate — ${(e as Error).message}`);
   }

@@ -237,6 +237,7 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
           recipient: addr(p.recipient, "recipient"),
           nativeOut: Boolean(p.nativeOut),
           from: p.from === undefined ? undefined : addr(p.from, "from"),
+          skipReclaim: Boolean(p.skipReclaim),
         },
         // V4 pools come from the watcher's index in the shared store; without it
         // (a bare dev box) the quote still covers every V3 market.
