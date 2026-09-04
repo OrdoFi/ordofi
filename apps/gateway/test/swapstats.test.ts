@@ -84,3 +84,44 @@ test("refresh reads forward in bounded chunks and remembers where it got to", as
   const other = new SwapStats(rpc, "0x00000000000000000000000000000000000000bb", 100, file, 5_000, 2);
   assert.equal(other.totals().scannedTo, 99);
 });
+
+const OLD: Hex = "0x00000000000000000000000000000000000000bb";
+
+test("a redeploy does not reset the history: every deployment is counted, the live one is named", async () => {
+  const filters: unknown[] = [];
+  const rpc = async (method: string, params: unknown[]) => {
+    if (method === "eth_blockNumber") return "0x" + (200).toString(16);
+    const f = params[0] as { address: unknown };
+    filters.push(f.address);
+    // One swap on the retired contract, one on the live one.
+    return [swapped(150), { ...swapped(151), address: OLD }];
+  };
+  const s = new SwapStats(rpc, [ADDR, OLD], 100, null, 5_000, 2);
+  await s.refresh();
+  const t = s.totals();
+  assert.deepEqual(t.addresses, [ADDR, OLD]);
+  assert.equal(t.address, ADDR, "the live contract is the one the page links to");
+  assert.deepEqual(filters[0], [ADDR, OLD], "one query covers both, since the events are identical");
+  assert.equal(t.swaps, 2, "the retired contract's swaps still happened");
+});
+
+test("adding a past deployment rescans rather than trusting a position that skipped it", async () => {
+  const rpc = async (method: string) => (method === "eth_blockNumber" ? "0x" + (12_100).toString(16) : []);
+  const dir = mkdtempSync(join(tmpdir(), "ordo-swapstats-"));
+  const file = join(dir, "s.json");
+  const only = new SwapStats(rpc, ADDR, 100, file, 5_000, 40);
+  await only.refresh();
+  assert.equal(only.totals().scannedTo, 12_100);
+
+  // The earlier contract lived in blocks this position has already passed, so
+  // resuming would count none of it. The set changed: start again.
+  const both = new SwapStats(rpc, [ADDR, OLD], 100, file, 5_000, 40);
+  assert.equal(both.totals().scannedTo, 99, "back to the first deployment's block");
+  assert.equal(both.totals().swaps, 0);
+
+  // Same set in a different order is the same history, and resumes.
+  await both.refresh();
+  const resumed = new SwapStats(rpc, [OLD, ADDR], 100, file, 5_000, 40);
+  assert.equal(resumed.totals().scannedTo, 12_100, "order names the live contract; it does not change what was counted");
+  assert.equal(resumed.totals().address, OLD, "…but the first given is still the one the page links to");
+});

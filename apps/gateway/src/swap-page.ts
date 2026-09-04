@@ -768,7 +768,10 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (!s) return;
     const eth = (wei) => Number(BigInt(wei)) / 1e18;
     $("st-user").innerHTML = usd(eth(s.toUserWei) * ethUsd()) + "<small>" + eth(s.toUserWei).toFixed(6) + " ETH · since deploy</small>";
-    $("st-swaps").innerHTML = s.swaps.toLocaleString() + "<small>through the contract</small>";
+    // The contract has been redeployed; the swaps the earlier one made still
+    // count, so say how many contracts the figure covers rather than implying one.
+    const spans = (s.addresses?.length ?? 1) > 1 ? "across " + s.addresses.length + " deployments" : "through the contract";
+    $("st-swaps").innerHTML = s.swaps.toLocaleString() + "<small>" + spans + "</small>";
     $("st-reclaims").innerHTML = s.reclaims.toLocaleString() + "<small>" + (s.skipped ? s.skipped + " skipped (gap closed first)" : "none skipped") + "</small>";
     if (!s.recent.length) { $("rows").innerHTML = '<div class="empty">No reclaims yet.</div>'; return; }
     $("rows").innerHTML = '<table><thead><tr><th>Tx</th><th class="hide-s">User</th><th>Reclaimed</th><th>To the user</th><th class="hide-s">Block</th></tr></thead><tbody>' +

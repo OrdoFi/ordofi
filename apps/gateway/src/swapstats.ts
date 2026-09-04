@@ -7,6 +7,15 @@
  * reclaims for the page. The position and totals are written to the data
  * directory after each pass, so a restart picks up where it left off instead
  * of re-reading a growing history from the deploy block every time.
+ *
+ * It counts every deployment, not just the live one. Redeploying the contract
+ * does not undo the swaps the last one made, and a page that resets to zero on
+ * a version bump is telling the reader something untrue about the product —
+ * the more so when the transaction it offers as proof was made by the version
+ * it stopped counting. `address` is the contract a new swap goes through;
+ * `addresses` is everything the totals cover. The events are identical across
+ * versions, so one `eth_getLogs` filtered on the whole set does the work of
+ * one, and the tally is the sum.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -31,7 +40,10 @@ export interface ReclaimRow {
 }
 
 export interface SwapTotals {
+  /** The contract a swap goes through today, and the one the page links to. */
   address: Hex;
+  /** Every deployment the totals cover, current first. */
+  addresses: Hex[];
   fromBlock: number;
   scannedTo: number;
   swaps: number;
@@ -60,14 +72,16 @@ export class SwapStats {
 
   constructor(
     private readonly rpc: Rpc,
-    address: Hex,
+    address: Hex | Hex[],
     fromBlock: number,
     private readonly file: string | null,
     private readonly chunk = 5_000,
     private readonly maxChunksPerPass = 40,
   ) {
+    const addresses = (Array.isArray(address) ? address : [address]).map((a) => a.toLowerCase() as Hex).filter((a, i, all) => all.indexOf(a) === i);
     this.t = {
-      address,
+      address: addresses[0],
+      addresses,
       fromBlock,
       scannedTo: fromBlock - 1,
       swaps: 0,
@@ -97,7 +111,7 @@ export class SwapStats {
         const from = this.t.scannedTo + 1;
         const to = Math.min(from + this.chunk - 1, head);
         const logs = (await this.rpc("eth_getLogs", [
-          { address: this.t.address, fromBlock: hex(from), toBlock: hex(to) },
+          { address: this.t.addresses, fromBlock: hex(from), toBlock: hex(to) },
         ])) as Log[];
         for (const l of logs) this.ingest(l);
         this.t.scannedTo = to;
@@ -138,8 +152,10 @@ export class SwapStats {
     if (!this.file || !existsSync(this.file)) return;
     try {
       const saved = JSON.parse(readFileSync(this.file, "utf8")) as SwapTotals;
-      // A different contract means a different history; start over.
-      if (saved.address?.toLowerCase() === this.t.address.toLowerCase()) this.t = { ...this.t, ...saved };
+      // A different set of contracts means a different history, and the saved
+      // position would skip the blocks the newcomer lived in. Start over.
+      const was = (saved.addresses ?? (saved.address ? [saved.address] : [])).map((a) => a.toLowerCase()).sort().join(",");
+      if (was === [...this.t.addresses].sort().join(",")) this.t = { ...this.t, ...saved, addresses: this.t.addresses, address: this.t.address };
     } catch {
       /* unreadable: rescan from the deploy block */
     }

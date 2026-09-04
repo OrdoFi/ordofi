@@ -349,7 +349,8 @@ const SWAP_PAGE = CONFIG.ordoSwapAddress
 const swapStats = CONFIG.ordoSwapAddress
   ? new SwapStats(
       (m, p) => upstream(m, p),
-      CONFIG.ordoSwapAddress as `0x${string}`,
+      // The live contract first, then the ones it replaced: their swaps happened too.
+      [CONFIG.ordoSwapAddress, ...CONFIG.ordoSwapPast] as `0x${string}`[],
       Number(process.env.ORDO_SWAP_FROM_BLOCK ?? 54_397_000),
       // Same volume as the key index and the receipt log (ORDO_DATA_DIR in production).
       join(process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data"), "swap-stats.json"),

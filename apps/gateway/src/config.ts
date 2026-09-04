@@ -164,6 +164,16 @@ export const CONFIG = {
    * back-run and pays the surplus to the user. Empty disables ordo_quoteSwap.
    */
   ordoSwapAddress: (process.env.ORDO_SWAP_ADDRESS ?? "").trim().toLowerCase(),
+  /**
+   * Superseded OrdoSwap deployments, comma-separated. Their swaps and reclaims
+   * still happened, so /swap/stats counts them; only the live contract is
+   * quoted against. Defaults to the V3-only first deployment, which ran from
+   * block 54,409,687 and paid out one back-run.
+   */
+  ordoSwapPast: (process.env.ORDO_SWAP_PAST_ADDRESSES ?? "0xe543648875b8c685bfe12476960b3d7f023d6400")
+    .split(",")
+    .map((a) => a.trim().toLowerCase())
+    .filter((a) => /^0x[0-9a-f]{40}$/.test(a)),
 };
 
 /** Simple fixed-window per-key rate limiter. */
