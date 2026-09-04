@@ -6,7 +6,7 @@ import {
   type Hex,
 } from "viem";
 import { join } from "node:path";
-import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
+import { normalizePrivateKey, rpcFetch, rpcOnce } from "@ordofi/core";
 import { ROUTER } from "@ordofi/core/router";
 import { QUOTER_V2, buildCycleSwap, poolTiers as tiersFor, quoteCycle as quoteCycleShared, type Cycle } from "@ordofi/core/arb";
 import { proveDelivery } from "@ordofi/core/guard";
@@ -84,7 +84,24 @@ const MAX_CYCLES = Number(process.env.ORDO_ARB_MAX_CYCLES ?? 160);
 const HOT_LIMIT = Number(process.env.ORDO_ARB_HOT_TOKENS ?? 24);
 const HOT_LOOKBACK = Number(process.env.ORDO_ARB_HOT_LOOKBACK ?? 1200);
 const HOT_TIMEOUT_MS = Number(process.env.ORDO_ARB_HOT_TIMEOUT_MS ?? 90_000);
-const poolBook = new PoolBook((to, data) => ethCall(to, data as Hex));
+/**
+ * Where to read Swap logs from, if not the ordinary rotation.
+ *
+ * The bot's upstreams are the bulk public list, chosen because its quote volume
+ * would eat a paid plan. eth_getLogs is the opposite shape of request: once
+ * every ten minutes, and the public hosts either gate it behind a token or
+ * rate-limit it, which drops the bot back to picking tokens off a list. One
+ * query every ten minutes on a good endpoint costs nothing worth counting.
+ */
+const LOGS_URL = process.env.ORDO_ARB_LOGS_URL?.trim() || "";
+const logsRpc = LOGS_URL
+  ? (method: string, params: unknown[]) => rpcOnce(LOGS_URL, method, params, 30_000)
+  : rpcFetch;
+// Resolving a pool's pair goes to the same endpoint as the logs: it is the same
+// once-in-a-while burst (a few hundred calls, then cached for the process life),
+// and splitting it across the throttled public hosts is what made the hot set
+// time out rather than the query itself.
+const poolBook = new PoolBook(async (to, data) => (await logsRpc("eth_call", [{ to, data }, "latest"])) as string);
 
 /** `p`, or a rejection once `ms` have passed. The work is abandoned, not cancelled. */
 function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
@@ -174,7 +191,7 @@ async function candidateMids(): Promise<{ address: Hex; symbol: string }[]> {
     // after this changed: publicnode wants a token for eth_getLogs and the
     // official RPC caps the match at 10,000, and the retries never ended.
     const hot = await withTimeout(
-      hotMids(rpcFetch, poolBook, { weth: WETH, limit: HOT_LIMIT, lookbackBlocks: HOT_LOOKBACK }),
+      hotMids(logsRpc, poolBook, { weth: WETH, limit: HOT_LIMIT, lookbackBlocks: HOT_LOOKBACK }),
       HOT_TIMEOUT_MS,
       "reading recent swaps",
     );
@@ -224,10 +241,27 @@ async function quoteCycle(c: Cycle, amountIn: bigint): Promise<bigint | null> {
 
 // --- chain state -------------------------------------------------------------
 
+/**
+ * Two numbers, because they answer two different questions.
+ *
+ * `maxFeePerGas` is a cap: what we are willing to pay if the base fee moves
+ * between simulation and inclusion. Twice the current price is cheap insurance,
+ * since a cap is not a payment — EIP-1559 charges the base fee and refunds the
+ * rest, and this chain has no priority auction to bid into.
+ *
+ * `expectedGasPrice` is what the trade will actually cost, and it is the one
+ * the profit test must use. Testing against the cap priced every cycle at
+ * double and vetoed trades that would have cleared: the bot spent its time
+ * reporting "gross 0.000088 < gas 0.00039" when the real hurdle was half that.
+ * A quarter on top absorbs an ordinary base-fee tick.
+ */
 let maxFeePerGas = 2_000_000_000n;
+let expectedGasPrice = 1_250_000_000n;
 async function refreshGas(): Promise<void> {
   try {
-    maxFeePerGas = BigInt((await rpcFetch("eth_gasPrice", [])) as string) * 2n;
+    const price = BigInt((await rpcFetch("eth_gasPrice", [])) as string);
+    maxFeePerGas = price * 2n;
+    expectedGasPrice = (price * 5n) / 4n;
   } catch { /* keep the last value */ }
 }
 
@@ -354,7 +388,7 @@ async function scan(cycles: Cycle[]): Promise<void> {
     tele.note("halt", halted, best.c.label);
     return;
   }
-  const gasCost = gas * maxFeePerGas;
+  const gasCost = gas * expectedGasPrice;
   const net = best.gross - gasCost;
   if (net < MIN_PROFIT) {
     console.log(`[arb] pass ${best.c.label}: gross ${formatEther(best.gross)} ETH < gas ${formatEther(gasCost)} + floor`);

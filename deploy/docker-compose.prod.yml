@@ -205,7 +205,12 @@ services:
       # ~9,000 of them — meant discovery never finished and only USDG was ever
       # quoted. Arbitrage only opens where size actually moves a fee tier.
       ORDO_ARB_HOT_TOKENS: ${ORDO_ARB_HOT_TOKENS:-24}
-      ORDO_ARB_HOT_LOOKBACK: ${ORDO_ARB_HOT_LOOKBACK:-3000}
+      ORDO_ARB_HOT_LOOKBACK: ${ORDO_ARB_HOT_LOOKBACK:-1200}
+      # Only the ten-minutely log read and the pool lookups behind it, not the
+      # quote traffic. Our own gateway, so it lands on the paid upstream (or on
+      # our node once that is synced) instead of a public host that gates
+      # eth_getLogs behind a token or rate-limits it.
+      ORDO_ARB_LOGS_URL: ${ORDO_ARB_LOGS_URL:-http://gateway:8547}
       ORDO_ARB_MIN_PROFIT_ETH: ${ORDO_ARB_MIN_PROFIT_ETH:-0.000004}
       ORDO_ARB_GAS_RESERVE_ETH: ${ORDO_ARB_GAS_RESERVE_ETH:-0.0008}
       ORDO_ARB_MAX_NOTIONAL_ETH: ${ORDO_ARB_MAX_NOTIONAL_ETH:-}
