@@ -9,6 +9,8 @@ import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
 import { quoteSwap } from "./ordoswap.js";
+import { swapHtml } from "./swap-page.js";
+import { SwapStats } from "./swapstats.js";
 import {
   BLOCK_MS,
   HedgeBudget,
@@ -328,6 +330,33 @@ const LANDING = landingHtml({
   app: "https://app.ordofi.network",
 });
 
+// Ordo Swap's home: the page, and the tally behind it. Only when the contract
+// is configured; otherwise /swap says so rather than showing an empty product.
+const SWAP_PAGE = CONFIG.ordoSwapAddress
+  ? swapHtml({
+      address: CONFIG.ordoSwapAddress,
+      explorer: "https://robinhoodchain.blockscout.com",
+      rpc: "https://rpc.ordofi.network",
+      app: "https://app.ordofi.network",
+      docs: "https://app.ordofi.network/docs",
+      proofTx: process.env.ORDO_SWAP_PROOF_TX ?? "0xd3402046255c3f0b954989660d3faae2c39a46930fd442f813e39b116b8d0641",
+    })
+  : null;
+const swapStats = CONFIG.ordoSwapAddress
+  ? new SwapStats(
+      (m, p) => upstream(m, p),
+      CONFIG.ordoSwapAddress as `0x${string}`,
+      Number(process.env.ORDO_SWAP_FROM_BLOCK ?? 54_397_000),
+      // Same volume as the key index and the receipt log (ORDO_DATA_DIR in production).
+      join(process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data"), "swap-stats.json"),
+    )
+  : null;
+if (swapStats && !CONFIG.edgeOrigin) {
+  const tick = () => swapStats.refresh().catch((e) => console.warn(`gateway | swap stats: ${(e as Error).message}`));
+  setTimeout(tick, 3_000).unref();
+  setInterval(tick, 30_000).unref();
+}
+
 let stopping = false;
 
 const server = createServer((req, res) => {
@@ -346,6 +375,26 @@ const server = createServer((req, res) => {
   if (req.method === "GET" && (url === "/" || url === "/index.html")) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" });
     res.end(LANDING);
+    return;
+  }
+  if (req.method === "GET" && (url === "/swap" || url === "/swap/")) {
+    if (!SWAP_PAGE) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("Ordo Swap is not enabled on this gateway");
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=120" });
+    res.end(SWAP_PAGE);
+    return;
+  }
+  if (req.method === "GET" && url === "/swap/stats") {
+    if (!swapStats) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Ordo Swap is not enabled on this gateway" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=15" });
+    res.end(JSON.stringify(swapStats.totals()));
     return;
   }
   if (req.method === "GET" && url === "/health") {
