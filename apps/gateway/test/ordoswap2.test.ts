@@ -31,10 +31,10 @@ beforeEach(() => resetCaches());
 
 /** V4 index with ORDO's real pools and a hookless ETH/USDG pool. */
 const ALL_V4 = [
-  { poolId: "0x3b84", currency0: NATIVE, currency1: ORDO, fee: 8388608, tickSpacing: 200, hooks: HOOK },
-  { poolId: "0x4366", currency0: NATIVE, currency1: ORDO, fee: 200000, tickSpacing: 2000, hooks: NATIVE },
-  { poolId: "0xe067", currency0: USDG, currency1: ORDO, fee: 40000, tickSpacing: 400, hooks: NATIVE },
-  { poolId: "0x2410", currency0: NATIVE, currency1: USDG, fee: 100, tickSpacing: 1, hooks: NATIVE },
+  { poolId: "0x3b84000000000000000000000000000000000000000000000000000000000000", currency0: NATIVE, currency1: ORDO, fee: 8388608, tickSpacing: 200, hooks: HOOK },
+  { poolId: "0x4366000000000000000000000000000000000000000000000000000000000000", currency0: NATIVE, currency1: ORDO, fee: 200000, tickSpacing: 2000, hooks: NATIVE },
+  { poolId: "0xe067000000000000000000000000000000000000000000000000000000000000", currency0: USDG, currency1: ORDO, fee: 40000, tickSpacing: 400, hooks: NATIVE },
+  { poolId: "0x2410000000000000000000000000000000000000000000000000000000000000", currency0: NATIVE, currency1: USDG, fee: 100, tickSpacing: 1, hooks: NATIVE },
 ];
 const v4 = {
   v4PoolsForPair(a: string, b: string) {
@@ -43,22 +43,34 @@ const v4 = {
   },
 };
 
-test("a pair with hundreds of pools is cut to the busiest few before anything is simulated", async () => {
-  const many = Array.from({ length: 300 }, (_, i) => ({ poolId: `0x${i.toString(16).padStart(4, "0")}`, currency0: NATIVE, currency1: USDG, fee: 3000 + i, tickSpacing: 60, hooks: NATIVE }));
-  const swaps = new Map(many.filter((_, i) => i % 100 === 7).map((p, i) => [p.poolId, 1000 - i]));
-  const src = { v4PoolsForPair: () => many, poolSwapsAll: () => swaps };
-  // The activity index fills in on a timer tick; the first call after that sees it.
-  await poolsFor(factoryRpc(), src, WETH, "0x00000000000000000000000000000000000000d1");
-  await new Promise((r) => setTimeout(r, 5));
-  const pools = await poolsFor(factoryRpc(), src, WETH, USDG);
+test("a pair with hundreds of pools is cut to the deepest few before anything is simulated", async () => {
+  const many = Array.from({ length: 300 }, (_, i) => ({ poolId: `0x${i.toString(16).padStart(64, "0")}`, currency0: NATIVE, currency1: GME, fee: 3000 + i, tickSpacing: 60, hooks: NATIVE }));
+  const src = { v4PoolsForPair: () => many };
+  let liquidityCalls = 0;
+  const rpc = factoryRpc((method, params) => {
+    if (method !== "eth_call") return undefined;
+    const { to, data } = params[0] as { to: Hex; data: Hex };
+    if (to !== "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b") return undefined;
+    liquidityCalls++;
+    const idx = Number(BigInt("0x" + data.slice(10)));
+    // Pools 7, 107 and 207 hold liquidity; 7 the most.
+    return `0x${(idx % 100 === 7 ? BigInt(1000 - idx) : 0n).toString(16).padStart(64, "0")}`;
+  });
+  const pools = await poolsFor(rpc, src, WETH, GME);
   const v4pools = pools.filter((p) => p.venue === "v4");
-  assert.equal(v4pools.length, 3, "only the pools with swaps in the last day survive, capped");
-  assert.deepEqual(v4pools.map((p) => p.id), ["v4:0x0007", "v4:0x006b", "v4:0x00cf"]);
-  assert.deepEqual(v4pools.map((p) => p.swaps), [1000, 999, 998]);
-  // And the answer is remembered for the pair: a second call does not re-rank.
-  const again = await poolsFor(factoryRpc(), src, USDG, WETH);
-  assert.equal(again.length, pools.length);
-  assert.equal(again[0].a, USDG, "oriented to the caller's order");
+  assert.equal(liquidityCalls, 300, "liquidity read once per pool");
+  assert.deepEqual(v4pools.map((p) => p.fee), [3007, 3107, 3207], "only pools with liquidity survive, deepest first, capped");
+  assert.deepEqual(v4pools.map((p) => p.liquidity), [993n, 893n, 793n]);
+  // Remembered for the pair: a second call, either order, reads nothing.
+  const again = await poolsFor(rpc, src, GME, WETH);
+  assert.equal(liquidityCalls, 300);
+  assert.equal(again[0].a, GME, "oriented to the caller's order");
+});
+
+test("ETH/USDG uses the one canonical V4 pool rather than discovering four hundred", async () => {
+  const src = { v4PoolsForPair: () => { throw new Error("must not be asked"); } };
+  const pools = await poolsFor(factoryRpc(), src, WETH, USDG);
+  assert.deepEqual(pools.map((p) => `${p.venue}:${p.fee}`), ["v3:100", "v3:500", "v4:100"]);
 });
 
 /** V3 factory: WETH/USDG at 100 and 500, WETH/GME at 3000; ORDO has no V3 pool. */
@@ -79,6 +91,8 @@ function factoryRpc(extra?: (method: string, params: unknown[]) => Promise<unkno
     }
     const r = extra?.(method, params);
     if (r !== undefined) return r;
+    // StateView.getLiquidity: every pool holds something unless a test says otherwise.
+    if (method === "eth_call" && (params[0] as { to: Hex }).to === "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b") return `0x${"1".padStart(64, "0")}`;
     throw new Error(`unexpected ${method} to ${JSON.stringify(params[0]).slice(0, 60)}`);
   };
 }

@@ -8,7 +8,7 @@ import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
-import { quoteSwap, warm as warmSwapIndex } from "./ordoswap2.js";
+import { quoteSwap } from "./ordoswap2.js";
 import { swapHtml } from "./swap-page.js";
 import { SwapStats } from "./swapstats.js";
 import { TokenList } from "./tokens.js";
@@ -358,8 +358,6 @@ if (swapStats && !CONFIG.edgeOrigin) {
   setTimeout(tick, 3_000).unref();
   setInterval(tick, 30_000).unref();
 }
-// The pool-activity ranking the router cuts candidates with: built at boot, refreshed every minute.
-if (CONFIG.ordoSwapAddress && store) warmSwapIndex(store);
 // The picker's token list, refreshed from the app every minute.
 const tokenList = CONFIG.ordoSwapAddress ? new TokenList(process.env.ORDO_TOKEN_LIST_URL ?? "https://app.ordofi.network/api/trade/tokens", fetch, store) : null;
 if (tokenList) {

@@ -55,8 +55,8 @@ export interface Pool {
   key?: PoolKey;
   hooked?: boolean;
   id: string;
-  /** Swaps in the last day, when known (V4 pools with an activity index). */
-  swaps?: number;
+  /** Current in-range liquidity, when it was read (V4 pools of a pair with several). */
+  liquidity?: bigint;
 }
 
 export interface Leg {
@@ -79,8 +79,6 @@ export type Rpc = (method: string, params: unknown[]) => Promise<unknown>;
 export interface V4Source {
   /** Every V4 pool for the pair, either order; ether is address zero. */
   v4PoolsForPair(a: string, b: string): { poolId: string; currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string }[];
-  /** Swaps per pool over the window, for every pool at once. Optional: without it, pools are kept in creation order. */
-  poolSwapsAll?(sinceBucket: number): Map<string, number>;
 }
 
 /** Most V4 markets kept per pair for a direct swap. Past this the rest are dust pools nobody trades. */
@@ -88,49 +86,29 @@ export const MAX_DIRECT_POOLS = 3;
 /** Most markets used on each side of a two-hop route. */
 export const MAX_VIA_POOLS = 2;
 
+const STATE_VIEW: Hex = "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b";
+const STATE_VIEW_ABI = parseAbi(["function getLiquidity(bytes32 poolId) view returns (uint128)"]);
+/** The V4 ETH/USDG pool Ordo's own liquidity lives in; the other four hundred are dust. */
+const ETH_USDG_V4 = { poolId: "0x24107d152f14a76d292123265ae3f3c71f863fc2f4ef7ba49d64e78d28ea379e", currency0: NATIVE, currency1: USDG, fee: 100, tickSpacing: 1, hooks: NATIVE };
+
 /**
- * Which pools trade, refreshed once a minute off the store's candles. The
- * query walks a day of the candle index (a couple of hundred ms of SQLite,
- * synchronous) — far too slow to run per keystroke, and it blocks the event
- * loop the whole RPC runs on, so it runs here, on a timer, and requests read
- * a Map.
+ * Current liquidity of each pool, from the chain. One eth_call per pool, all
+ * in parallel, and the result is cached with the pair for ten minutes — so a
+ * token with twenty-five pools costs twenty-five calls once, then nothing.
  */
-class Activity {
-  private swaps = new Map<string, number>();
-  private at = 0;
-  private refreshing = false;
-  constructor(private readonly src: V4Source | null) {}
-  of(poolId: string): number {
-    this.maybeRefresh();
-    return this.swaps.get(poolId.toLowerCase()) ?? 0;
-  }
-  known(): boolean {
-    this.maybeRefresh();
-    return this.swaps.size > 0;
-  }
-  private maybeRefresh(): void {
-    if (!this.src?.poolSwapsAll || this.refreshing || Date.now() - this.at < 60_000) return;
-    this.refreshing = true;
-    // Off the current tick, so the request that noticed staleness is not the one that pays.
-    setTimeout(() => {
+async function liquidityOf(rpc: Rpc, poolIds: string[]): Promise<Map<string, bigint>> {
+  const out = new Map<string, bigint>();
+  await Promise.all(
+    poolIds.map(async (id) => {
       try {
-        this.swaps = this.src!.poolSwapsAll!(Math.floor(Date.now() / 1000) - 86_400);
-        this.at = Date.now();
+        const r = (await rpc("eth_call", [{ to: STATE_VIEW, data: encodeFunctionData({ abi: STATE_VIEW_ABI, functionName: "getLiquidity", args: [id as Hex] }) }, "latest"])) as Hex;
+        out.set(id.toLowerCase(), BigInt(r));
       } catch {
-        /* keep the old ranking */
-      } finally {
-        this.refreshing = false;
+        out.set(id.toLowerCase(), 0n);
       }
-    }, 0).unref?.();
-  }
-}
-const activities = new WeakMap<object, Activity>();
-const noSource = new Activity(null);
-function activityFor(src: V4Source | null): Activity {
-  if (!src) return noSource;
-  let a = activities.get(src);
-  if (!a) activities.set(src, (a = new Activity(src)));
-  return a;
+    }),
+  );
+  return out;
 }
 
 export interface SwapRequest {
@@ -203,13 +181,13 @@ async function v3Tiers(rpc: Rpc, a: Hex, b: Hex): Promise<number[]> {
 }
 
 const pairCache = new Map<string, { pools: Pool[]; at: number }>();
-const PAIR_TTL_MS = 60_000;
+const PAIR_TTL_MS = 10 * 60_000;
 
 /**
  * Every market for (a, b) worth quoting: all V3 tiers, and the V4 pools that
  * actually trade — ranked by the last day's swaps, busiest first, at most
- * `MAX_DIRECT_POOLS`. Ether may be given as WETH. Cached a minute per pair, so
- * a keystroke never pays for discovery twice.
+ * `MAX_DIRECT_POOLS`. Ether may be given as WETH. Cached ten minutes per pair,
+ * so a keystroke never pays for discovery twice.
  */
 export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): Promise<Pool[]> {
   a = low(a); b = low(b);
@@ -222,16 +200,16 @@ export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): P
   const out: Pool[] = [];
   for (const fee of await v3Tiers(rpc, a, b)) out.push({ venue: "v3", a, b, fee, id: `v3:${ck}:${fee}` });
   if (v4) {
-    const act = activityFor(v4);
     // V4 spells ether as address zero.
-    let rows = v4.v4PoolsForPair(a === WETH ? NATIVE : a, b === WETH ? NATIVE : b);
-    if (act.known()) {
-      // Hundreds of pools can exist for one pair; a handful are markets.
-      rows = [...rows].sort((x, y) => act.of(y.poolId) - act.of(x.poolId));
-      const live = rows.filter((r) => act.of(r.poolId) > 0);
+    const isEthUsdg = (a === WETH && b === USDG) || (a === USDG && b === WETH);
+    let rows = isEthUsdg ? [ETH_USDG_V4] : v4.v4PoolsForPair(a === WETH ? NATIVE : a, b === WETH ? NATIVE : b);
+    let liq = new Map<string, bigint>();
+    if (rows.length > 1) {
+      // Many pools can exist for one pair; a handful hold liquidity. Rank by it.
+      liq = await liquidityOf(rpc, rows.map((r) => r.poolId));
+      rows = [...rows].sort((x, y) => { const lx = liq.get(x.poolId.toLowerCase()) ?? 0n, ly = liq.get(y.poolId.toLowerCase()) ?? 0n; return ly > lx ? 1 : ly < lx ? -1 : 0; });
+      const live = rows.filter((r) => (liq.get(r.poolId.toLowerCase()) ?? 0n) > 0n);
       rows = (live.length ? live : rows.slice(0, 1)).slice(0, MAX_DIRECT_POOLS);
-    } else {
-      rows = rows.slice(0, MAX_DIRECT_POOLS);
     }
     for (const p of rows) {
       out.push({
@@ -241,7 +219,7 @@ export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): P
         key: { currency0: low(p.currency0), currency1: low(p.currency1), fee: p.fee, tickSpacing: p.tickSpacing, hooks: low(p.hooks) },
         hooked: low(p.hooks) !== NATIVE,
         id: `v4:${p.poolId.toLowerCase()}`,
-        swaps: act.of(p.poolId),
+        liquidity: liq.get(p.poolId.toLowerCase()),
       });
     }
   }
@@ -253,13 +231,8 @@ export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): P
 function viaPools(pools: Pool[]): Pool[] {
   // V3 tiers have no activity figure here; keep the deepest-typical ones first (0.01%, 0.05%), then V4 by swaps.
   const v3 = pools.filter((p) => p.venue === "v3").sort((x, y) => x.fee - y.fee);
-  const v4 = pools.filter((p) => p.venue === "v4").sort((x, y) => (y.swaps ?? 0) - (x.swaps ?? 0));
+  const v4 = pools.filter((p) => p.venue === "v4").sort((x, y) => { const lx = x.liquidity ?? 0n, ly = y.liquidity ?? 0n; return ly > lx ? 1 : ly < lx ? -1 : 0; });
   return [...v3, ...v4].slice(0, MAX_VIA_POOLS);
-}
-
-/** Warm the activity ranking at boot so the first quote is not the one that pays for it. */
-export function warm(v4: V4Source | null): void {
-  activityFor(v4).known();
 }
 
 /** Forget every cached pair and tier. For tests, which share this module. */
