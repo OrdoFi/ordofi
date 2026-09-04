@@ -44,10 +44,17 @@ The verifiable part is already built and running (`apps/auction`,
   publication. `anchoredCount` is the prefix already immutable; the gap to
   `count` bounds what a malicious operator could still retract.
 
-What is missing is not machinery, it is participants. As of 4 Sep 2026 the
-auction has seen one opportunity and zero bids, because almost no flow routes
-through the RPC and the only connected searcher is our own placeholder. A
-verifiable auction with no bidders returns a verifiable zero.
+Since 4 Sep 2026 every anonymous send reaches it too. A wallet cannot attach
+an API key, so everyone who added the endpoint in MetaMask used to have their
+transaction sent direct — no opportunity, nothing captured, nothing paid. They
+never needed a key: the auction recovers the signer and credits the user's 90%
+to that address. The bid window is only paid for when a bid could arrive (a
+searcher is connected and the transaction carries calldata), so a plain
+transfer is not held at all.
+
+What is missing is not machinery, it is participants. The only connected
+searcher is ours, and until outsiders bid, a round it wins is us bidding, not
+a market clearing — which is why the page marks those rounds `house`.
 
 ### 2. The Seal — planned
 
@@ -125,7 +132,8 @@ building on.
 | Merkle root anchored in `OrdoReceiptLog` | live, anchoring on |
 | 90/5/5 split enforced on-chain | live (`OrdoSettlement`) |
 | Sequencer feed relay to searchers | live |
-| Real bidders | **no** — one placeholder bot |
+| Real bidders | **no** — only our own searcher, and it needs funding |
+| Anonymous wallet sends auctioned | live |
 | Flow to auction | **almost none** — this is the binding constraint |
 | The Seal | not started |
 | Routes | not started |
@@ -139,10 +147,14 @@ building on.
    yourself. Credibility is what recruits both apps and searchers.
 2. **The atomic protected launch** on `OrdoBundler` — the enforceable Route,
    and the thing to sell a launchpad.
-3. **A real house searcher** — merge the arb bot's opportunity detection into
-   the searcher bot's bid flow so the auction has a genuine floor, bidding
+3. ~~A real house searcher~~ — done. It quotes the cross-tier round trip the
+   swap opened, bids 70% of what survives gas, and submits that round trip as
+   the backrun with `amountOutMinimum` set, so a vanished edge costs gas and
+   nothing else. Most rounds it declines, which is the honest answer. It bids
    through VIA like anyone else, so its wins on Ordo-routed flow are rebated
-   90% exactly as a stranger's would be.
+   90% exactly as a stranger's would be. **It needs a funded wallet**
+   (`ORDO_HOUSE_SEARCHER_KEY`): with an empty one it cannot bond and every bid
+   is refused by bond gating.
 4. **The Seal.**
 5. **VIA Express**, if the chain owner opens it.
 
