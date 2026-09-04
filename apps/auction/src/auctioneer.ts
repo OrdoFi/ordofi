@@ -15,10 +15,17 @@ export class Auction {
   private resolver!: (r: { winner: Bid | null; clearingPriceWei: bigint }) => void;
   readonly settled: Promise<{ winner: Bid | null; clearingPriceWei: bigint }>;
 
-  constructor(opportunity: Opportunity) {
+  /**
+   * `windowMs` is how long the user's own transaction is held, so it is worth
+   * paying only when a bid could actually arrive. Pass 0 when none can — no
+   * searcher is connected, or the transaction moves no price — and the round
+   * closes on the next tick with no winner, which is the same answer waiting
+   * would have produced two blocks later.
+   */
+  constructor(opportunity: Opportunity, windowMs: number = AUCTION_WINDOW_MS) {
     this.opportunity = opportunity;
     this.settled = new Promise((resolve) => (this.resolver = resolve));
-    setTimeout(() => this.close(), AUCTION_WINDOW_MS);
+    setTimeout(() => this.close(), Math.max(0, windowMs));
   }
 
   submitBid(bid: Bid): { accepted: boolean; reason?: string } {

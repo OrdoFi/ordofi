@@ -78,6 +78,18 @@ export const CONFIG = {
    */
   anonMaxInflight: Number(process.env.ORDO_ANON_MAX_INFLIGHT ?? 16),
   /**
+   * Whether an anonymous send is routed through the auction.
+   *
+   * A wallet cannot attach an API key, so every person who added this endpoint
+   * in MetaMask arrives anonymous — and until this existed their transactions
+   * were sent direct, creating no opportunity, capturing nothing and paying
+   * them nothing. They do not need a key to be paid: the auction recovers the
+   * signer from the transaction and credits the user's 90% to that address.
+   * The app's 5% still requires a key, because an app has to be named to be
+   * paid. Set to 0 to return to direct sends for anonymous callers.
+   */
+  anonAuction: process.env.ORDO_ANON_AUCTION !== "0",
+  /**
    * Hedges as a share of hedgeable reads over a rolling 10 s window (see
    * HedgeBudget). Above this the primary is on its own, because a primary that
    * is slow for everyone is saturated, not unlucky.

@@ -1,7 +1,7 @@
 import { RpcError } from "./errors.js";
 import type { ApiKey } from "./config.js";
 import type { Upstream } from "./protect.js";
-import { protectAndSend } from "./protect.js";
+import { assertSafe } from "./protect.js";
 
 /**
  * Order-flow routing.
@@ -46,6 +46,10 @@ export async function routeOrderFlow(
   rawTx: string,
   apiKey: ApiKey,
 ): Promise<RouteOutcome> {
+  // Before either path, and only once: the auction broadcasts the user's
+  // transaction itself, so without this a send that earns a rebate would be
+  // the one send that skipped revert and delivery protection.
+  await assertSafe(upstream, rawTx);
   try {
     const res = await fetch(`${AUCTION_URL.replace(/\/$/, "")}/submit`, {
       method: "POST",
@@ -71,7 +75,9 @@ export async function routeOrderFlow(
   } catch (err) {
     if (err instanceof RpcError) throw err;
     const reason = (err as Error).message;
-    const txHash = await protectAndSend(upstream, rawTx);
+    // Already checked above; re-running the simulation here would pay for it
+    // twice on the slowest possible path.
+    const txHash = await upstream("eth_sendRawTransaction", [rawTx]);
     return { txHash, auctioned: false, reason };
   }
 }

@@ -51,3 +51,13 @@ test("rejects invalid bids", () => {
   assert.equal(a.submitBid({ opportunityId: "opp-test", searcher: "0x", bidWei: "0", backrunRawTx: "0x01", receivedAt: 0 }).accepted, false);
   assert.equal(a.submitBid({ opportunityId: "opp-test", searcher: "0x", bidWei: "100", backrunRawTx: "", receivedAt: 0 }).accepted, false);
 });
+
+test("a window of zero closes without a winner, and does not hold the user's transaction", async () => {
+  const started = Date.now();
+  const a = new Auction(opp(), 0);
+  // A bid cannot land in a round that is already closing; this is the point.
+  const outcome = await a.settled;
+  assert.equal(outcome.winner, null);
+  assert.equal(outcome.clearingPriceWei, 0n);
+  assert.ok(Date.now() - started < 50, "closed on the next tick, not after the window");
+});

@@ -443,7 +443,9 @@ const server = createServer((req, res) => {
           const result = await dispatch(
             method,
             params,
-            auth === "anon" ? { key: "anon", label: "anon", rateLimit: 0, mode: "direct" } : auth,
+            auth === "anon"
+              ? { key: "anon", label: "anon", rateLimit: 0, mode: CONFIG.anonAuction ? "auction" : "direct" }
+              : auth,
           );
           return { jsonrpc: "2.0", id: msg.id, result };
         } catch (err) {
@@ -513,9 +515,11 @@ server.listen(CONFIG.port, () => {
   );
   const auctionKeys = [...apiKeys.values()].filter((k) => k.mode === "auction");
   console.log(
-    `OrdoFi gateway | order flow: ${auctionKeys.length}/${apiKeys.size} key(s) routed to the auction at ${
+    `OrdoFi gateway | order flow: ${auctionKeys.length}/${apiKeys.size} key(s) and ${
+      CONFIG.anonAuction ? "anonymous sends" : "no anonymous sends"
+    } routed to the auction at ${
       process.env.ORDO_AUCTION_URL ?? "http://localhost:8548"
-    } (falls back to direct send if unreachable)`,
+    } (protected first either way; falls back to direct send if unreachable)`,
   );
   console.log(
     `OrdoFi gateway | atomic bundles=${

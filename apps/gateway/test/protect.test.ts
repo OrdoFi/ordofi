@@ -95,3 +95,19 @@ test("a revert on an upstream that cannot simulate is still caught by eth_call",
   await assert.rejects(protectAndSend(upstream, raw), /would revert/);
   assert.deepEqual(calls, ["eth_simulateV1", "eth_call"]);
 });
+
+test("a send routed through the auction is checked before it goes anywhere", async () => {
+  const { assertSafe } = await import("../src/protect.js");
+  const raw = await rawTo(ROUTER, "0xdeadbeef");
+
+  // The reverting case is refused, and nothing is broadcast.
+  const bad = upstreamWith({ revert: true });
+  await assert.rejects(() => assertSafe(bad.upstream, raw), /would revert/);
+  assert.equal(bad.calls.includes("eth_sendRawTransaction"), false, "a refused transaction is never sent");
+
+  // The safe case returns quietly, still without sending: the caller (the
+  // auction, or protectAndSend) decides how it is dispatched.
+  const good = upstreamWith({});
+  await assertSafe(good.upstream, raw);
+  assert.equal(good.calls.includes("eth_sendRawTransaction"), false, "assertSafe checks, it does not send");
+});

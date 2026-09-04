@@ -61,7 +61,7 @@ try {
 
 const searchers = new Set<WebSocket>();
 const activeAuctions = new Map<string, Auction>();
-const stats = { opportunities: 0, bids: 0, rejectedBids: 0, dispatched: 0, backruns: 0, settled: 0 };
+const stats = { opportunities: 0, bids: 0, rejectedBids: 0, dispatched: 0, backruns: 0, settled: 0, unbiddable: 0 };
 
 function broadcastHint(opp: Opportunity): void {
   const msg = JSON.stringify({ type: "opportunity", opportunity: opp });
@@ -83,7 +83,7 @@ function broadcastHint(opp: Opportunity): void {
  * and a hint is worth less than the order flow it describes, so a failed
  * simulation degrades to the target address rather than rejecting the submit.
  */
-async function buildHint(rawTx: string): Promise<Opportunity["hint"]> {
+async function buildHint(rawTx: string, opts: { simulate: boolean }): Promise<Opportunity["hint"]> {
   const tx = parseTransaction(rawTx as TransactionSerialized);
   const data = (tx.data ?? "0x") as string;
   const base = {
@@ -93,7 +93,12 @@ async function buildHint(rawTx: string): Promise<Opportunity["hint"]> {
     level: HINT_LEVEL,
   };
 
-  if (HINT_LEVEL === "minimal") {
+  // The hint is what a searcher bids against, so it is worth a simulation only
+  // when there is a searcher to read it and something for them to trade
+  // against. A transaction with no calldata moves no pool; with anonymous
+  // wallet sends now arriving here, simulating those would put a round trip in
+  // front of every plain transfer on the chain and buy nothing with it.
+  if (HINT_LEVEL === "minimal" || !opts.simulate || base.selector === null) {
     return { ...base, poolsTouched: [], swaps: [], simulated: false };
   }
 
@@ -127,7 +132,7 @@ async function handleSubmit(body: any): Promise<any> {
   const originLabel: string = body?.originLabel ?? "anon";
   const originRebateAddress: string | undefined = body?.rebateAddress;
 
-  const hint = await buildHint(rawTx);
+  const hint = await buildHint(rawTx, { simulate: searchers.size > 0 });
 
   const opp: Opportunity = {
     id: randomUUID(),
@@ -137,10 +142,19 @@ async function handleSubmit(body: any): Promise<any> {
     originRebateAddress,
   };
 
-  const auction = new Auction(opp);
+  // Holding the user's transaction is only worth it if a bid could arrive. A
+  // transaction carrying no calldata moves no pool and has nothing to be
+  // back-run, and with nobody connected there is no one to bid at all; in
+  // either case the window would be pure latency, and on a 100 ms chain it is
+  // two blocks of it. Now that anonymous wallet sends come through here, that
+  // is the difference between the auction being free for the people it pays
+  // and being a tax on everyone it does not.
+  const biddable = searchers.size > 0 && hint.selector !== null;
+  if (!biddable) stats.unbiddable++;
+  const auction = new Auction(opp, biddable ? undefined : 0);
   activeAuctions.set(opp.id, auction);
   stats.opportunities++;
-  broadcastHint(opp);
+  if (biddable) broadcastHint(opp);
 
   // Wait for the sealed-bid window to close, then dispatch.
   const outcome = await auction.settled;

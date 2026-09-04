@@ -101,6 +101,21 @@ export async function burnCheck(upstream: Upstream, rawTx: string, parsed?: Pars
  * cannot simulate, so revert protection never goes away.
  */
 export async function protectAndSend(upstream: Upstream, rawTx: string): Promise<string> {
+  await assertSafe(upstream, rawTx);
+  return upstream("eth_sendRawTransaction", [rawTx]);
+}
+
+/**
+ * Every check, and no send. Separate because the promise made to the sender —
+ * we do not forward a transaction we can prove will revert or will pay an
+ * address nobody controls — must not depend on which path the transaction then
+ * takes. The auction dispatches the user's transaction itself, so a send routed
+ * through it used to skip all of this.
+ *
+ * Throws the same RpcError `protectAndSend` throws; returns nothing when the
+ * transaction is safe to broadcast.
+ */
+export async function assertSafe(upstream: Upstream, rawTx: string): Promise<void> {
   const parsed = await parseRaw(rawTx);
   const burn = await burnCheck(upstream, rawTx, parsed).catch(() => null);
   if (burn === null) {
@@ -130,7 +145,6 @@ export async function protectAndSend(upstream: Upstream, rawTx: string): Promise
       },
     );
   }
-  return upstream("eth_sendRawTransaction", [rawTx]);
 }
 
 export interface BundleResult {
