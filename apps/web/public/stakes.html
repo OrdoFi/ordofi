@@ -245,14 +245,17 @@
             <div class="kv"><span>Your stake</span><b>${fmtEth(me.valueWeth, 5)} WETH${me.valueUsd ? ` · ${usd(me.valueUsd)}` : ""}</b></div>
             <div class="row2"><button class="go" id="r-claim" ${me.earnedWeth > 0 ? "" : "disabled"}>Claim</button><button class="go ghost" id="r-compound" ${me.earnedWeth > 0 ? "" : "disabled"}>Compound</button></div>
             <div class="res" id="r-res"></div>
-            <div class="note">Fees the pool earns are harvested on every deposit and withdrawal and streamed to stakers over 7 days as WETH. Compound claims and puts them straight back in.</div>
+            <div class="note">Fees the pool earns are harvested on every deposit and withdrawal and streamed to stakers over 7 days as WETH. ${(s.gen ?? 1) >= 2 ? "Compound puts them straight back in — one transaction, nothing taken." : "Compound claims, then puts them back in: three confirmations on a stake of this generation."}</div>
           </div>
           <div class="bb" id="r-withdraw" style="display:none">
             <label class="f">Amount · shares</label><div class="inp"><input id="w-amt" placeholder="0.0" inputmode="decimal" /><span class="u">shares</span><button id="w-max">MAX</button></div>
             <div class="kv" style="margin-top:8px"><span>You hold</span><b>${num(formatUnits(BigInt(me.staked) + BigInt(me.loose), 18, 6), 6)} shares</b></div>
+            ${(s.gen ?? 1) >= 2 ? `<label class="f" style="margin-top:10px">Receive as</label><div class="seg" id="w-mode"><button data-m="both" class="on">ETH + ${esc(s.symbol)}</button><button data-m="eth">ETH only</button></div>` : ""}
             <button class="go" id="w-go" disabled>Withdraw</button>
             <div class="res" id="w-res"></div>
-            <div class="note">Your stake comes back as coins: ETH and ${esc(s.symbol)}, in the pool's current ratio. Two confirmations — one to unstake, one to withdraw. Rewards stay claimable in the Rewards tab.</div>
+            <div class="note">${(s.gen ?? 1) >= 2
+              ? `One transaction: unstake, redeem, and your pending rewards come along. "ETH + ${esc(s.symbol)}" pays both coins in the pool's current ratio; "ETH only" sells the ${esc(s.symbol)} side in the pool first, so a floor on the total protects you.`
+              : `Your stake comes back as coins: ETH and ${esc(s.symbol)}, in the pool's current ratio. Two confirmations — one to unstake, one to withdraw. Rewards stay claimable in the Rewards tab.`}</div>
           </div></div>
       </div>
       <div class="addrs"><span>Stake <a href="${EXPLORER}/address/${s.farm}" target="_blank" rel="noopener">${short(s.farm)}</a></span><span>Vault <a href="${EXPLORER}/address/${s.vault}" target="_blank" rel="noopener">${short(s.vault)}</a></span><span>Pool <a href="${poolLink(s)}" target="_blank" rel="noopener">${s.venue === "v4" ? `Uniswap V4 · ${short(s.pool)}` : short(s.pool)}</a></span><span>Reward token <a href="${EXPLORER}/token/${WETH}" target="_blank" rel="noopener">WETH</a></span><span>Lifetime rewards ${fmtEth(s.totalRewardsWeth, 5)} WETH</span>${s.reference ? `<span title="The V4 vault only sells token fees for ETH while the price sits near this reference, which it refreshes itself once it is older than 10 minutes.">Reference ${s.reference.usable ? "ready" : "warming up"} · ${num(s.reference.price, 8)} ETH</span>` : ""}</div>`;
@@ -280,6 +283,7 @@
       $("w-max").addEventListener("click", () => { $("w-amt").value = formatUnits(held, 18, 18); $("w-go").disabled = held === 0n; });
       for (const ev of ["input", "change", "keyup"]) $("w-amt").addEventListener(ev, () => { const v = parseUnits($("w-amt").value, 18); $("w-go").disabled = !v || v === 0n || v > held; });
       $("w-go").addEventListener("click", () => withdraw(s));
+      $("w-mode")?.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { $("w-mode").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); }));
       // Stop clicks inside the detail from toggling the row.
       document.querySelectorAll("tr.detail").forEach((tr) => tr.addEventListener("click", (e) => e.stopPropagation()));
     }
@@ -333,6 +337,16 @@
     }
     async function claim(s, compound) {
       try {
+        if (compound && (s.gen ?? 1) >= 2) {
+          // One transaction, nothing taken: the farm hands the WETH to its zap, which swaps half, deposits and restakes for you.
+          const p = await api(`/api/pools/stake-compound?vault=${s.vault}&from=${wallet.account}&slippageBps=${slippage}`);
+          if (!p.tx) throw new Error(p.guard?.reason ?? "compound not verified");
+          res("r-res", `Confirm the compound in your wallet… (${num(p.rewardWethNum, 6)} WETH back in${p.swap ? `, at least ${num(formatUnits(p.swap.minTokenOut, s.decimals, 6), 6)} ${esc(s.symbol)} from the swapped half` : ""})`);
+          const r = await wallet.sendProven(p, (h) => res("r-res", `Compounding ${txLink(h)}…`));
+          res("r-res", `Compounded · ${txLink(r.hash)}`);
+          setTimeout(load, 1200);
+          return;
+        }
         const c = await api(`/api/pools/stake-claim?farm=${s.farm}`);
         res("r-res", "Confirm the claim in your wallet…");
         const r = await wallet.send(c, (h) => res("r-res", `Claiming ${txLink(h)}…`));
@@ -363,6 +377,19 @@
       try {
         const staked = BigInt(s.me?.staked ?? 0), loose = BigInt(s.me?.loose ?? 0);
         const fromFarm = v > loose ? v - loose : 0n;
+        if ((s.gen ?? 1) >= 2 && loose === 0n) {
+          // One transaction through the zap: unstake, redeem, rewards along the way.
+          if (v > staked) throw new Error("more than you hold");
+          const mode = $("w-mode")?.querySelector("button.on")?.dataset.m ?? "both";
+          const p = await api(`/api/pools/stake-exit?vault=${s.vault}&shares=${v}&from=${wallet.account}&mode=${mode}&slippageBps=${slippage}`);
+          if (!p.tx) throw new Error(p.guard?.reason ?? "withdrawal not verified");
+          const floor = mode === "eth" ? `at least ${num(formatUnits(p.minimum.eth, 18, 6), 6)} ETH in total` : `at least ${num(formatUnits(p.minimum.weth, 18, 6), 6)} ETH + ${num(formatUnits(p.minimum.token, s.decimals, 6), 6)} ${esc(s.symbol)}`;
+          res("w-res", `Confirm in your wallet… (${floor}, or it reverts)`);
+          const r = await wallet.sendProven(p, (h) => res("w-res", `Withdrawing ${txLink(h)}…`));
+          res("w-res", `Withdrawn · ${txLink(r.hash)}`);
+          setTimeout(load, 1200);
+          return;
+        }
         if (fromFarm > 0n) {
           if (fromFarm > staked) throw new Error("more than you hold");
           const c = await api(`/api/pools/stake-unstake?farm=${s.farm}&shares=${fromFarm}`);

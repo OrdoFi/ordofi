@@ -32,6 +32,9 @@ export const CSS = `
 .lg-h small{color:var(--muted);font-family:var(--mono);font-size:11px}
 .lg-h a{color:var(--accent);font-size:12.5px;margin-left:auto;text-decoration:none}
 .lg-h .closeall{white-space:nowrap;font:inherit;font-size:12px;padding:7px 14px;border:1px solid var(--text);background:var(--text);color:#fff;cursor:pointer;margin-left:12px}
+.lg-h .claimall{white-space:nowrap;font:inherit;font-size:12px;padding:7px 14px;border:1px solid var(--border);background:#fff;color:var(--text);cursor:pointer;margin-left:12px}
+.lg-h .claimall:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.lg-h .closeall:disabled,.lg-h .claimall:disabled{opacity:.4;cursor:default}
 .lg-h .closeall:disabled{opacity:.4;cursor:default}
 .lc{padding:16px;border-bottom:1px solid var(--border)}
 .lc:last-child{border-bottom:none}
@@ -71,7 +74,7 @@ export const CSS = `
 .ld p{color:var(--muted);font-size:13px;line-height:1.6;margin:0 0 14px}
 .ld h4{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:16px 0 8px}
 .ld .shapes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-@media (max-width:640px){.lg-h{flex-wrap:wrap;padding:10px 12px}.lg-h .closeall{margin-left:auto}.lc{padding:12px}.lc .kv{grid-template-columns:1fr 1fr;gap:10px 12px}.lc .acts button{flex:1 1 calc(50% - 4px);text-align:center}.ld-modal{padding:4vh 8px}.ld .shapes{grid-template-columns:1fr}.ld .b{padding:14px}}
+@media (max-width:640px){.lg-h{flex-wrap:wrap;padding:10px 12px}.lg-h .claimall{margin-left:auto}.lg-h .closeall{margin-left:8px}.lc{padding:12px}.lc .kv{grid-template-columns:1fr 1fr;gap:10px 12px}.lc .acts button{flex:1 1 calc(50% - 4px);text-align:center}.ld-modal{padding:4vh 8px}.ld .shapes{grid-template-columns:1fr}.ld .b{padding:14px}}
 .ld .shape{border:1px solid var(--border);background:#fff;padding:10px;cursor:pointer}
 .ld .shape.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .ld .shape b{display:block;font-size:12.5px}.ld .shape small{display:block;color:var(--muted);font-size:10.5px;line-height:1.4;margin-top:3px}
@@ -102,8 +105,11 @@ function ensureStyle() { if (styled) return; styled = true; const st = document.
 async function api(path) { const r = await fetch(path, { cache: "no-store" }); const t = await r.text(); let d; try { d = JSON.parse(t); } catch { throw new Error(`server unavailable (${r.status})`); } if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`); return d; }
 
 /** Which manager a ladder lives in: the V3 one unless the portfolio says V4. Every action names it. */
-const venueOf = (l) => (l.venue === "v4" ? "v4" : "v3");
-const venueLabel = (l) => (venueOf(l) === "v4" ? "V4" : "V3");
+/** The manager a ladder lives in: "v3", "v4", or a later generation of one ("v3g2", "v4g2"). Sent back with every action. */
+const venueOf = (l) => (/^v[34](g\d)?$/.test(l.venue ?? "") ? l.venue : "v3");
+const venueLabel = (l) => (venueOf(l).startsWith("v4") ? "V4" : "V3");
+/** Second-generation ladders can compound their fees and be claimed in a batch. */
+const canCompound = (l) => /g[2-9]$/.test(venueOf(l));
 
 /** Orientation helpers: amounts come as token0/token1; the UI speaks base/quote. */
 const baseAmt = (l, a0, a1) => BigInt(l.base.isToken0 ? a0 : a1);
@@ -131,11 +137,12 @@ export function renderLadders(container, portfolio, opts = {}) {
     const open = ls.filter((l) => !l.closed);
     return `<div class="lg" data-token="${b.address}">
       <div class="lg-h"><div class="ic" data-i="${esc(b.symbol.slice(0, 2))}">${b.icon ? `<img src="${esc(b.icon)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.textContent=this.parentElement.dataset.i" />` : esc(b.symbol.slice(0, 2))}</div><b>${esc(b.name ?? b.symbol).toUpperCase()}</b><small>${esc(b.symbol)}</small>
-        ${opts.token ? "" : `<a href="/pools/${b.address}">open pool page →</a>`}<button class="closeall" data-keys="${open.map(keyOf).join(",")}" ${open.length > 1 ? "" : "disabled"}>Close all</button></div>
+        ${opts.token ? "" : `<a href="/pools/${b.address}">open pool page →</a>`}<button class="claimall" data-keys="${open.filter((l) => Number(l.unclaimed0) + Number(l.unclaimed1) > 0).map(keyOf).join(",")}" ${open.filter((l) => Number(l.unclaimed0) + Number(l.unclaimed1) > 0).length > 1 ? "" : "disabled"}>Claim all</button><button class="closeall" data-keys="${open.map(keyOf).join(",")}" ${open.length > 1 ? "" : "disabled"}>Close all</button></div>
       ${ls.map((l) => card(l)).join("")}</div>`;
   }).join("");
   container.querySelectorAll("button[data-act]").forEach((btn) => btn.addEventListener("click", () => act(btn.dataset.act, find(btn.dataset.key), btn, opts)));
   container.querySelectorAll(".closeall").forEach((btn) => btn.addEventListener("click", () => closeAll(btn.dataset.keys.split(",").filter(Boolean).map(find).filter(Boolean), btn, opts)));
+  container.querySelectorAll(".claimall").forEach((btn) => btn.addEventListener("click", () => claimAll(btn.dataset.keys.split(",").filter(Boolean).map(find).filter(Boolean), btn, opts)));
 }
 
 function card(l) {
@@ -150,6 +157,7 @@ function card(l) {
     ${l.closed ? "" : `<div class="acts">
       <button data-act="pnl" data-key="${key}">PnL card</button>
       <button data-act="collect" data-key="${key}" ${fees ? "" : "disabled"}>Claim fees</button>
+      ${canCompound(l) ? `<button data-act="compound" data-key="${key}" ${fees ? "" : "disabled"} title="Put the unclaimed fees back into this position, in one transaction">Compound fees</button>` : ""}
       <button data-act="add" data-key="${key}">Add liquidity</button>
       <button data-act="partial" data-key="${key}" ${l.openBins > 1 ? "" : "disabled"}>Partial withdraw</button>
       <button data-act="close" data-key="${key}" class="primary">Close</button></div>`}
@@ -176,6 +184,7 @@ async function act(kind, l, btn, opts) {
   if (!l) return;
   if (kind === "pnl") return pnlCard(l);
   if (kind === "add") return addDialog(l, opts);
+  if (kind === "compound") return addDialog(l, opts, { compound: true });
   if (kind === "partial") return partialDialog(l, opts);
   btn.disabled = true;
   try {
@@ -203,6 +212,36 @@ async function closeAll(ladders, btn, opts) {
       res(first, `${step}Confirm in your wallet…`);
       const r = await wallet.send(c, (h) => res(first, `${step}Closing ${ls.length} ${v.toUpperCase()} position${ls.length > 1 ? "s" : ""} ${txLink(h)}…`));
       res(first, `${step}Closed ${ls.length} ${v.toUpperCase()} position${ls.length > 1 ? "s" : ""} · ${txLink(r.hash)}`);
+    }
+    setTimeout(() => opts.onChange?.(), 1200);
+  } catch (e) { res(first, fail(e), true); btn.disabled = false; }
+}
+
+/**
+ * Claim every open ladder of a token with fees waiting. A second-generation
+ * manager claims all of its in one transaction; the first generation has no
+ * such call, so its ladders are claimed one after another.
+ */
+async function claimAll(ladders, btn, opts) {
+  if (!ladders.length) return;
+  btn.disabled = true;
+  const byVenue = new Map();
+  for (const l of ladders) { const v = venueOf(l); if (!byVenue.has(v)) byVenue.set(v, []); byVenue.get(v).push(l); }
+  const first = ladders[0];
+  const steps = [];
+  for (const [v, ls] of byVenue) {
+    if (canCompound(ls[0])) steps.push({ v, ls, url: `/api/pools/collect-many?ids=${ls.map((l) => l.id).join(",")}&venue=${v}` });
+    else for (const l of ls) steps.push({ v, ls: [l], url: `/api/pools/collect?id=${l.id}&venue=${v}` });
+  }
+  try {
+    let n = 0;
+    for (const st of steps) {
+      n++;
+      const step = steps.length > 1 ? `${n}/${steps.length} · ` : "";
+      const c = await api(st.url);
+      res(first, `${step}Confirm in your wallet…`);
+      const r = await wallet.send(c, (h) => res(first, `${step}Claiming ${st.ls.length} ${st.v.startsWith("v4") ? "V4" : "V3"} position${st.ls.length > 1 ? "s" : ""} ${txLink(h)}…`));
+      res(first, `${step}Claimed ${st.ls.length} position${st.ls.length > 1 ? "s" : ""} · ${txLink(r.hash)}`);
     }
     setTimeout(() => opts.onChange?.(), 1200);
   } catch (e) { res(first, fail(e), true); btn.disabled = false; }
@@ -236,17 +275,18 @@ async function balancesOf(l) {
   } catch { return null; }
 }
 
-async function addDialog(l, opts) {
+async function addDialog(l, opts, { compound = false } = {}) {
   let shape = "spot", plan = null, seq = 0;
-  const b = dialog("Add liquidity", `
-    <p><b>${esc(l.base.symbol)} / ${esc(l.quote.symbol)}</b> · ${fmtPx(l.minPrice)} – ${fmtPx(l.maxPrice)} ${esc(l.quote.symbol)} · ${l.openBins} bins</p>
+  const feesLine = compound ? `<p class="hint" style="margin:-6px 0 10px">Unclaimed fees go back in: <b>${fmtBase(l, l.unclaimed0, l.unclaimed1)} · ${fmtQuote(l, l.unclaimed0, l.unclaimed1)}</b> (${usd(l.unclaimedUsd, 4)}). The 1% applies as on a claim. Add more below if you like — or none.</p>` : "";
+  const b = dialog(compound ? "Compound fees" : "Add liquidity", `
+    <p><b>${esc(l.base.symbol)} / ${esc(l.quote.symbol)}</b> · ${fmtPx(l.minPrice)} – ${fmtPx(l.maxPrice)} ${esc(l.quote.symbol)} · ${l.openBins} bins</p>${feesLine}
     <h4>Shape of what you're adding</h4>
     <div class="shapes">${["spot", "curve", "bidask"].map((s) => `<div class="shape ${s === shape ? "on" : ""}" role="button" tabindex="0" data-s="${s}"><b>${SHAPE_NAME[s]}</b><small>${SHAPE_DESC[s]}</small></div>`).join("")}</div>
     <h4>Amount</h4>
     <div class="box"><input id="ld-base" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(l.base.symbol)}</span><button id="ld-max-b">max</button></div><div class="hint" id="ld-bal-b"></div>
     <div class="box"><input id="ld-quote" placeholder="0.0" inputmode="decimal" /><span class="u">${esc(l.quote.symbol)}</span><button id="ld-max-q">max</button></div><div class="hint" id="ld-bal-q"></div>
     <h4>How it lands</h4><div class="lands" id="ld-lands">Enter an amount.</div>
-    <div class="foot"><button id="ld-cancel">Cancel</button><button class="go" id="ld-go" disabled>Add liquidity</button></div><div class="res" id="ld-res"></div>`);
+    <div class="foot"><button id="ld-cancel">Cancel</button><button class="go" id="ld-go" disabled>${compound ? "Compound" : "Add liquidity"}</button></div><div class="res" id="ld-res"></div>`);
   const $ = (id) => b.querySelector("#" + id);
   const side = l.price <= l.minPrice ? "base" : l.price >= l.maxPrice ? "quote" : null;
   if (side === "base") { $("ld-quote").disabled = true; $("ld-bal-q").textContent = "range is above the price · not needed"; }
@@ -266,12 +306,13 @@ async function addDialog(l, opts) {
     if (side !== "base") $("ld-bal-q").textContent = `balance ${num(bal.quote, 6)}`;
     if ($("ld-base").value || $("ld-quote").value) replan();
   });
+  if (compound) replan(); // the fees alone are a plan
   async function replan() {
     const my = ++seq;
     const ba = parseUnits($("ld-base").value, l.base.decimals) ?? 0n, qa = parseUnits($("ld-quote").value, l.quote.decimals) ?? 0n;
-    if (ba === 0n && qa === 0n) { plan = null; $("ld-lands").textContent = "Enter an amount."; $("ld-go").disabled = true; return; }
+    if (!compound && ba === 0n && qa === 0n) { plan = null; $("ld-lands").textContent = "Enter an amount."; $("ld-go").disabled = true; return; }
     try {
-      const p = await api(`/api/pools/plan-add?id=${l.id}&venue=${venueOf(l)}&shape=${shape}&baseAmount=${ba}&quoteAmount=${qa}`);
+      const p = await api(`/api/pools/${compound ? "plan-compound" : "plan-add"}?id=${l.id}&venue=${venueOf(l)}&shape=${shape}&baseAmount=${ba}&quoteAmount=${qa}${wallet.account ? `&owner=${wallet.account}` : ""}`);
       if (my !== seq) return;
       plan = p;
       if (!p.tx) { $("ld-lands").textContent = "Nothing lands: this range needs the other token."; $("ld-go").disabled = true; return; }
@@ -294,8 +335,8 @@ async function addDialog(l, opts) {
       }
       await replan();
       r.textContent = "Confirm in your wallet…";
-      const rec = await wallet.send(plan.tx, (h) => { r.innerHTML = `Adding ${txLink(h)}…`; });
-      r.innerHTML = `Added · ${txLink(rec.hash)}`;
+      const rec = await wallet.send(plan.tx, (h) => { r.innerHTML = `${compound ? "Compounding" : "Adding"} ${txLink(h)}…`; });
+      r.innerHTML = `${compound ? "Compounded" : "Added"} · ${txLink(rec.hash)}`;
       setTimeout(() => { closeDialog(); opts.onChange?.(); }, 900);
     } catch (e) { r.innerHTML = fail(e); r.className = "res bad"; $("ld-go").disabled = false; }
   });
