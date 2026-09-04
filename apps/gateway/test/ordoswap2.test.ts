@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { decodeFunctionData, encodeErrorResult, encodeFunctionResult, type Hex } from "viem";
 import { V3_FACTORY, encodePath } from "@ordofi/core/arb";
@@ -16,6 +16,7 @@ import {
   poolsFor,
   quoteSwap,
   reclaimCandidates,
+  resetCaches,
   sizeLadder,
   type Pool,
 } from "../src/ordoswap2.ts";
@@ -25,6 +26,8 @@ const GME: Hex = "0x1b0e319c6a659f002271b69db8a7df2f911c153e";
 const SWAP: Hex = "0x00000000000000000000000000000000000000aa";
 const USER: Hex = "0x00000000000000000000000000000000000000ee";
 const HOOK: Hex = "0xcf8f482e998d18793414d10c9fc48fc8277ab8cc";
+
+beforeEach(() => resetCaches());
 
 /** V4 index with ORDO's real pools and a hookless ETH/USDG pool. */
 const ALL_V4 = [
@@ -42,14 +45,20 @@ const v4 = {
 
 test("a pair with hundreds of pools is cut to the busiest few before anything is simulated", async () => {
   const many = Array.from({ length: 300 }, (_, i) => ({ poolId: `0x${i.toString(16).padStart(4, "0")}`, currency0: NATIVE, currency1: USDG, fee: 3000 + i, tickSpacing: 60, hooks: NATIVE }));
-  const src = {
-    v4PoolsForPair: () => many,
-    poolSwapsSince: (pools: string[]) => new Map(pools.filter((_, i) => i % 100 === 7).map((p, i) => [p, 1000 - i])),
-  };
+  const swaps = new Map(many.filter((_, i) => i % 100 === 7).map((p, i) => [p.poolId, 1000 - i]));
+  const src = { v4PoolsForPair: () => many, poolSwapsAll: () => swaps };
+  // The activity index fills in on a timer tick; the first call after that sees it.
+  await poolsFor(factoryRpc(), src, WETH, "0x00000000000000000000000000000000000000d1");
+  await new Promise((r) => setTimeout(r, 5));
   const pools = await poolsFor(factoryRpc(), src, WETH, USDG);
   const v4pools = pools.filter((p) => p.venue === "v4");
-  assert.equal(v4pools.length, 3, "only the pools with swaps in the last day survive");
+  assert.equal(v4pools.length, 3, "only the pools with swaps in the last day survive, capped");
   assert.deepEqual(v4pools.map((p) => p.id), ["v4:0x0007", "v4:0x006b", "v4:0x00cf"]);
+  assert.deepEqual(v4pools.map((p) => p.swaps), [1000, 999, 998]);
+  // And the answer is remembered for the pair: a second call does not re-rank.
+  const again = await poolsFor(factoryRpc(), src, USDG, WETH);
+  assert.equal(again.length, pools.length);
+  assert.equal(again[0].a, USDG, "oriented to the caller's order");
 });
 
 /** V3 factory: WETH/USDG at 100 and 500, WETH/GME at 3000; ORDO has no V3 pool. */
@@ -101,7 +110,8 @@ test("routes: direct markets plus two hops through ether or USDG, across venues"
     "v4:200000", // direct, plain
     "v3:100 v4:40000", // WETH→USDG on V3, USDG→ORDO on V4
     "v3:500 v4:40000",
-    "v4:100 v4:40000", // WETH→USDG on V4, USDG→ORDO on V4
+    // WETH/USDG also has a V4 pool, but a two-hop side keeps only its two best
+    // markets — the search must stay a handful of simulations.
   ]);
   assert.equal(routes[2].legs[0].venue, 0);
   assert.equal(routes[2].legs[1].venue, 1);
@@ -137,7 +147,7 @@ test("the reclaim ships only when the user's share clears the gas of its legs th
   const r = chooseReclaim([{ route, size: 1n, profit: gas * 4n }], gasPrice, 1000n)!;
   assert.equal(r.gasUnits, RECLAIM_GAS_BASE + RECLAIM_GAS_PER_LEG * 2n);
   assert.equal(r.minProfit, gas * 2n);
-  assert.deepEqual(sizeLadder(1000n, 10_000n), [50n, 100n, 250n, 500n, 1000n]);
+  assert.deepEqual(sizeLadder(1000n, 10_000n), [100n, 400n, 1000n]);
 });
 
 test("QuoteResult decodes; other reverts are null", () => {

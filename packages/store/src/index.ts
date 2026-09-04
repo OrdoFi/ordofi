@@ -907,6 +907,20 @@ export class OrdoStore {
     return out;
   }
 
+  /**
+   * Swaps per pool since `sinceBucket`, for every pool at once. One pass over
+   * the last day of the time-ordered candle index, refreshed on a slow clock
+   * by whoever needs to rank pools, so no request ever runs the query itself.
+   */
+  poolSwapsAll(sinceBucket: number): Map<string, number> {
+    const rows = this.db
+      .prepare(`SELECT pool, SUM(swaps) AS s FROM candles WHERE bucket >= ? GROUP BY pool`)
+      .all(sinceBucket) as { pool: string; s: number }[];
+    const out = new Map<string, number>();
+    for (const r of rows) out.set(r.pool, Number(r.s));
+    return out;
+  }
+
   private v4CountCache: { n: number; at: number } | null = null;
   v4PoolCount(): number {
     if (this.v4CountCache && Date.now() - this.v4CountCache.at < 60_000) return this.v4CountCache.n;

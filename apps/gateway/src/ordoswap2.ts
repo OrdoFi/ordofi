@@ -55,6 +55,8 @@ export interface Pool {
   key?: PoolKey;
   hooked?: boolean;
   id: string;
+  /** Swaps in the last day, when known (V4 pools with an activity index). */
+  swaps?: number;
 }
 
 export interface Leg {
@@ -77,12 +79,59 @@ export type Rpc = (method: string, params: unknown[]) => Promise<unknown>;
 export interface V4Source {
   /** Every V4 pool for the pair, either order; ether is address zero. */
   v4PoolsForPair(a: string, b: string): { poolId: string; currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string }[];
-  /** Swaps per pool since a minute bucket (unix seconds). Optional: without it, pools are kept in creation order. */
-  poolSwapsSince?(pools: string[], sinceBucket: number): Map<string, number>;
+  /** Swaps per pool over the window, for every pool at once. Optional: without it, pools are kept in creation order. */
+  poolSwapsAll?(sinceBucket: number): Map<string, number>;
 }
 
-/** Most markets kept per pair, per venue. Past this the rest are dust pools nobody trades. */
-export const MAX_POOLS_PER_PAIR = 4;
+/** Most V4 markets kept per pair for a direct swap. Past this the rest are dust pools nobody trades. */
+export const MAX_DIRECT_POOLS = 3;
+/** Most markets used on each side of a two-hop route. */
+export const MAX_VIA_POOLS = 2;
+
+/**
+ * Which pools trade, refreshed once a minute off the store's candles. The
+ * query walks a day of the candle index (a couple of hundred ms of SQLite,
+ * synchronous) — far too slow to run per keystroke, and it blocks the event
+ * loop the whole RPC runs on, so it runs here, on a timer, and requests read
+ * a Map.
+ */
+class Activity {
+  private swaps = new Map<string, number>();
+  private at = 0;
+  private refreshing = false;
+  constructor(private readonly src: V4Source | null) {}
+  of(poolId: string): number {
+    this.maybeRefresh();
+    return this.swaps.get(poolId.toLowerCase()) ?? 0;
+  }
+  known(): boolean {
+    this.maybeRefresh();
+    return this.swaps.size > 0;
+  }
+  private maybeRefresh(): void {
+    if (!this.src?.poolSwapsAll || this.refreshing || Date.now() - this.at < 60_000) return;
+    this.refreshing = true;
+    // Off the current tick, so the request that noticed staleness is not the one that pays.
+    setTimeout(() => {
+      try {
+        this.swaps = this.src!.poolSwapsAll!(Math.floor(Date.now() / 1000) - 86_400);
+        this.at = Date.now();
+      } catch {
+        /* keep the old ranking */
+      } finally {
+        this.refreshing = false;
+      }
+    }, 0).unref?.();
+  }
+}
+const activities = new WeakMap<object, Activity>();
+const noSource = new Activity(null);
+function activityFor(src: V4Source | null): Activity {
+  if (!src) return noSource;
+  let a = activities.get(src);
+  if (!a) activities.set(src, (a = new Activity(src)));
+  return a;
+}
 
 export interface SwapRequest {
   tokenIn: Hex;
@@ -121,7 +170,12 @@ export const RECLAIM_GAS_PER_LEG = 180_000n;
 const SWAP_GAS_BASE = 160_000n;
 const SWAP_GAS_PER_LEG = 170_000n;
 const WORTH_IT = 3n;
-const LADDER_PERMILLE = [50n, 100n, 250n, 500n, 1000n];
+// Three rungs, not five: each rung is a full simulation per candidate, and the
+// profit curve is smooth enough that 10% / 40% / 100% of the cap finds the
+// right neighbourhood. Instant beats exact here.
+const LADDER_PERMILLE = [100n, 400n, 1000n];
+/** Most back-run candidates simulated for one swap. */
+const MAX_RECLAIM_CANDIDATES = 4;
 const hex = (n: bigint): Hex => `0x${n.toString(16)}`;
 const low = (a: string) => a.toLowerCase() as Hex;
 const isEther = (a: string) => low(a) === WETH || low(a) === NATIVE;
@@ -148,23 +202,36 @@ async function v3Tiers(rpc: Rpc, a: Hex, b: Hex): Promise<number[]> {
   return tiers;
 }
 
-/** Every market for (a, b): V3 tiers and V4 pools. Ether may be given as WETH. */
+const pairCache = new Map<string, { pools: Pool[]; at: number }>();
+const PAIR_TTL_MS = 60_000;
+
+/**
+ * Every market for (a, b) worth quoting: all V3 tiers, and the V4 pools that
+ * actually trade — ranked by the last day's swaps, busiest first, at most
+ * `MAX_DIRECT_POOLS`. Ether may be given as WETH. Cached a minute per pair, so
+ * a keystroke never pays for discovery twice.
+ */
 export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): Promise<Pool[]> {
   a = low(a); b = low(b);
   if (isEther(a)) a = WETH;
   if (isEther(b)) b = WETH;
   if (a === b) return [];
+  const ck = [a, b].sort().join(":") + (v4 ? "" : ":nov4");
+  const hit = pairCache.get(ck);
+  if (hit && Date.now() - hit.at < PAIR_TTL_MS) return hit.pools.map((p) => (p.a === a ? p : { ...p, a, b }));
   const out: Pool[] = [];
-  for (const fee of await v3Tiers(rpc, a, b)) out.push({ venue: "v3", a, b, fee, id: `v3:${[a, b].sort().join(":")}:${fee}` });
+  for (const fee of await v3Tiers(rpc, a, b)) out.push({ venue: "v3", a, b, fee, id: `v3:${ck}:${fee}` });
   if (v4) {
+    const act = activityFor(v4);
     // V4 spells ether as address zero.
     let rows = v4.v4PoolsForPair(a === WETH ? NATIVE : a, b === WETH ? NATIVE : b);
-    if (rows.length > MAX_POOLS_PER_PAIR) {
-      // Hundreds of pools can exist for one pair; a handful are markets. Rank
-      // by the last day's swaps and keep the busiest.
-      const swaps = v4.poolSwapsSince?.(rows.map((r) => r.poolId), Math.floor(Date.now() / 1000) - 86_400) ?? new Map<string, number>();
-      rows = [...rows].sort((x, y) => (swaps.get(y.poolId.toLowerCase()) ?? 0) - (swaps.get(x.poolId.toLowerCase()) ?? 0)).slice(0, MAX_POOLS_PER_PAIR);
-      rows = rows.filter((r) => (swaps.get(r.poolId.toLowerCase()) ?? 0) > 0 || swaps.size === 0);
+    if (act.known()) {
+      // Hundreds of pools can exist for one pair; a handful are markets.
+      rows = [...rows].sort((x, y) => act.of(y.poolId) - act.of(x.poolId));
+      const live = rows.filter((r) => act.of(r.poolId) > 0);
+      rows = (live.length ? live : rows.slice(0, 1)).slice(0, MAX_DIRECT_POOLS);
+    } else {
+      rows = rows.slice(0, MAX_DIRECT_POOLS);
     }
     for (const p of rows) {
       out.push({
@@ -174,10 +241,32 @@ export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): P
         key: { currency0: low(p.currency0), currency1: low(p.currency1), fee: p.fee, tickSpacing: p.tickSpacing, hooks: low(p.hooks) },
         hooked: low(p.hooks) !== NATIVE,
         id: `v4:${p.poolId.toLowerCase()}`,
+        swaps: act.of(p.poolId),
       });
     }
   }
+  pairCache.set(ck, { pools: out, at: Date.now() });
   return out;
+}
+
+/** The pools worth using as one side of a two-hop route: the busiest few. */
+function viaPools(pools: Pool[]): Pool[] {
+  // V3 tiers have no activity figure here; keep the deepest-typical ones first (0.01%, 0.05%), then V4 by swaps.
+  const v3 = pools.filter((p) => p.venue === "v3").sort((x, y) => x.fee - y.fee);
+  const v4 = pools.filter((p) => p.venue === "v4").sort((x, y) => (y.swaps ?? 0) - (x.swaps ?? 0));
+  return [...v3, ...v4].slice(0, MAX_VIA_POOLS);
+}
+
+/** Warm the activity ranking at boot so the first quote is not the one that pays for it. */
+export function warm(v4: V4Source | null): void {
+  activityFor(v4).known();
+}
+
+/** Forget every cached pair and tier. For tests, which share this module. */
+export function resetCaches(): void {
+  pairCache.clear();
+  tierCache.clear();
+  briefCache.clear();
 }
 
 /** The leg that swaps `tokenIn` for the other side of `pool`. */
@@ -226,7 +315,7 @@ export async function candidateRoutes(rpc: Rpc, v4: V4Source | null, tokenIn: He
   ]);
   const routes: Route[] = direct.map((p) => routeOf([p], tokenIn));
   for (let i = 0; i < viaPairs.length; i += 2) {
-    for (const p1 of viaPairs[i]) for (const p2 of viaPairs[i + 1]) routes.push(routeOf([p1, p2], tokenIn));
+    for (const p1 of viaPools(viaPairs[i])) for (const p2 of viaPools(viaPairs[i + 1])) routes.push(routeOf([p1, p2], tokenIn));
   }
   return routes;
 }
@@ -369,7 +458,7 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   const token = etherIn ? tokenOut : tokenIn;
   const [etherPools, usdgPools, etherUsdgPools] = await Promise.all([poolsFor(rpc, v4, WETH, token), token === USDG ? [] : poolsFor(rpc, v4, USDG, token), poolsFor(rpc, v4, WETH, USDG)]);
   const etherUsdg = etherUsdgPools.find((p) => p.venue === "v3" && p.fee === 100) ?? etherUsdgPools[0];
-  const candidates = reclaimCandidates(chosen.route.pools[0], token, etherIn, etherPools, usdgPools, etherUsdg);
+  const candidates = reclaimCandidates(chosen.route.pools[0], token, etherIn, etherPools, usdgPools, etherUsdg).slice(0, MAX_RECLAIM_CANDIDATES);
   const sizes = sizeLadder(float, req.amountIn);
   if (candidates.length === 0 || sizes.length === 0) {
     return plain(req, ordoSwap, chosen, candidates.length === 0 ? "this token has one market; a swap on it opens no cross-market gap" : "reclaim float is empty");
