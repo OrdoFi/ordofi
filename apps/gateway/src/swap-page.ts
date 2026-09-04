@@ -43,6 +43,9 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .navbtn { font-family:var(--sans); font-size:13px; padding:7px 14px; border:1px solid var(--border2); background:transparent; cursor:pointer; color:var(--text); }
   .navbtn:hover { border-color:var(--text); }
   .navbtn.on { font-family:var(--mono); font-size:12px; border-color:var(--ok); color:var(--ok); }
+  .navbtn.on .x { margin-left:8px; color:var(--muted); font-size:11px; }
+  .navbtn.on:hover { border-color:var(--bad); color:var(--bad); }
+  .navbtn.on:hover .x { color:var(--bad); }
 
   header { padding:56px 0 48px; border-bottom:1px solid var(--border); }
   .hero { display:grid; grid-template-columns:1.05fr 1fr; gap:48px; align-items:start; }
@@ -524,17 +527,36 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     $("wm-list").querySelectorAll(".wrow").forEach((el) => el.onclick = () => { $("wm").classList.remove("open"); connect(list[Number(el.dataset.i)].provider); });
     $("wm").classList.add("open");
   }
+  const onAccounts = (a) => { account = a[0] || null; if (!account) disconnect(); else onConnected(); };
+  const onChain = () => ensureChain().catch(() => {});
   async function connect(p) {
     try {
       const accs = await p.request({ method: "eth_requestAccounts" });
       provider = p; account = accs[0];
       await ensureChain();
-      p.on && p.on("accountsChanged", (a) => { account = a[0] || null; onConnected(); });
-      p.on && p.on("chainChanged", () => ensureChain().catch(() => {}));
+      p.on && p.on("accountsChanged", onAccounts);
+      p.on && p.on("chainChanged", onChain);
       onConnected();
     } catch (e) {
       $("result").className = "result bad"; $("result").textContent = (e.message || String(e)).slice(0, 140);
     }
+  }
+  /**
+   * Forget the wallet. EIP-1193 has no "disconnect" a page can call; what a
+   * page can do is drop its reference and ask the wallet to revoke the site
+   * permission where that is supported (MetaMask), so the next Connect asks
+   * again instead of silently reusing the old grant.
+   */
+  async function disconnect() {
+    const p = provider;
+    provider = null; account = null;
+    if (p) {
+      p.removeListener && p.removeListener("accountsChanged", onAccounts);
+      p.removeListener && p.removeListener("chainChanged", onChain);
+      try { await p.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] }); } catch { /* not every wallet supports it */ }
+    }
+    $("result").className = "result"; $("result").textContent = ""; $("done").innerHTML = "";
+    onConnected();
   }
   async function ensureChain() {
     const cur = await provider.request({ method: "eth_chainId" });
@@ -547,7 +569,8 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   }
   function onConnected() {
     const b = $("nav-connect");
-    if (account) { b.textContent = account.slice(0, 6) + "…" + account.slice(-4); b.classList.add("on"); } else { b.textContent = "Connect"; b.classList.remove("on"); }
+    if (account) { b.innerHTML = account.slice(0, 6) + "…" + account.slice(-4) + '<span class="x">✕</span>'; b.classList.add("on"); b.title = "disconnect"; }
+    else { b.textContent = "Connect"; b.classList.remove("on"); b.title = ""; }
     paintBalances(); if ($("amt").value) requote(); else paintButton();
   }
 
@@ -574,7 +597,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   $("gear").addEventListener("click", () => $("slip").classList.toggle("open"));
   $("slip").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { $("slip").querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); slippageBps = BigInt(Math.round(Number(b.dataset.v) * 100)); $("slip-v").textContent = b.dataset.v + "%"; if (quote) paintQuote(); }));
   $("go").addEventListener("click", go);
-  $("nav-connect").addEventListener("click", () => account ? null : openWallets());
+  $("nav-connect").addEventListener("click", () => account ? disconnect() : openWallets());
   $("wm-x").addEventListener("click", () => $("wm").classList.remove("open"));
   $("wm").addEventListener("click", (e) => { if (e.target === $("wm")) $("wm").classList.remove("open"); });
   refreshStats(); setInterval(refreshStats, 20000);
