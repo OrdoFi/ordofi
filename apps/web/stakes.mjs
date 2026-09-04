@@ -260,6 +260,8 @@ export async function stakeQuote({ vault, mode = "one", asset = "eth", amount = 
     // The token side is capped whether it arrives by approve or by permit.
     pay: [...(value > 0n ? [{ asset: "eth", max: value }] : []), ...(approve ? [{ asset: approve.token, max: BigInt(approve.amount) }] : (mode === "both" ? tokenAmount : tokenIsIn ? amount : 0n) > 0n ? [{ asset: getAddress(token), max: mode === "both" ? tokenAmount : amount }] : [])],
     mustNotRetain: [{ holder: zap, asset: "eth" }, { holder: zap, asset: getAddress(WETH) }, { holder: zap, asset: getAddress(token) }],
+    // A vault's very first deposit locks MIN_SHARES (1e9) at 0xdead against share-price inflation; that is the design, not a loss.
+    allowLeaks: BigInt(s.shares) === 0n ? [{ to: "0x000000000000000000000000000000000000dead", asset: getAddress(vault), max: 1_000_000_000n }] : [],
   });
   // Whether the token side could be granted by signature instead of an approve transaction.
   const tokenSide = mode === "both" ? tokenAmount : tokenIsIn ? amount : 0n;
@@ -299,11 +301,11 @@ async function swapLegQuote(s, tokenIsIn, half) {
  * seen to pay them, is handed out. Without a wallet there is nothing to prove
  * against, so there is no `tx`.
  */
-async function proven({ from, tx, approval = null, expect = [], pay = [], mustNotRetain = [] }) {
+async function proven({ from, tx, approval = null, expect = [], pay = [], mustNotRetain = [], allowLeaks = [] }) {
   if (!from || !/^0x[0-9a-fA-F]{40}$/.test(from)) {
     return { for: null, guard: { ok: false, reason: "connect a wallet: the transaction is built and verified for your address" } };
   }
-  const proof = await proveDelivery({ from, tx, approval, expect, pay, mustNotRetain });
+  const proof = await proveDelivery({ from, tx, approval, expect, pay, mustNotRetain, allowLeaks });
   if (!proof.ok) console.error(`stakes | REFUSED ${from} -> ${tx.to}: ${proof.reason}`);
   return { for: from, guard: proofToJson(proof) };
 }

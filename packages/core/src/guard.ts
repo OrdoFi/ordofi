@@ -51,6 +51,13 @@ export interface DeliveryRequest {
    * unwrap is supposed to forward everything to the trader).
    */
   mustNotRetain?: { holder: Hex; asset: Asset }[];
+  /**
+   * Black-hole transfers that are part of the design and not a loss: a vault's
+   * first deposit locks a fixed floor of shares at 0xdead so no one can inflate
+   * the share price against later depositors. Matched by asset and recipient,
+   * bounded by `max`; anything beyond is still a leak.
+   */
+  allowLeaks?: { to: Hex; asset: Asset; max: bigint }[];
 }
 
 export interface Leak {
@@ -291,7 +298,10 @@ export async function proveDelivery(
     if (sameAddr(to, BLACKHOLES[0])) continue;
     if (!BLACKHOLES.some((h) => sameAddr(h, to))) continue;
     const amount = log.data && log.data !== "0x" ? BigInt(log.data) : 0n;
-    if (amount > 0n) leaks.push({ to, asset: log.address as Hex, amount });
+    if (amount === 0n) continue;
+    const allowed = (req.allowLeaks ?? []).find((a) => sameAddr(a.to, to) && sameAddr(a.asset as Hex, log.address as Hex) && amount <= a.max);
+    if (allowed) continue;
+    leaks.push({ to, asset: log.address as Hex, amount });
   }
 
   const proof: DeliveryProof = { ok: true, received, paid, leaks, retained, gasUsed, via };
