@@ -886,6 +886,27 @@ export class OrdoStore {
     ).map(OrdoStore.v4Row);
   }
 
+  /**
+   * How many swaps each of `pools` saw since `sinceBucket` (a minute bucket, unix
+   * seconds). Pools with none are absent. This is how a pair with hundreds of
+   * pools — ETH/USDG has over four hundred on V4 — is cut down to the few that
+   * are actually markets before anything is simulated against them.
+   */
+  poolSwapsSince(pools: string[], sinceBucket: number): Map<string, number> {
+    const out = new Map<string, number>();
+    const ids = [...new Set(pools.map((p) => p.toLowerCase()))];
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400);
+      const rows = this.db
+        .prepare(
+          `SELECT pool, SUM(swaps) AS s FROM candles WHERE bucket >= ? AND pool IN (${chunk.map(() => "?").join(",")}) GROUP BY pool`,
+        )
+        .all(sinceBucket, ...chunk) as { pool: string; s: number }[];
+      for (const r of rows) out.set(r.pool, Number(r.s));
+    }
+    return out;
+  }
+
   private v4CountCache: { n: number; at: number } | null = null;
   v4PoolCount(): number {
     if (this.v4CountCache && Date.now() - this.v4CountCache.at < 60_000) return this.v4CountCache.n;

@@ -75,9 +75,14 @@ export interface Hop {
 export type Rpc = (method: string, params: unknown[]) => Promise<unknown>;
 
 export interface V4Source {
-  /** Every V4 pool with `currency` on either side; ether is address zero. */
-  v4PoolsFor(currency: string): { poolId: string; currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string }[];
+  /** Every V4 pool for the pair, either order; ether is address zero. */
+  v4PoolsForPair(a: string, b: string): { poolId: string; currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string }[];
+  /** Swaps per pool since a minute bucket (unix seconds). Optional: without it, pools are kept in creation order. */
+  poolSwapsSince?(pools: string[], sinceBucket: number): Map<string, number>;
 }
+
+/** Most markets kept per pair, per venue. Past this the rest are dust pools nobody trades. */
+export const MAX_POOLS_PER_PAIR = 4;
 
 export interface SwapRequest {
   tokenIn: Hex;
@@ -152,11 +157,16 @@ export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): P
   const out: Pool[] = [];
   for (const fee of await v3Tiers(rpc, a, b)) out.push({ venue: "v3", a, b, fee, id: `v3:${[a, b].sort().join(":")}:${fee}` });
   if (v4) {
-    const norm = (c: string) => (isEther(c) ? WETH : low(c));
-    const want = a === WETH ? NATIVE : a; // V4 spells ether as address zero
-    for (const p of v4.v4PoolsFor(want)) {
-      const c0 = norm(p.currency0), c1 = norm(p.currency1);
-      if (!((c0 === a && c1 === b) || (c0 === b && c1 === a))) continue;
+    // V4 spells ether as address zero.
+    let rows = v4.v4PoolsForPair(a === WETH ? NATIVE : a, b === WETH ? NATIVE : b);
+    if (rows.length > MAX_POOLS_PER_PAIR) {
+      // Hundreds of pools can exist for one pair; a handful are markets. Rank
+      // by the last day's swaps and keep the busiest.
+      const swaps = v4.poolSwapsSince?.(rows.map((r) => r.poolId), Math.floor(Date.now() / 1000) - 86_400) ?? new Map<string, number>();
+      rows = [...rows].sort((x, y) => (swaps.get(y.poolId.toLowerCase()) ?? 0) - (swaps.get(x.poolId.toLowerCase()) ?? 0)).slice(0, MAX_POOLS_PER_PAIR);
+      rows = rows.filter((r) => (swaps.get(r.poolId.toLowerCase()) ?? 0) > 0 || swaps.size === 0);
+    }
+    for (const p of rows) {
       out.push({
         venue: "v4",
         a, b,

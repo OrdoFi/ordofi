@@ -27,17 +27,30 @@ const USER: Hex = "0x00000000000000000000000000000000000000ee";
 const HOOK: Hex = "0xcf8f482e998d18793414d10c9fc48fc8277ab8cc";
 
 /** V4 index with ORDO's real pools and a hookless ETH/USDG pool. */
+const ALL_V4 = [
+  { poolId: "0x3b84", currency0: NATIVE, currency1: ORDO, fee: 8388608, tickSpacing: 200, hooks: HOOK },
+  { poolId: "0x4366", currency0: NATIVE, currency1: ORDO, fee: 200000, tickSpacing: 2000, hooks: NATIVE },
+  { poolId: "0xe067", currency0: USDG, currency1: ORDO, fee: 40000, tickSpacing: 400, hooks: NATIVE },
+  { poolId: "0x2410", currency0: NATIVE, currency1: USDG, fee: 100, tickSpacing: 1, hooks: NATIVE },
+];
 const v4 = {
-  v4PoolsFor(c: string) {
-    const all = [
-      { poolId: "0x3b84", currency0: NATIVE, currency1: ORDO, fee: 8388608, tickSpacing: 200, hooks: HOOK },
-      { poolId: "0x4366", currency0: NATIVE, currency1: ORDO, fee: 200000, tickSpacing: 2000, hooks: NATIVE },
-      { poolId: "0xe067", currency0: USDG, currency1: ORDO, fee: 40000, tickSpacing: 400, hooks: NATIVE },
-      { poolId: "0x2410", currency0: NATIVE, currency1: USDG, fee: 100, tickSpacing: 1, hooks: NATIVE },
-    ];
-    return all.filter((p) => p.currency0 === c.toLowerCase() || p.currency1 === c.toLowerCase());
+  v4PoolsForPair(a: string, b: string) {
+    const x = a.toLowerCase(), y = b.toLowerCase();
+    return ALL_V4.filter((p) => (p.currency0 === x && p.currency1 === y) || (p.currency0 === y && p.currency1 === x));
   },
 };
+
+test("a pair with hundreds of pools is cut to the busiest few before anything is simulated", async () => {
+  const many = Array.from({ length: 300 }, (_, i) => ({ poolId: `0x${i.toString(16).padStart(4, "0")}`, currency0: NATIVE, currency1: USDG, fee: 3000 + i, tickSpacing: 60, hooks: NATIVE }));
+  const src = {
+    v4PoolsForPair: () => many,
+    poolSwapsSince: (pools: string[]) => new Map(pools.filter((_, i) => i % 100 === 7).map((p, i) => [p, 1000 - i])),
+  };
+  const pools = await poolsFor(factoryRpc(), src, WETH, USDG);
+  const v4pools = pools.filter((p) => p.venue === "v4");
+  assert.equal(v4pools.length, 3, "only the pools with swaps in the last day survive");
+  assert.deepEqual(v4pools.map((p) => p.id), ["v4:0x0007", "v4:0x006b", "v4:0x00cf"]);
+});
 
 /** V3 factory: WETH/USDG at 100 and 500, WETH/GME at 3000; ORDO has no V3 pool. */
 function factoryRpc(extra?: (method: string, params: unknown[]) => Promise<unknown> | undefined) {
