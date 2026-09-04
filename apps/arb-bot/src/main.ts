@@ -12,6 +12,7 @@ import { QUOTER_V2, buildCycleSwap, poolTiers as tiersFor, quoteCycle as quoteCy
 import { proveDelivery } from "@ordofi/core/guard";
 import { Telemetry, edgeBps, wethReturned } from "./telemetry.js";
 import { subscribeFeed, tokensTouched } from "./feed.js";
+import { PoolBook, hotMids } from "./hotset.js";
 
 /**
  * OrdoFi house arbitrage bot — the profit engine that seeds the loop.
@@ -78,6 +79,11 @@ function gasBurnedToday(): bigint {
 }
 let breakerLogged = false;
 const MAX_CYCLES = Number(process.env.ORDO_ARB_MAX_CYCLES ?? 160);
+// How many of the busiest tokens to build cycles from, and how far back to look
+// to decide which those are (3,000 blocks is about five minutes at 100 ms).
+const HOT_LIMIT = Number(process.env.ORDO_ARB_HOT_TOKENS ?? 24);
+const HOT_LOOKBACK = Number(process.env.ORDO_ARB_HOT_LOOKBACK ?? 3000);
+const poolBook = new PoolBook((to, data) => ethCall(to, data as Hex));
 
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data");
 const STATUS_PORT = Number(process.env.ORDO_ARB_PORT ?? 8549);
@@ -138,10 +144,28 @@ async function discoverCycles(): Promise<Cycle[]> {
   return cycles;
 }
 
-/** USDG plus the tokens our own endpoint reports actively trading. */
+/**
+ * The tokens to build cycles from: whichever ones the chain has been trading
+ * hardest in the last few minutes, plus USDG for the triangular leg.
+ *
+ * This used to be every token the trade API called active. That set is ~9,000
+ * long and costs two factory calls each, so discovery never reached the end of
+ * it and the bot quoted USDG — the one entry seeded before the loop — and
+ * nothing else, for days. Volume is also the better signal: a cross-tier gap
+ * only opens where enough size goes through to move one tier and not the other.
+ * The API list stays as the fallback for when logs cannot be read, capped so it
+ * cannot swallow discovery again.
+ */
 async function candidateMids(): Promise<{ address: Hex; symbol: string }[]> {
   const out = new Map<Hex, string>();
   out.set(USDG, "USDG");
+  try {
+    const hot = await hotMids(rpcFetch, poolBook, { weth: WETH, limit: HOT_LIMIT, lookbackBlocks: HOT_LOOKBACK });
+    for (const { address } of hot) out.set(address.toLowerCase() as Hex, await symbolOf(address));
+    if (hot.length) return [...out].map(([address, symbol]) => ({ address, symbol }));
+  } catch (e) {
+    console.warn(`[arb] could not read recent swaps (${(e as Error).message}); falling back to the token list`);
+  }
   for (const url of [`${SELF}/api/trade/tokens`, "https://app.ordofi.network/api/trade/tokens"]) {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(12_000) });
@@ -151,11 +175,28 @@ async function candidateMids(): Promise<{ address: Hex; symbol: string }[]> {
         const a = (t.address ?? "").toLowerCase();
         // Only the actively-traded set: cycles through dead pools waste quotes.
         if (t.active && /^0x[0-9a-f]{40}$/.test(a) && a !== WETH) out.set(a as Hex, (t.symbol ?? "?").slice(0, 10));
+        if (out.size >= HOT_LIMIT) break;
       }
       break;
     } catch { /* try the next source */ }
   }
   return [...out].map(([address, symbol]) => ({ address, symbol }));
+}
+
+/** A token's symbol, for the labels on the desk page. Asked once per token. */
+const symbols = new Map<string, string>();
+async function symbolOf(address: Hex): Promise<string> {
+  const k = address.toLowerCase();
+  const seen = symbols.get(k);
+  if (seen) return seen;
+  let sym = k.slice(0, 8);
+  try {
+    const raw = await ethCall(address, "0x95d89b41"); // symbol()
+    const text = Buffer.from(raw.slice(2), "hex").toString("utf8").replace(/[^\x20-\x7e]/g, "").trim();
+    if (text) sym = text.slice(0, 10);
+  } catch { /* keep the short address */ }
+  symbols.set(k, sym);
+  return sym;
 }
 
 // --- simulation --------------------------------------------------------------
@@ -406,6 +447,7 @@ const rankCycles = (cs: Cycle[]) => cs.sort((a, b) => a.fees.length - b.fees.len
 cycles = rankCycles(await discoverCycles());
 const midCount = new Set(cycles.map((c) => c.tokens.join(">"))).size;
 console.log(`OrdoFi arb bot | ${cycles.length} cycles (cross-tier + triangular) across ${midCount} routes`);
+console.log(`OrdoFi arb bot | quoting ${[...new Set(cycles.map((c) => c.label.split(" ")[0]))].join(" ")}`);
 console.log(`OrdoFi arb bot | min net ${formatEther(MIN_PROFIT)} ETH · gas reserve ${formatEther(GAS_RESERVE)} ETH · per-trade cap ${MAX_NOTIONAL ? formatEther(MAX_NOTIONAL) + " ETH" : "none"} · daily gas cap ${formatEther(DAILY_GAS_CAP)} ETH · scan ${INTERVAL_MS}ms`);
 
 await refreshGas();

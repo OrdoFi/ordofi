@@ -199,6 +199,13 @@ services:
       # The sequencer feed, relayed by the auction. Without it the bot scans on
       # a timer, which on a 100 ms chain arrives after every race is over.
       ORDO_FEED_WS: ${ORDO_FEED_WS:-ws://auction:8548/feed}
+      # Which tokens to quote, and over how many blocks their busyness is
+      # judged. The bot reads the recent Swap logs and takes the heaviest
+      # tokens; the old behaviour — every token the trade API called active,
+      # ~9,000 of them — meant discovery never finished and only USDG was ever
+      # quoted. Arbitrage only opens where size actually moves a fee tier.
+      ORDO_ARB_HOT_TOKENS: ${ORDO_ARB_HOT_TOKENS:-24}
+      ORDO_ARB_HOT_LOOKBACK: ${ORDO_ARB_HOT_LOOKBACK:-3000}
       ORDO_ARB_MIN_PROFIT_ETH: ${ORDO_ARB_MIN_PROFIT_ETH:-0.000004}
       ORDO_ARB_GAS_RESERVE_ETH: ${ORDO_ARB_GAS_RESERVE_ETH:-0.0008}
       ORDO_ARB_MAX_NOTIONAL_ETH: ${ORDO_ARB_MAX_NOTIONAL_ETH:-}
