@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PoolBook, hotMids, rankTokens } from "../src/hotset.ts";
+import { PoolBook, hotMids, isRangeTooWide, rankTokens } from "../src/hotset.ts";
 
 const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
 const GME = "0x1b0e319c6a659f002271b69db8a7df2f911c153e";
@@ -79,7 +79,55 @@ test("an unreadable log range is the caller's problem, not a silent empty set", 
   const { book } = bookOf({});
   const rpc = async (method: string) => {
     if (method === "eth_blockNumber") return "0x10";
-    throw new Error("range too wide");
+    throw new Error("upstream is on fire");
   };
-  await assert.rejects(() => hotMids(rpc, book, { weth: WETH as `0x${string}` }), /range too wide/);
+  await assert.rejects(() => hotMids(rpc, book, { weth: WETH as `0x${string}` }), /on fire/);
+});
+
+test("a provider's way of saying the window was too wide is recognised", () => {
+  assert.ok(isRangeTooWide("logs matched by query exceeds limit of 10000"), "Robinhood's own RPC");
+  assert.ok(isRangeTooWide("query returned more than 10000 results"), "geth");
+  assert.ok(isRangeTooWide("block range too large"));
+  assert.equal(isRangeTooWide("Archive requests require a personal token"), false, "not a width problem");
+  assert.equal(isRangeTooWide("ECONNREFUSED"), false);
+});
+
+test("the window halves until the upstream will serve it", async () => {
+  const { book } = bookOf({ "0x1": [WETH, GME] });
+  const spans: number[] = [];
+  const rpc = async (method: string, params: unknown[]) => {
+    if (method === "eth_blockNumber") return "0x2710"; // 10,000
+    const { fromBlock, toBlock } = params[0] as { fromBlock: string; toBlock: string };
+    const span = Number(toBlock) - Number(fromBlock);
+    spans.push(span);
+    if (span > 1000) throw new Error("logs matched by query exceeds limit of 10000");
+    return [{ address: "0x1" }, { address: "0x1" }];
+  };
+  const hot = await hotMids(rpc, book, { weth: WETH as `0x${string}`, lookbackBlocks: 4000 });
+  assert.deepEqual(spans, [4000, 2000, 1000], "asked wide, halved twice, then served");
+  assert.deepEqual(hot, [{ address: GME, swaps: 2 }]);
+});
+
+test("halving stops at the floor rather than querying single blocks forever", async () => {
+  const { book } = bookOf({});
+  let calls = 0;
+  const rpc = async (method: string) => {
+    if (method === "eth_blockNumber") return "0x2710";
+    calls++;
+    throw new Error("logs matched by query exceeds limit of 10000");
+  };
+  await assert.rejects(() => hotMids(rpc, book, { weth: WETH as `0x${string}`, lookbackBlocks: 800, minBlocks: 100 }), /exceeds limit/);
+  assert.equal(calls, 4, "800, 400, 200, 100 — then the floor");
+});
+
+test("an error that is not about width is not worked around by narrowing", async () => {
+  const { book } = bookOf({});
+  let calls = 0;
+  const rpc = async (method: string) => {
+    if (method === "eth_blockNumber") return "0x2710";
+    calls++;
+    throw new Error("Archive requests require a personal token");
+  };
+  await assert.rejects(() => hotMids(rpc, book, { weth: WETH as `0x${string}`, lookbackBlocks: 4000 }), /personal token/);
+  assert.equal(calls, 1, "asked once, gave up, let the caller fall back");
 });

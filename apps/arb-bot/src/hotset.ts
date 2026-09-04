@@ -88,28 +88,70 @@ export function rankTokens(logs: readonly SwapLog[], book: PoolBook, exclude: re
 }
 
 export interface HotSetOptions {
-  /** How far back to look. At 100 ms blocks, 3,000 blocks is about five minutes. */
+  /** How far back to look at most. At 100 ms blocks, 1,200 blocks is about two minutes. */
   lookbackBlocks?: number;
   /** Most tokens to return. Each one costs a handful of factory calls in discovery. */
   limit?: number;
   /** Never a mid, because every cycle already starts and ends there. */
   weth: Hex;
+  /** Smallest window worth reading before giving up. */
+  minBlocks?: number;
 }
 
 /**
- * The busiest tokens of the last few minutes, heaviest first.
+ * An upstream saying the range was too wide, rather than that it is broken.
  *
- * Throws if the logs cannot be read; the caller decides whether to fall back to
- * the previous set (which is the right move — a stale hot set beats no set).
+ * Every provider phrases its cap differently and none of them use a distinct
+ * error code, so the text is all there is. Robinhood's own RPC says "logs
+ * matched by query exceeds limit of 10000"; others complain about the block
+ * range or the response size.
+ */
+export function isRangeTooWide(message: string): boolean {
+  return /exceed|too many|too large|limit of|range|more than .* results|query returned/i.test(message);
+}
+
+/**
+ * Swap logs over the widest window the upstream will actually serve.
+ *
+ * A busy chain can put 18,000 swaps in five minutes, and public endpoints
+ * refuse a query that matches more than 10,000. Rather than pick a window that
+ * happens to fit today, ask for the one we want and halve it whenever the
+ * upstream says it was too wide. A narrower window is a perfectly good sample:
+ * we only need the ranking, not the census.
+ */
+async function swapLogs(rpc: Rpc, head: number, lookback: number, floor: number): Promise<{ logs: SwapLog[]; blocks: number }> {
+  let span = lookback;
+  let last: Error | null = null;
+  while (span >= floor) {
+    try {
+      const logs = (await rpc("eth_getLogs", [
+        {
+          fromBlock: `0x${Math.max(0, head - span).toString(16)}`,
+          toBlock: `0x${head.toString(16)}`,
+          topics: [SWAP_TOPIC],
+        },
+      ])) as SwapLog[];
+      return { logs, blocks: span };
+    } catch (e) {
+      last = e as Error;
+      if (!isRangeTooWide(last.message)) throw last;
+      span = Math.floor(span / 2);
+    }
+  }
+  throw last ?? new Error("no window small enough to read swap logs");
+}
+
+/**
+ * The busiest tokens of the last couple of minutes, heaviest first.
+ *
+ * Throws if the logs cannot be read at all; the caller decides whether to fall
+ * back to the previous set, which is the right move — a stale hot set beats no
+ * set, and beats a set of everything.
  */
 export async function hotMids(rpc: Rpc, book: PoolBook, opts: HotSetOptions): Promise<{ address: Hex; swaps: number }[]> {
-  const lookback = opts.lookbackBlocks ?? 3_000;
   const limit = opts.limit ?? 24;
   const head = Number(await rpc("eth_blockNumber", []));
-  const from = Math.max(0, head - lookback);
-  const logs = (await rpc("eth_getLogs", [
-    { fromBlock: `0x${from.toString(16)}`, toBlock: `0x${head.toString(16)}`, topics: [SWAP_TOPIC] },
-  ])) as SwapLog[];
+  const { logs } = await swapLogs(rpc, head, opts.lookbackBlocks ?? 1_200, opts.minBlocks ?? 100);
   await book.learn(logs.map((l) => l.address));
   return rankTokens(logs, book, [opts.weth]).slice(0, limit);
 }

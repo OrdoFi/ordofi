@@ -82,8 +82,17 @@ const MAX_CYCLES = Number(process.env.ORDO_ARB_MAX_CYCLES ?? 160);
 // How many of the busiest tokens to build cycles from, and how far back to look
 // to decide which those are (3,000 blocks is about five minutes at 100 ms).
 const HOT_LIMIT = Number(process.env.ORDO_ARB_HOT_TOKENS ?? 24);
-const HOT_LOOKBACK = Number(process.env.ORDO_ARB_HOT_LOOKBACK ?? 3000);
+const HOT_LOOKBACK = Number(process.env.ORDO_ARB_HOT_LOOKBACK ?? 1200);
+const HOT_TIMEOUT_MS = Number(process.env.ORDO_ARB_HOT_TIMEOUT_MS ?? 90_000);
 const poolBook = new PoolBook((to, data) => ethCall(to, data as Hex));
+
+/** `p`, or a rejection once `ms` have passed. The work is abandoned, not cancelled. */
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${what} took longer than ${ms}ms`)), ms).unref()),
+  ]);
+}
 
 const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data");
 const STATUS_PORT = Number(process.env.ORDO_ARB_PORT ?? 8549);
@@ -160,7 +169,15 @@ async function candidateMids(): Promise<{ address: Hex; symbol: string }[]> {
   const out = new Map<Hex, string>();
   out.set(USDG, "USDG");
   try {
-    const hot = await hotMids(rpcFetch, poolBook, { weth: WETH, limit: HOT_LIMIT, lookbackBlocks: HOT_LOOKBACK });
+    // Bounded, always. An upstream that neither answers nor fails leaves the
+    // bot with no cycles at all, which is how it spent its first four minutes
+    // after this changed: publicnode wants a token for eth_getLogs and the
+    // official RPC caps the match at 10,000, and the retries never ended.
+    const hot = await withTimeout(
+      hotMids(rpcFetch, poolBook, { weth: WETH, limit: HOT_LIMIT, lookbackBlocks: HOT_LOOKBACK }),
+      HOT_TIMEOUT_MS,
+      "reading recent swaps",
+    );
     for (const { address } of hot) out.set(address.toLowerCase() as Hex, await symbolOf(address));
     if (hot.length) return [...out].map(([address, symbol]) => ({ address, symbol }));
   } catch (e) {
