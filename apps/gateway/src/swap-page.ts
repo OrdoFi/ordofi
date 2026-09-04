@@ -88,6 +88,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .pill .chev { color:var(--muted); font-size:11px; }
   .ico { width:22px; height:22px; flex:none; border-radius:50%; background:var(--soft); color:var(--accent2); font-family:var(--mono); font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:600; overflow:hidden; }
   .ico img { width:100%; height:100%; display:block; object-fit:cover; }
+  .ico.gen { font-family:var(--sans); font-weight:700; font-size:9.5px; letter-spacing:.01em; }
 
   /* ---- token picker ---- */
   .picker { position:fixed; inset:0; background:rgba(25,24,23,.45); display:none; align-items:flex-start; justify-content:center; padding-top:8vh; z-index:300; }
@@ -112,11 +113,16 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .trow:hover { background:var(--card); }
   .trow.off { opacity:.45; cursor:default; }
   .trow .ico { width:32px; height:32px; font-size:11px; }
+  .trow .ico.gen { font-size:12.5px; }
   .trow .m { flex:1; min-width:0; }
   .trow .sy { font-weight:600; font-size:14px; display:flex; align-items:center; gap:8px; }
   .trow .nm { font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .trow .px { font-family:var(--mono); font-size:12px; color:var(--dim); text-align:right; }
-  .trow .px small { display:block; color:var(--muted); font-size:10.5px; }
+  .trow .px { font-family:var(--mono); font-size:12px; color:var(--dim); text-align:right; flex:none; }
+  .trow .px .mc { display:block; color:var(--text); font-size:12.5px; white-space:nowrap; }
+  .trow .px .mc .u { font-style:normal; color:var(--muted); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; margin-left:4px; }
+  .trow .px .ca { display:block; color:var(--muted); font-size:10.5px; margin-top:2px; cursor:pointer; white-space:nowrap; }
+  .trow .px .ca:hover { color:var(--accent); text-decoration:underline; }
+  .trow .px .ca.ok { color:var(--accent2); }
   .tag { font-family:var(--mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; padding:1px 6px; border:1px solid var(--border2); color:var(--muted); font-weight:500; white-space:nowrap; }
   .tag.soon { border-color:var(--accent); color:var(--accent); }
   .tag.v4 { border-color:#7a5cff; color:#7a5cff; }
@@ -441,7 +447,22 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   // "0,001" is how half of Europe types a thousandth. Commas are decimals here.
   const parseAmt = (s, d) => { s = String(s).trim().replace(/\\s/g, ""); s = s.includes(".") ? s.replace(/,/g, "") : s.replace(",", "."); if (!/^\\d*\\.?\\d*$/.test(s) || s === "" || s === ".") return null; const [i, f = ""] = s.split("."); const v = BigInt((i || "0") + f.slice(0, d).padEnd(d, "0")); return v > 0n ? v : null; };
-  const avatar = (t, cls = "ico") => '<span class="' + cls + '">' + (t.icon ? '<img src="' + esc(t.icon) + '" alt="" onerror="this.parentNode.textContent=\\'' + esc(t.symbol.slice(0, 3)) + '\\'" />' : esc(t.symbol.slice(0, 3))) + "</span>";
+  // Five in six tokens on this chain have no logo anywhere — no CoinGecko entry,
+  // nothing on Robinhood's CDN — so most rows would be a grey box with three grey
+  // letters in it. Those get a mark derived from the address instead: same token,
+  // same colours, every time, which makes a list scannable and makes an address
+  // you have seen before recognisable. It is a placeholder and never pretends
+  // otherwise; a real logo always wins, and one that fails to load falls back here.
+  const hueOf = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360; return h; };
+  const initials = (s) => (String(s).replace(/[^A-Za-z0-9]/g, "").slice(0, 2).toUpperCase() || "?");
+  const genCss = (t) => { const h = hueOf(t.address || t.symbol || ""); return "background:linear-gradient(135deg,hsl(" + h + " 58% 56%),hsl(" + ((h + 42) % 360) + " 64% 44%));color:#fff"; };
+  const avatar = (t, cls = "ico") => {
+    const g = esc(genCss(t)), ini = esc(initials(t.symbol));
+    return t.icon
+      ? '<span class="' + cls + '" data-g="' + g + '" data-i="' + ini + '"><img src="' + esc(t.icon) + '" alt="" loading="lazy" onerror="iconFail(this)" /></span>'
+      : '<span class="' + cls + ' gen" style="' + g + '">' + ini + "</span>";
+  };
+  window.iconFail = (img) => { const s = img.parentNode; s.classList.add("gen"); s.style.cssText = s.dataset.g || ""; s.textContent = s.dataset.i || "?"; };
 
   // Count-up animation for the receive box.
   let tween = null;
@@ -482,7 +503,18 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (!matchMedia("(max-width:900px)").matches) setTimeout(() => $("pk-q").focus(), 30);
   }
   function closePicker() { $("picker").classList.remove("open"); document.body.classList.remove("lock"); }
-  const priceCell = (t) => t.usd != null ? '<div class="px">' + (t.usd >= 1 ? usd(t.usd) : "$" + t.usd.toPrecision(3)) + (t.swaps24h ? "<small>" + t.swaps24h.toLocaleString() + " swaps/24h</small>" : "") + "</div>" : "";
+  // Symbols are not unique — this chain has three tokens called AMC — so the row
+  // carries the two things that tell them apart: what the market thinks the whole
+  // supply is worth, and the address itself, which is the only identifier that
+  // cannot be copied by an impostor. The address is click-to-copy so it can be
+  // checked against an explorer without retyping it.
+  const cap = (n) => n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? "$" + (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? "$" + (n / 1e3).toFixed(1) + "K" : "$" + n.toFixed(0);
+  const shortCA = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+  const priceCell = (t) => {
+    const top = t.mcap != null ? cap(t.mcap) + '<i class="u">mcap</i>' : t.usd != null ? (t.usd >= 1 ? usd(t.usd) : "$" + t.usd.toPrecision(3)) : "";
+    const ca = t.native ? "" : '<small class="ca" data-ca="' + t.address + '" title="' + t.address + ' — click to copy">' + shortCA(t.address) + "</small>";
+    return top || ca ? '<div class="px">' + (top ? '<span class="mc">' + top + "</span>" : "") + ca + "</div>" : "";
+  };
   const routable = (t) => !!(t.v3 || t.v4);
   const row = (t) => '<div class="trow' + (routable(t) ? "" : " off") + '" data-a="' + t.address + (t.native ? "|eth" : "") + '">' + avatar(t) +
     '<div class="m"><div class="sy">' + esc(t.symbol) + (t.stock ? '<span class="tag">stock</span>' : "") + (!t.v3 && t.v4 ? '<span class="tag v4">V4</span>' : "") + (routable(t) ? "" : '<span class="tag soon">no pool</span>') + (t.custom ? '<span class="tag">custom</span>' : "") + '</div><div class="nm">' + esc(t.name) + "</div></div>" + priceCell(t) + "</div>";
@@ -757,7 +789,20 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   $("pk-q").addEventListener("paste", () => setTimeout(renderPicker, 0));
   $("tab-stocks").addEventListener("click", () => { tab = "stocks"; $("tab-stocks").classList.add("on"); $("tab-tokens").classList.remove("on"); renderPicker(); });
   $("tab-tokens").addEventListener("click", () => { tab = "tokens"; $("tab-tokens").classList.add("on"); $("tab-stocks").classList.remove("on"); renderPicker(); });
-  $("pk-list").addEventListener("click", (e) => { const r = e.target.closest(".trow"); if (!r || r.classList.contains("off")) return; const [a, flag] = r.dataset.a.split("|"); pick(flag === "eth" ? ETH : registry.get(a)); });
+  $("pk-list").addEventListener("click", (e) => {
+    // Copying an address is checking a token, not choosing one.
+    const c = e.target.closest(".ca");
+    if (c) {
+      e.stopPropagation();
+      navigator.clipboard?.writeText(c.dataset.ca).then(() => {
+        const was = c.textContent;
+        c.textContent = "copied"; c.classList.add("ok");
+        setTimeout(() => { c.textContent = was; c.classList.remove("ok"); }, 1100);
+      }, () => {});
+      return;
+    }
+    const r = e.target.closest(".trow"); if (!r || r.classList.contains("off")) return; const [a, flag] = r.dataset.a.split("|"); pick(flag === "eth" ? ETH : registry.get(a));
+  });
   $("flip").addEventListener("click", () => { $("flip").classList.toggle("spin"); [tokIn, tokOut] = [tokOut, tokIn]; paintToken("in", tokIn); paintToken("out", tokOut); if (quote) $("amt").value = fmt(units(quote.amountOut, tokIn.decimals)).replace(/,/g, ""); paintBalances(); onInput(); });
   $("gear").addEventListener("click", () => $("slip").classList.toggle("open"));
   $("slip").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { $("slip").querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); slippageBps = BigInt(Math.round(Number(b.dataset.v) * 100)); $("slip-v").textContent = b.dataset.v + "%"; if (quote) paintQuote(); }));

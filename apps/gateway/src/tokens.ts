@@ -20,6 +20,8 @@ export interface PickerToken {
   decimals: number;
   icon: string | null;
   usd: number | null;
+  /** Supply times price, in dollars, when both are known and the answer is sane. */
+  mcap: number | null;
   swaps24h: number;
   /** One of Robinhood's tokenized stocks/ETFs. */
   stock: boolean;
@@ -47,11 +49,28 @@ interface AppToken {
 
 const BASES = new Set(["0x0bd7d308f8e1639fab988df18a8011f41eacad73", "0x5fc5360d0400a0fd4f2af552add042d716f1d168"]);
 
+/**
+ * Logos for tokens the app's list has none for.
+ *
+ * It carries an icon only where CoinGecko or Robinhood publishes one, which is
+ * six hundred tokens out of twelve thousand. The rest get a mark drawn from
+ * their address in the picker, which is honest for a coin nobody has vetted —
+ * but ORDO is ours, and it should wear the mark on every other Ordo page.
+ */
+export const ICON_OVERRIDES: Record<string, string> = {
+  "0xfe2f0fb0c00d19786a8abf98d4b1f1ac8763b167": "https://app.ordofi.network/favicon-192.png",
+};
+
 export function isStock(t: AppToken): boolean {
   return /robinhood tok/i.test(t.name ?? "") || (t.icon ?? "").startsWith("https://cdn.robinhood.com/");
 }
 
-export function toPicker(list: AppToken[], v4?: V4Index | null): PickerToken[] {
+/** What the picker knows about caps; supplied separately because it costs chain reads. */
+export interface CapSource {
+  get(address: string): number | null;
+}
+
+export function toPicker(list: AppToken[], v4?: V4Index | null, caps?: CapSource | null): PickerToken[] {
   const out: PickerToken[] = [];
   const seen = new Set<string>();
   for (const t of list) {
@@ -72,8 +91,9 @@ export function toPicker(list: AppToken[], v4?: V4Index | null): PickerToken[] {
       symbol: String(t.symbol).slice(0, 12),
       name: String(t.name ?? t.symbol).replace(/\s*•\s*Robinhood Tok.*$/i, "").slice(0, 60),
       decimals: t.decimals,
-      icon: t.icon || null,
+      icon: t.icon || ICON_OVERRIDES[address] || null,
       usd: typeof t.usdPerToken === "number" && isFinite(t.usdPerToken) ? t.usdPerToken : null,
+      mcap: caps?.get(address) ?? null,
       swaps24h: t.swaps24h ?? 0,
       stock: isStock(t),
       // The app's tiers are "pools against WETH / against USDG", so the two
@@ -95,17 +115,35 @@ export class TokenList {
     private readonly source: string,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly v4: V4Index | null = null,
+    private readonly caps: CapSource | null = null,
   ) {}
 
+  /**
+   * Pull the list and rebuild the picker's copy of it.
+   *
+   * Caps are read from whatever the cap source has already worked out; they
+   * are chain reads and are not waited for here, so a cap discovered now
+   * appears on the next pass a minute later rather than holding up the list.
+   */
   async refresh(): Promise<void> {
     const r = await this.fetchImpl(this.source, { signal: AbortSignal.timeout(15_000) });
     if (!r.ok) throw new Error(`token list ${r.status}`);
     const list = (await r.json()) as AppToken[];
-    const next = toPicker(list, this.v4);
+    const next = toPicker(list, this.v4, this.caps);
     if (next.length === 0) return; // an empty answer is a broken source, not an empty chain
     this.tokens = next;
     this.json = JSON.stringify({ updatedAt: Date.now(), tokens: next });
     this.updatedAt = Date.now();
+  }
+
+  /** The busiest tokens, for whoever is working out their caps. */
+  ranked(n: number): PickerToken[] {
+    return this.tokens.slice(0, n);
+  }
+
+  /** The dollar price of ether, which prices every pool quoted against it. */
+  ethUsd(): number | null {
+    return this.tokens.find((t) => t.address === "0x0bd7d308f8e1639fab988df18a8011f41eacad73")?.usd ?? null;
   }
 
   body(): string {

@@ -370,7 +370,7 @@ class Lane {
 /** Live quotes get six slots; background discovery two of its own, so warming never delays a person. */
 const live = new Lane(6);
 const background = new Lane(2);
-const limited = <T>(fn: () => Promise<T>, bg = false): Promise<T> => (bg ? background : live).run(fn);
+export const limited = <T>(fn: () => Promise<T>, bg = false): Promise<T> => (bg ? background : live).run(fn);
 
 /** One `quote()` eth_call; the value stands in for an ether input. */
 async function quoteCall(rpc: Rpc, ordoSwap: Hex, legs: Leg[], amountIn: bigint, reclaim: typeof NO_RECLAIM, valueFrom: Hex | null) {

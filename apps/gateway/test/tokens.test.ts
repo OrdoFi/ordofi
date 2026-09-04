@@ -28,7 +28,17 @@ test("the picker list is compact, ranked by activity, deduplicated, and honest a
   const meme = p.find((t) => t.symbol === "MEME")!;
   assert.equal(meme.v3, false, "no V3 pool: listed, but the page will say not yet");
   assert.equal(meme.stock, false);
-  assert.equal(meme.icon, null);
+  assert.equal(meme.icon, null, "no logo published: the picker draws one from the address");
+});
+
+test("ORDO wears our own mark, which no list publishes, and caps come from the cap source", () => {
+  const ordo = "0xfe2f0fb0c00d19786a8abf98d4b1f1ac8763b167";
+  const [t] = toPicker([{ address: ordo, symbol: "ORDO", name: "OrdoFi", decimals: 18, icon: null, swaps24h: 1055 }], null, {
+    get: (a) => (a === ordo ? 23_100_000 : null),
+  });
+  assert.equal(t.icon, "https://app.ordofi.network/favicon-192.png");
+  assert.equal(t.mcap, 23_100_000);
+  assert.equal(toPicker([{ address: ordo, symbol: "ORDO", decimals: 18, swaps24h: 1 }])[0].mcap, null, "no cap source, no cap");
 });
 
 test("a broken or empty source keeps the last good list", async () => {

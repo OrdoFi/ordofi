@@ -7,6 +7,7 @@ import { CONFIG, loadApiKeys, RateLimiter, type ApiKey } from "./config.js";
 import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
+import { DEFAULT_TRACKED, MarketCaps } from "./mcap.js";
 import { routeOrderFlow } from "./orderflow.js";
 import { prewarm as prewarmSwapRoutes, quoteSwap } from "./ordoswap2.js";
 import { swapHtml } from "./swap-page.js";
@@ -359,8 +360,14 @@ if (swapStats && !CONFIG.edgeOrigin) {
   setTimeout(tick, 3_000).unref();
   setInterval(tick, 30_000).unref();
 }
-// The picker's token list, refreshed from the app every minute.
-const tokenList = CONFIG.ordoSwapAddress ? new TokenList(process.env.ORDO_TOKEN_LIST_URL ?? "https://app.ordofi.network/api/trade/tokens", fetch, store) : null;
+// The picker's token list, refreshed from the app every minute. Caps are worked
+// out on the side (supply and, for the launchpad tokens the app cannot price, a
+// pool's spot price) and fold into the list as they arrive. Edges neither quote
+// nor read the chain for this; only the origin does.
+const marketCaps = CONFIG.ordoSwapAddress && !CONFIG.edgeOrigin ? new MarketCaps((m, p) => upstream(m, p), store) : null;
+const tokenList = CONFIG.ordoSwapAddress
+  ? new TokenList(process.env.ORDO_TOKEN_LIST_URL ?? "https://app.ordofi.network/api/trade/tokens", fetch, store, marketCaps)
+  : null;
 if (tokenList) {
   const tick = () => tokenList.refresh().catch((e) => console.warn(`gateway | token list: ${(e as Error).message}`));
   tick();
@@ -369,6 +376,11 @@ if (tokenList) {
   // their first quote never pays for discovery. Origin only; edges do not quote.
   if (!CONFIG.edgeOrigin) {
     setTimeout(() => prewarmSwapRoutes((m, p) => upstream(m, p), store, () => tokenList.top(150) as `0x${string}`[]), 5_000).unref();
+  }
+  if (marketCaps) {
+    const caps = () => marketCaps.refresh(tokenList.ranked(DEFAULT_TRACKED), tokenList.ethUsd()).catch((e) => console.warn(`gateway | market caps: ${(e as Error).message}`));
+    setTimeout(caps, 20_000).unref();
+    setInterval(caps, 5 * 60_000).unref();
   }
 }
 
