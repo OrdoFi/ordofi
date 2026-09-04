@@ -198,6 +198,35 @@ simulation latency while the gateway stays in Chicago**: 48 ms to Sunnyvale is
 the same as 48 ms to the public endpoint. The latency win only appears if the
 gateway and the node share a machine or a metro.
 
+### Done 4 Sep: the link, the exposure, the supervised flip
+
+- **WireGuard link** app server ↔ node: `wg0`, 10.77.0.1 (app) ↔ 10.77.0.2
+  (node), UDP 51820 open on the node to 64.177.14.42 only. Handshake ~2 s,
+  51 ms RTT. Config in `/etc/wireguard/wg0.conf` on both hosts, enabled as
+  `wg-quick@wg0`. The app side MASQUERADEs so containers (172.18.x) reach the
+  node as the link address, which is the only source the node's peer accepts.
+- **RPC on the link only**: the node keeps its `127.0.0.1:8547` binding (no
+  restart of a syncing node); a `PostUp` DNAT on `wg0` forwards 8547/8548 to
+  it, ufw allows those ports on `wg0` only. Checked from the internet:
+  107.155.92.14:8547 times out.
+- **`deploy/node-rpc.sh`** `status | promote | demote | auto`. Promote puts
+  `http://10.77.0.2:8547` first in `ORDO_RPC_URLS_LIGHT`, `ORDO_RPC_URLS` and
+  `ORDO_ARCHIVE_RPC` (a pruned node has every block and receipt; only old
+  *state* is gone), keeps the providers after it as fallback, backs up `.env`,
+  rolls the gateway (`ORDO_ROLLOUT_FORCE=1 rollout.sh --no-build`) and
+  recreates watcher, auction, arb, searcher, liquidity, web one at a time.
+  Demote is the exact inverse.
+- **Timer** `ordofi-node-rpc.timer` every 5 min runs `auto`: promotes after
+  3 consecutive healthy checks (not syncing, within 20 blocks of the public
+  head), demotes after 3 consecutive lagging/unreachable ones. One line per
+  run in `/var/log/ordofi-node-rpc.log`; state in `/var/lib/ordofi/`.
+- **Sync arithmetic, measured 4 Sep 09:00 UTC**: node 1,164 blocks/min, chain
+  595/min, net +569/min, 1.49 M behind → ~43 h. No published snapshot is
+  ahead of the node (newest pruned is the 26 Aug image it restored from), so
+  a re-restore would lose time. Replay is CPU-serial (~2.4 cores of 48).
+- Left alone on purpose: `ORDO_RPC_URL` (singular, no failover) stays on the
+  public endpoint; the few places that read it are not latency-critical.
+
 ### When it is synced (check with `eth_syncing` returning `false`)
 
 1. Expose the node to the app server only. Do not open 8547 to the world; an
