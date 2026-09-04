@@ -30,6 +30,7 @@ import {PoolKey, IPositionManagerV4, IStateView, IPermit2, V4Actions, V4Pool, V4
 
 interface IOrdoStakeVaultV4 {
     function deposit(uint256 tokenDesired, uint128 ethMin, uint128 tokenMin, address to) external payable returns (uint256 shares, uint256 usedEth, uint256 usedToken);
+    function withdraw(uint256 shares, uint128 ethMin, uint128 tokenMin, address to) external returns (uint256 amountEth, uint256 amountToken);
     function key() external view returns (PoolKey memory);
     function token() external view returns (address);
     function farm() external view returns (address);
@@ -363,6 +364,46 @@ contract OrdoStakeZapV4 is Guard, V4Swap {
         emit Zapped(msg.sender, vault, address(weth), amount, shares);
     }
 
+    /// @notice `zapWETH` staking for someone else. The farm's `compound` uses it:
+    ///         the farm pays the WETH, the holder gets the shares.
+    function zapWETHFor(address vault, uint256 amount, uint256 minTokenOut, address user) external nonReentrant returns (uint256 shares) {
+        if (amount == 0) revert NothingIn();
+        if (!weth.transferFrom(msg.sender, address(this), amount)) revert TransferFailed();
+        weth.withdraw(amount);
+        IOrdoStakeVaultV4 v = IOrdoStakeVaultV4(vault);
+        _swapExactIn(v.key(), true, amount / 2, minTokenOut);
+        shares = _depositAndStake(v, user);
+        emit Zapped(user, vault, address(weth), amount, shares);
+    }
+
+    event ZappedOut(address indexed user, address indexed vault, uint256 shares, uint256 ethOut, uint256 tokenOut, bool single);
+    error MinOut(uint256 got, uint256 want);
+
+    /// @notice Leave in one transaction: unstake from the farm, redeem the shares,
+    ///         receive both coins — ETH and the token — plus any pending rewards.
+    function zapOut(address vault, uint256 shares, uint128 minEth, uint128 minToken) external nonReentrant returns (uint256 ethOut, uint256 tokenOut) {
+        IOrdoStakeVaultV4 v = IOrdoStakeVaultV4(vault);
+        IOrdoStakeFarm(v.farm()).withdrawFor(msg.sender, shares);
+        (ethOut, tokenOut) = v.withdraw(shares, minEth, minToken, msg.sender);
+        emit ZappedOut(msg.sender, vault, shares, ethOut, tokenOut, false);
+    }
+
+    /// @notice Leave to ETH only: unstake, redeem, sell the token side in the
+    ///         pool, receive ETH. `minEthOut` is on the total you end up with.
+    function zapOutToETH(address vault, uint256 shares, uint256 minEthOut) external nonReentrant returns (uint256 ethOut) {
+        IOrdoStakeVaultV4 v = IOrdoStakeVaultV4(vault);
+        address token = v.token();
+        IOrdoStakeFarm(v.farm()).withdrawFor(msg.sender, shares);
+        v.withdraw(shares, 0, 0, address(this));
+        uint256 t = IERC20(token).balanceOf(address(this));
+        if (t > 0) _swapExactIn(v.key(), false, t, 0);
+        ethOut = address(this).balance;
+        if (ethOut < minEthOut) revert MinOut(ethOut, minEthOut);
+        (bool ok,) = msg.sender.call{value: ethOut}("");
+        if (!ok) revert TransferFailed();
+        emit ZappedOut(msg.sender, vault, shares, ethOut, 0, true);
+    }
+
     /// @notice Token in: half is swapped to ETH in the pool, both are deposited, shares are staked for you.
     function zapToken(address vault, uint256 amount, uint256 minEthOut) external nonReentrant returns (uint256 shares) {
         return _zapToken(vault, amount, minEthOut);
@@ -445,13 +486,13 @@ contract OrdoStakeDeployerV4 {
         factory = msg.sender;
     }
 
-    function deploy(address posm, address stateView, PoolKey calldata key, address treasury, string calldata sym, address weth)
+    function deploy(address posm, address stateView, PoolKey calldata key, address treasury, string calldata sym, address weth, address zap)
         external
         returns (address vault, address farm)
     {
         if (msg.sender != factory) revert NotFactory();
         OrdoStakeVaultV4 v = new OrdoStakeVaultV4(posm, stateView, key, treasury, sym);
-        OrdoStakeFarm f = new OrdoStakeFarm(address(v), weth);
+        OrdoStakeFarm f = new OrdoStakeFarm(address(v), weth, zap);
         v.setFarm(address(f));
         return (address(v), address(f));
     }
@@ -509,7 +550,7 @@ contract OrdoStakeFactoryV4 {
         (uint160 sqrtP,,,) = stateView.getSlot0(id);
         if (sqrtP == 0) revert NotAPool();
 
-        (vault, farm) = deployer.deploy(address(positionManager), address(stateView), key, treasury, _symbol(key.currency1), weth);
+        (vault, farm) = deployer.deploy(address(positionManager), address(stateView), key, treasury, _symbol(key.currency1), weth, address(zap));
         _stakes.push(Stake(key.currency1, id, vault, farm, uint64(block.timestamp), msg.sender));
         _indexByPool[id] = _stakes.length;
         emit StakeCreated(_stakes.length - 1, key.currency1, id, vault, farm, msg.sender);

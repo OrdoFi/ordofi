@@ -57,13 +57,16 @@ contract OrdoLaunchForkTest is Test {
     function test_ordo_poolLadderStakeLifecycle() public onFork {
         // 1. The pool does not exist yet; create it at the launchpad's price.
         bytes32 plainId = mgr.toId(plain);
-        (uint160 before,,,) = IStateView(STATE_VIEW).getSlot0(plainId);
-        assertEq(before, 0, "no plain ETH pool yet");
-        (uint160 launchSqrt, int24 launchTick,,) = IStateView(STATE_VIEW).getSlot0(mgr.toId(launch));
-        assertGt(launchSqrt, 0, "the launchpad pool has a price");
-        vm.prank(team);
-        int24 tick = IPoolManagerInit(POOL_MANAGER).initialize(plain, launchSqrt);
-        assertEq(tick, launchTick, "opens at the same price");
+        (uint160 before, int24 tick,,) = IStateView(STATE_VIEW).getSlot0(plainId);
+        if (before == 0) {
+            // Not created yet on this fork: create it at the launchpad pool's price.
+            (uint160 launchSqrt, int24 launchTick,,) = IStateView(STATE_VIEW).getSlot0(mgr.toId(launch));
+            assertGt(launchSqrt, 0, "the launchpad pool has a price");
+            vm.prank(team);
+            tick = IPoolManagerInit(POOL_MANAGER).initialize(plain, launchSqrt);
+            assertEq(tick, launchTick, "opens at the same price");
+        }
+        // (The pool was created on mainnet on 3 Sep; from then on the test seeds the existing one.)
 
         // 2. Seed it: a two-sided ladder through the deployed manager.
         _buyOrdo(team, 5 ether);

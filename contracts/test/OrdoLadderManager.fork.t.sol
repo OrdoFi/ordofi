@@ -403,4 +403,134 @@ contract OrdoLadderManagerForkTest is Test {
         vm.expectRevert(OrdoLadderManager.AlreadyClosed.selector);
         mgr.addLiquidity{value: 0.1 ether}(id, r, block.timestamp + 60);
     }
+
+    // ------------------------------------------------------ gen 2: compound
+
+    function test_compound_putsTheFeesBackInWithNoExtraMoney() public onFork {
+        (uint256 id, int24 tick) = _open();
+        _churn();
+        OrdoLadderManager.Ladder memory before = mgr.ladder(id);
+        uint128 liq1Before = _liq(before.bins[1].tokenId);
+        uint256 tEth = treasury.balance;
+        uint256 tUsdg = IERC20(USDG).balanceOf(treasury);
+        uint256 aEth = alice.balance;
+        uint256 aUsdg = IERC20(USDG).balanceOf(alice);
+
+        // Ask for the mixed bin to take generous budgets; only the fees are there to fund it,
+        // so what is not covered by fees must come from Alice — and she sends nothing.
+        OrdoLadderManager.Rung[] memory r = new OrdoLadderManager.Rung[](1);
+        r[0] = OrdoLadderManager.Rung({tickLower: tick - 20, tickUpper: tick + 20, amount0: 0, amount1: 0, amount0Min: 0, amount1Min: 0});
+        // A rung with nothing in it is refused; size it to the fees the ladder holds.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OrdoLadderManager.EmptyRung.selector, 0));
+        mgr.compound(id, r, block.timestamp + 60);
+
+        // Read the fees by a dry collect on a snapshot, then compound for exactly that.
+        uint256 snap = vm.snapshotState();
+        vm.prank(alice);
+        (uint256 f0, uint256 f1) = mgr.collect(id);
+        vm.revertToState(snap);
+        assertTrue(f0 > 0 && f1 > 0, "fees on both sides");
+        r[0].amount0 = f0;
+        r[0].amount1 = f1;
+
+        vm.prank(alice);
+        (uint256 added0, uint256 added1) = mgr.compound(id, r, block.timestamp + 60);
+        assertTrue(added0 > 0 || added1 > 0, "something went back in");
+        assertLe(added0, f0);
+        assertLe(added1, f1);
+
+        // Treasury took its 1% of the gross fees; Alice paid nothing and got back only what the bin did not take.
+        assertEq(treasury.balance - tEth, (f0 * 100 / 99) / 100, "1% of WETH fees to treasury");
+        assertEq(IERC20(USDG).balanceOf(treasury) - tUsdg, (f1 * 100 / 99) / 100, "1% of USDG fees to treasury");
+        assertEq(alice.balance - aEth, f0 - added0, "unused fee share refunded as ETH");
+        assertEq(IERC20(USDG).balanceOf(alice) - aUsdg, f1 - added1, "unused USDG fee share refunded");
+
+        OrdoLadderManager.Ladder memory l = mgr.ladder(id);
+        assertEq(l.collected0, f0, "fees count as collected");
+        assertEq(l.collected1, f1);
+        assertEq(l.deposited0, before.deposited0 + added0, "and as deposited");
+        assertEq(l.deposited1, before.deposited1 + added1);
+        assertEq(l.bins.length, 3, "no new bin");
+        assertGt(_liq(l.bins[1].tokenId), liq1Before, "the mixed bin got deeper");
+        assertEq(address(mgr).balance, 0);
+        assertEq(IERC20(USDG).balanceOf(address(mgr)), 0);
+        assertEq(IERC20(WETH).balanceOf(address(mgr)), 0);
+    }
+
+    function test_compound_takesOnlyTheDifferenceFromTheCaller() public onFork {
+        (uint256 id, int24 tick) = _open();
+        _churn();
+        uint256 snap = vm.snapshotState();
+        vm.prank(alice);
+        (uint256 f0,) = mgr.collect(id);
+        vm.revertToState(snap);
+
+        // A new ETH-only bin above, budgeted for the fees plus 1 ETH more: Alice sends 1 ETH.
+        OrdoLadderManager.Rung[] memory r = new OrdoLadderManager.Rung[](1);
+        r[0] = OrdoLadderManager.Rung({tickLower: tick + 70, tickUpper: tick + 100, amount0: f0 + 1 ether, amount1: 0, amount0Min: 0, amount1Min: 0});
+        uint256 aEth = alice.balance;
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(OrdoLadderManager.InsufficientETH.selector, 0.5 ether, 1 ether));
+        mgr.compound{value: 0.5 ether}(id, r, block.timestamp + 60);
+
+        vm.prank(alice);
+        (uint256 added0,) = mgr.compound{value: 1 ether}(id, r, block.timestamp + 60);
+        assertApproxEqAbs(added0, f0 + 1 ether, 1000, "an out-of-range single-sided bin takes its whole budget, to mint rounding");
+        assertEq(aEth - alice.balance, added0 - f0, "Alice paid exactly what the fees did not cover");
+        // The USDG fees were not asked for by any rung, so they were paid out as on a collect.
+        OrdoLadderManager.Ladder memory l = mgr.ladder(id);
+        assertEq(l.bins.length, 4);
+        assertEq(address(mgr).balance, 0);
+        assertEq(IERC20(USDG).balanceOf(address(mgr)), 0);
+    }
+
+    function test_compound_refusedOnForeignOrClosedLadder() public onFork {
+        (uint256 id, int24 tick) = _open();
+        OrdoLadderManager.Rung[] memory r = new OrdoLadderManager.Rung[](1);
+        r[0] = OrdoLadderManager.Rung({tickLower: tick + 70, tickUpper: tick + 100, amount0: 0.1 ether, amount1: 0, amount0Min: 0, amount1Min: 0});
+        vm.deal(whale, 1 ether);
+        vm.prank(whale);
+        vm.expectRevert(OrdoLadderManager.NotOwner.selector);
+        mgr.compound{value: 0.1 ether}(id, r, block.timestamp + 60);
+        vm.prank(alice);
+        mgr.close(id);
+        vm.prank(alice);
+        vm.expectRevert(OrdoLadderManager.AlreadyClosed.selector);
+        mgr.compound{value: 0.1 ether}(id, r, block.timestamp + 60);
+    }
+
+    // --------------------------------------------------- gen 2: collectMany
+
+    function test_collectMany_collectsEveryLadderOfTheCallerInOneCall() public onFork {
+        (uint256 a,) = _open();
+        (uint256 b,) = _open();
+        _churn();
+        uint256 snap = vm.snapshotState();
+        vm.prank(alice);
+        (uint256 a0, uint256 a1) = mgr.collect(a);
+        vm.prank(alice);
+        (uint256 b0, uint256 b1) = mgr.collect(b);
+        vm.revertToState(snap);
+
+        uint256 aEth = alice.balance;
+        uint256 aUsdg = IERC20(USDG).balanceOf(alice);
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = a;
+        ids[1] = b;
+        vm.prank(alice);
+        (uint256 o0, uint256 o1) = mgr.collectMany(ids);
+        assertEq(o0, a0 + b0, "same as two collects");
+        assertEq(o1, a1 + b1);
+        assertEq(alice.balance - aEth, o0);
+        assertEq(IERC20(USDG).balanceOf(alice) - aUsdg, o1);
+        assertEq(mgr.ladder(a).collected0, a0);
+        assertEq(mgr.ladder(b).collected1, b1);
+
+        // A ladder that is not the caller's poisons the whole call.
+        vm.prank(whale);
+        vm.expectRevert(OrdoLadderManager.NotOwner.selector);
+        mgr.collectMany(ids);
+        assertEq(mgr.GENERATION(), 2);
+    }
 }

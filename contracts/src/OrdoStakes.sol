@@ -72,11 +72,18 @@ interface ISwapRouter02 {
 interface IOrdoStakeFarm {
     function notifyRewardAmount(uint256 reward) external;
     function stakeFor(address account, uint256 amount) external;
+    function withdrawFor(address account, uint256 amount) external;
     function stakingToken() external view returns (address);
+}
+
+/// What the farm needs of its zap: a WETH zap that stakes for someone else.
+interface IOrdoStakeZapFor {
+    function zapWETHFor(address vault, uint256 amount, uint256 minTokenOut, address user) external returns (uint256 shares);
 }
 
 interface IOrdoStakeVault {
     function deposit(uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address to) external payable returns (uint256 shares, uint256 used0, uint256 used1);
+    function withdraw(uint256 shares, uint256 amount0Min, uint256 amount1Min, address to) external returns (uint256 amount0, uint256 amount1);
     function pool() external view returns (address);
     function token0() external view returns (address);
     function token1() external view returns (address);
@@ -353,10 +360,46 @@ contract OrdoStakeFarm is Guard {
     event RewardPaid(address indexed user, uint256 reward);
 
     error NotVault();
+    error NotZap();
     error ZeroAmount();
     error TransferFailed();
 
-    constructor(address vault_, address weth_) { vault = vault_; stakingToken = IERC20(vault_); rewardsToken = IERC20(weth_); }
+    /// The one contract that may unstake on a holder's behalf (to redeem for them
+    /// in the same transaction) and that rewards are handed to for compounding.
+    address public immutable zap;
+    /// @notice Second generation: adds `compound` and `withdrawFor`.
+    uint8 public constant GENERATION = 2;
+    event Compounded(address indexed user, uint256 reward, uint256 shares);
+
+    constructor(address vault_, address weth_, address zap_) { vault = vault_; stakingToken = IERC20(vault_); rewardsToken = IERC20(weth_); zap = zap_; }
+
+    /// @notice Re-stake what you have earned, in one transaction and with nothing
+    ///         taken: the WETH goes to the zap, half becomes the token in the pool,
+    ///         both are deposited, and the new shares are staked for you here.
+    ///         Not locked, on purpose: the zap stakes back into this farm.
+    function compound(uint256 minTokenOut) external update(msg.sender) returns (uint256 shares) {
+        uint256 r = rewards[msg.sender];
+        if (r == 0) revert ZeroAmount();
+        rewards[msg.sender] = 0;
+        rewardsToken.approve(zap, r);
+        shares = IOrdoStakeZapFor(zap).zapWETHFor(vault, r, minTokenOut, msg.sender);
+        emit RewardPaid(msg.sender, r);
+        emit Compounded(msg.sender, r, shares);
+    }
+
+    /// @notice The zap unstaking for a holder who is leaving through it: the
+    ///         shares go to the zap, which redeems them for the holder in the same
+    ///         transaction; pending rewards go straight to the holder.
+    function withdrawFor(address account, uint256 amount) external nonReentrant update(account) {
+        if (msg.sender != zap) revert NotZap();
+        if (amount == 0) revert ZeroAmount();
+        totalSupply -= amount;
+        balanceOf[account] -= amount;
+        if (!stakingToken.transfer(msg.sender, amount)) revert TransferFailed();
+        emit Withdrawn(account, amount);
+        uint256 r = rewards[account];
+        if (r > 0) { rewards[account] = 0; if (!rewardsToken.transfer(account, r)) revert TransferFailed(); emit RewardPaid(account, r); }
+    }
 
     function lastTimeRewardApplicable() public view returns (uint256) { return block.timestamp < periodFinish ? block.timestamp : periodFinish; }
     function rewardPerToken() public view returns (uint256) {
@@ -442,6 +485,50 @@ contract OrdoStakeZap is Guard {
         _swap(address(weth), token, v.fee(), amount / 2, minTokenOut);
         shares = _depositAndStake(v, token, msg.sender);
         emit Zapped(msg.sender, vault, address(weth), amount, shares);
+    }
+
+    /// @notice `zapWETH` staking for someone else. The farm's `compound` uses it:
+    ///         the farm pays the WETH, the holder gets the shares.
+    function zapWETHFor(address vault, uint256 amount, uint256 minTokenOut, address user) external nonReentrant returns (uint256 shares) {
+        if (amount == 0) revert NothingIn();
+        if (!weth.transferFrom(msg.sender, address(this), amount)) revert TransferFailed();
+        IOrdoStakeVault v = IOrdoStakeVault(vault);
+        address token = v.token0() == address(weth) ? v.token1() : v.token0();
+        _swap(address(weth), token, v.fee(), amount / 2, minTokenOut);
+        shares = _depositAndStake(v, token, user);
+        emit Zapped(user, vault, address(weth), amount, shares);
+    }
+
+    event ZappedOut(address indexed user, address indexed vault, uint256 shares, uint256 ethOut, uint256 tokenOut, bool single);
+    error MinOut(uint256 got, uint256 want);
+
+    /// @notice Leave in one transaction: unstake from the farm, redeem the shares,
+    ///         receive both coins — ETH and the token — plus any pending rewards.
+    function zapOut(address vault, uint256 shares, uint256 minEth, uint256 minToken) external nonReentrant returns (uint256 ethOut, uint256 tokenOut) {
+        IOrdoStakeVault v = IOrdoStakeVault(vault);
+        IOrdoStakeFarm(v.farm()).withdrawFor(msg.sender, shares);
+        bool weth0 = v.token0() == address(weth);
+        (uint256 a0, uint256 a1) = v.withdraw(shares, weth0 ? minEth : minToken, weth0 ? minToken : minEth, msg.sender);
+        (ethOut, tokenOut) = weth0 ? (a0, a1) : (a1, a0);
+        emit ZappedOut(msg.sender, vault, shares, ethOut, tokenOut, false);
+    }
+
+    /// @notice Leave to ETH only: unstake, redeem, sell the token side in the
+    ///         pool, receive ETH. `minEthOut` is on the total you end up with.
+    function zapOutToETH(address vault, uint256 shares, uint256 minEthOut) external nonReentrant returns (uint256 ethOut) {
+        IOrdoStakeVault v = IOrdoStakeVault(vault);
+        address token = v.token0() == address(weth) ? v.token1() : v.token0();
+        IOrdoStakeFarm(v.farm()).withdrawFor(msg.sender, shares);
+        v.withdraw(shares, 0, 0, address(this)); // the WETH side arrives as ETH
+        uint256 t = IERC20(token).balanceOf(address(this));
+        if (t > 0) _swap(token, address(weth), v.fee(), t, 0);
+        uint256 w = weth.balanceOf(address(this));
+        if (w > 0) weth.withdraw(w);
+        ethOut = address(this).balance;
+        if (ethOut < minEthOut) revert MinOut(ethOut, minEthOut);
+        (bool ok,) = msg.sender.call{value: ethOut}("");
+        if (!ok) revert TransferFailed();
+        emit ZappedOut(msg.sender, vault, shares, ethOut, 0, true);
     }
 
     /// @notice Token in: half is swapped to WETH, both are deposited, shares are staked for you.
@@ -580,7 +667,7 @@ contract OrdoStakeFactory {
         address token = t0 == weth ? t1 : t0;
         string memory sym = _symbol(token);
         OrdoStakeVault v = new OrdoStakeVault(address(positionManager), router, pool, treasury, sym);
-        OrdoStakeFarm f = new OrdoStakeFarm(address(v), weth);
+        OrdoStakeFarm f = new OrdoStakeFarm(address(v), weth, address(zap));
         v.setFarm(address(f));
         vault = address(v);
         farm = address(f);

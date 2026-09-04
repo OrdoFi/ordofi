@@ -309,4 +309,110 @@ contract OrdoStakesForkTest is Test {
         (bool ok,) = address(vault).call{value: 1 ether}("");
         assertFalse(ok);
     }
+
+    // ------------------------------------------------- gen 2: compound, zap out
+
+    /// Rewards accrue to Alice while Bob trades; compound puts them back as
+    /// staked shares in one call, with nothing taken and nothing left behind.
+    function test_compound_restakesRewardsInOneCallWithNothingTaken() public onFork {
+        vm.prank(alice);
+        uint256 shares = zap.zapETH{value: 2 ether}(address(vault), 0);
+        _churn();
+        vault.harvest();
+        vm.warp(block.timestamp + 3 days);
+        uint256 earned = farm.earned(alice);
+        assertGt(earned, 0, "rewards streamed");
+        // The deposit inside the compound harvests the vault, and a harvest pays
+        // the treasury its 1% of *pool* fees regardless. Measure that on a
+        // snapshot so the compound itself can be shown to take nothing.
+        uint256 snap = vm.snapshotState();
+        uint256 tBefore = IERC20(WETH).balanceOf(treasury) + treasury.balance;
+        vault.harvest();
+        uint256 harvestCut = IERC20(WETH).balanceOf(treasury) + treasury.balance - tBefore;
+        vm.revertToState(snap);
+        uint256 tAll = IERC20(WETH).balanceOf(treasury) + treasury.balance;
+        uint256 aEth = alice.balance;
+
+        // The farm pays out exactly what was earned — to the zap, not to Alice.
+        vm.expectEmit(true, false, false, true, address(farm));
+        emit OrdoStakeFarm.RewardPaid(alice, earned);
+        vm.prank(alice);
+        uint256 more = farm.compound(0);
+        assertGt(more, 0, "new shares");
+        assertEq(farm.balanceOf(alice), shares + more, "staked on top of the old ones");
+        assertEq(farm.earned(alice), 0, "rewards spent");
+        // Treasury saw at most the harvest's cut plus 1% of the fee the compound's own swap paid the pool: nothing from the rewards.
+        assertLe(IERC20(WETH).balanceOf(treasury) + treasury.balance - tAll, harvestCut + earned / 100, "nothing taken from the rewards themselves");
+        assertGe(alice.balance, aEth, "Alice paid nothing (dust, if any, came back to her)");
+        assertEq(IERC20(WETH).balanceOf(address(zap)), 0);
+        assertEq(address(zap).balance, 0);
+        assertEq(IERC20(NVDA).balanceOf(address(zap)), 0);
+        assertEq(vault.balanceOf(address(zap)), 0);
+        assertEq(farm.GENERATION(), 2);
+        assertEq(farm.zap(), address(zap));
+
+        vm.prank(alice);
+        vm.expectRevert(OrdoStakeFarm.ZeroAmount.selector);
+        farm.compound(0);
+    }
+
+    function test_zapOut_unstakesAndRedeemsToBothCoinsInOneCall() public onFork {
+        vm.prank(alice);
+        uint256 sa = zap.zapETH{value: 2 ether}(address(vault), 0);
+        vm.prank(bob);
+        uint256 sb = zap.zapETH{value: 2 ether}(address(vault), 0);
+        _churn();
+        vault.harvest();
+        vm.warp(block.timestamp + 1 days);
+        uint256 rewards = farm.earned(bob);
+        assertGt(rewards, 0);
+
+        uint256 ethBefore = bob.balance;
+        uint256 tokBefore = IERC20(NVDA).balanceOf(bob);
+        uint256 wethBefore = IERC20(WETH).balanceOf(bob);
+        vm.prank(bob);
+        (uint256 ethOut, uint256 tokOut) = zap.zapOut(address(vault), sb, 0, 0);
+        assertTrue(ethOut > 0 && tokOut > 0, "both sides came back");
+        assertEq(bob.balance - ethBefore, ethOut, "the ETH side as native ETH");
+        assertEq(IERC20(NVDA).balanceOf(bob) - tokBefore, tokOut);
+        assertEq(IERC20(WETH).balanceOf(bob) - wethBefore, rewards, "pending rewards paid along the way");
+        assertEq(farm.balanceOf(bob), 0, "unstaked");
+        assertEq(vault.balanceOf(bob), 0, "and redeemed, no shares left in the wallet");
+        assertEq(vault.balanceOf(address(zap)), 0);
+        assertEq(farm.balanceOf(alice), sa, "Alice untouched");
+        assertGt(ethOut, 0.9 ether, "his ETH half");
+
+        // Only the zap may unstake for someone.
+        vm.prank(bob);
+        vm.expectRevert(OrdoStakeFarm.NotZap.selector);
+        farm.withdrawFor(alice, 1);
+        // And it only works for the caller's own shares.
+        vm.prank(bob);
+        vm.expectRevert();
+        zap.zapOut(address(vault), 1, 0, 0);
+    }
+
+    function test_zapOutToETH_leavesToEthOnlyAndHonoursTheFloor() public onFork {
+        vm.prank(alice);
+        uint256 sa = zap.zapETH{value: 2 ether}(address(vault), 0);
+        uint256 half = sa / 2;
+        uint256 ethBefore = alice.balance;
+        uint256 tokBefore = IERC20(NVDA).balanceOf(alice);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        zap.zapOutToETH(address(vault), half, 100 ether);
+
+        vm.prank(alice);
+        uint256 out = zap.zapOutToETH(address(vault), half, 0.9 ether);
+        assertEq(alice.balance - ethBefore, out, "everything came back as ETH");
+        assertGt(out, 0.9 ether, "about half of what went in, less the swap's fee");
+        assertLt(out, 1.05 ether);
+        assertEq(IERC20(NVDA).balanceOf(alice), tokBefore, "no token");
+        assertEq(farm.balanceOf(alice), sa - half, "the other half is still staked");
+        assertEq(vault.balanceOf(address(zap)), 0);
+        assertEq(address(zap).balance, 0);
+        assertEq(IERC20(NVDA).balanceOf(address(zap)), 0);
+        assertEq(IERC20(WETH).balanceOf(address(zap)), 0);
+    }
 }

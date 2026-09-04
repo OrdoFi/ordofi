@@ -58,6 +58,9 @@ contract OrdoLadderManagerV4 {
     /// @notice Protocol fee on collected swap fees, in basis points.
     uint256 public constant FEE_BPS = 100;
     uint256 public constant MAX_RUNGS = 40;
+    /// @notice Second generation: adds `compound` and `collectMany`. Ladders in
+    ///         the first manager stay there; the UI reads both.
+    uint8 public constant GENERATION = 2;
 
     address private constant NATIVE = V4Actions.NATIVE;
     uint8 private constant INCREASE_LIQUIDITY = V4Actions.INCREASE_LIQUIDITY;
@@ -298,6 +301,75 @@ contract OrdoLadderManagerV4 {
         (owner0, owner1) = _splitFees(l, ladderId, fees0, fees1);
     }
 
+    /// @notice Collect the fees of several ladders in one transaction. Every one
+    ///         must be the caller's and open. Returns the totals paid to the owner,
+    ///         summed across pools — informational, as each ladder pays in its own coins.
+    function collectMany(uint256[] calldata ladderIds) external nonReentrant returns (uint256 owner0, uint256 owner1) {
+        for (uint256 i = 0; i < ladderIds.length; i++) {
+            Ladder storage l = _ladder(ladderIds[i]);
+            if (l.closedAt != 0) revert AlreadyClosed();
+            (uint256 f0, uint256 f1) = _collectFees(l, _openIndices(l));
+            (uint256 o0, uint256 o1) = _splitFees(l, ladderIds[i], f0, f1);
+            owner0 += o0;
+            owner1 += o1;
+        }
+    }
+
+    // ------------------------------------------------------------ compound
+
+    /// @notice Collect this ladder's fees and put them straight back in, in one
+    ///         transaction, together with whatever else is sent. The 1% applies
+    ///         to the fees as on any collect; the owner's share stays here and
+    ///         funds the rungs, so only the difference is taken from the caller
+    ///         (ETH as value for an ETH pool's currency0, tokens by allowance).
+    ///         Rungs are the same as for `addLiquidity`: matching ticks top a bin
+    ///         up, others become new bins. Whatever the pool does not take, fees
+    ///         included, is refunded.
+    function compound(uint256 ladderId, Rung[] calldata rungs, uint256 deadline)
+        external
+        payable
+        nonReentrant
+        returns (uint256 added0, uint256 added1)
+    {
+        return _compound(ladderId, rungs, deadline);
+    }
+
+    /// @notice `compound` with the token side allowed by an EIP-2612 signature.
+    function compoundWithPermit(uint256 ladderId, Rung[] calldata rungs, uint256 deadline, Permit calldata permit)
+        external
+        payable
+        nonReentrant
+        returns (uint256 added0, uint256 added1)
+    {
+        _permit(permit);
+        return _compound(ladderId, rungs, deadline);
+    }
+
+    function _compound(uint256 ladderId, Rung[] calldata rungs, uint256 deadline) private returns (uint256 added0, uint256 added1) {
+        if (block.timestamp > deadline) revert Expired();
+        if (rungs.length == 0) revert NoRungs();
+        Ladder storage l = _ladder(ladderId);
+        if (l.closedAt != 0) revert AlreadyClosed();
+
+        PoolKey memory key = l.key;
+        (uint160 sqrtP, int24 tick,,) = stateView.getSlot0(l.poolId);
+        (uint256 total0, uint256 total1) = _validate(rungs, key.tickSpacing);
+        uint256 newBins = _countNew(l, rungs);
+        if (l.openBins + newBins > MAX_RUNGS) revert TooManyRungs();
+
+        // Fees first: the treasury's cut leaves, the owner's share stays as funding.
+        (uint256 fees0, uint256 fees1) = _collectFees(l, _openIndices(l));
+        (uint256 have0, uint256 have1) = _keepFees(l, ladderId, fees0, fees1);
+        _fund(key, total0 > have0 ? total0 - have0 : 0, total1 > have1 ? total1 - have1 : 0);
+
+        (added0, added1) = _place(l, rungs, sqrtP, tick, deadline);
+        l.deposited0 += added0;
+        l.deposited1 += added1;
+
+        _refund(key);
+        emit LiquidityAdded(ladderId, msg.sender, added0, added1, newBins);
+    }
+
     // --------------------------------------------------------------- close
 
     /// @notice Withdraw chosen bins: their fees (1% to treasury) and their
@@ -516,6 +588,22 @@ contract OrdoLadderManagerV4 {
             l.closedAt = uint64(block.timestamp);
             emit LadderClosed(ladderId, l.owner);
         }
+    }
+
+    /// `_splitFees` for a compound: same cut, same event, same accounting, but
+    /// the owner's share is kept here to fund the rungs instead of being paid out.
+    function _keepFees(Ladder storage l, uint256 ladderId, uint256 fees0, uint256 fees1) private returns (uint256 owner0, uint256 owner1) {
+        if (fees0 == 0 && fees1 == 0) return (0, 0);
+        PoolKey memory key = l.key;
+        uint256 cut0 = (fees0 * FEE_BPS) / 10_000;
+        uint256 cut1 = (fees1 * FEE_BPS) / 10_000;
+        owner0 = fees0 - cut0;
+        owner1 = fees1 - cut1;
+        l.collected0 += owner0;
+        l.collected1 += owner1;
+        _pay(treasury, key.currency0, cut0);
+        _pay(treasury, key.currency1, cut1);
+        emit FeesCollected(ladderId, l.owner, owner0, owner1, cut0, cut1);
     }
 
     function _splitFees(Ladder storage l, uint256 ladderId, uint256 fees0, uint256 fees1) private returns (uint256 owner0, uint256 owner1) {
