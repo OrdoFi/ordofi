@@ -9,7 +9,7 @@
  * nobody can check.
  */
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { privateKeyToAccount } from "viem/accounts";
 import { createPublicClient, createWalletClient, http, type Address, type Hex } from "viem";
 import { ENDPOINTS, normalizePrivateKey, robinhoodChain } from "@ordofi/core";
@@ -27,7 +27,18 @@ import type { Bid } from "./types.js";
 
 const CHAIN_ID = 4663;
 const AUCTIONEER_KEY = normalizePrivateKey(process.env.ORDO_AUCTIONEER_KEY, "ORDO_AUCTIONEER_KEY");
-const LOG = process.env.ORDO_RECEIPT_LOG ?? "data/receipts.ndjson";
+/**
+ * Absolute, and derived the same way main.ts derives the data directory. A
+ * relative default resolves against the working directory, which is a property
+ * of how the process happened to be started: `data/receipts.ndjson` is the
+ * mounted volume when the container runs from /app and a directory nobody ever
+ * looks in when it does not. The failure is silent in both directions — the
+ * append is best-effort, and the log only turns out to be empty after a
+ * restart has already discarded the history.
+ */
+const LOG =
+  process.env.ORDO_RECEIPT_LOG ??
+  join(process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../../data"), "receipts.ndjson");
 const KEEP = Number(process.env.ORDO_RECEIPT_KEEP ?? 5000);
 
 const account = AUCTIONEER_KEY ? privateKeyToAccount(AUCTIONEER_KEY) : null;
@@ -36,6 +47,7 @@ const sign = (args: any) => account!.signTypedData(args);
 /** Keyed by the signed bytes32 form, so a uuid and its bytes32 find the same receipt. */
 const byId = new Map<string, AuctionReceipt>();
 const leaves: Hex[] = [];
+let warnedUnpersisted = false;
 
 function remember(receipt: AuctionReceipt): void {
   byId.set(receipt.opportunityId.toLowerCase(), receipt);
@@ -76,6 +88,11 @@ function hydrate(): void {
 
 export function receiptsEnabled(): boolean {
   return account !== null;
+}
+
+/** Where the history is kept. Printed at boot: an operator should not have to guess. */
+export function receiptLogPath(): string {
+  return LOG;
 }
 
 export function auctioneerAddress(): Address | null {
@@ -129,9 +146,15 @@ export async function publishReceipt(
   try {
     mkdirSync(dirname(LOG), { recursive: true });
     appendFileSync(LOG, JSON.stringify(receipt) + "\n");
-  } catch {
+  } catch (e) {
     // A receipt that cannot be persisted is still worth serving live; losing
-    // the log should not take the auction down.
+    // the log should not take the auction down. It must not be quiet about it
+    // either: the consequence arrives one restart later, as a root covering
+    // fewer receipts than the last one, which the contract rejects.
+    if (!warnedUnpersisted) {
+      warnedUnpersisted = true;
+      console.error(`[receipts] cannot write ${LOG} (${(e as Error).message}) — receipts will not survive a restart`);
+    }
   }
 
   void maybeCommitRoot();

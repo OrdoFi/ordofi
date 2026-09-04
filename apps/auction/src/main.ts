@@ -21,6 +21,7 @@ import {
   currentRoot,
   getReceipt,
   publishReceipt,
+  receiptLogPath,
   receiptsEnabled,
   recentReceipts,
 } from "./receipts.js";
@@ -431,7 +432,7 @@ server.listen(PORT, () => {
   console.log(
     `OrdoFi auction | verifiable receipts=${
       receiptsEnabled()
-        ? `on (signed by ${auctioneerAddress()}) · GET /receipts /receipts/root`
+        ? `on (signed by ${auctioneerAddress()}) · GET / /receipts /receipts/root · log ${receiptLogPath()}`
         : "off (no ORDO_AUCTIONEER_KEY) — outcomes cannot be audited"
     } · on-chain anchoring=${
       anchoringEnabled()
