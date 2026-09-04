@@ -195,6 +195,9 @@ services:
       ORDO_RPC_URLS: ${ORDO_RPC_URLS_ARB:-${ORDO_RPC_URLS:-}}
       ORDO_ARB_INTERVAL_MS: ${ORDO_ARB_INTERVAL_MS:-12000}
       ORDO_ARB_KEY: ${ORDO_ARB_KEY:-}
+      # The sequencer feed, relayed by the auction. Without it the bot scans on
+      # a timer, which on a 100 ms chain arrives after every race is over.
+      ORDO_FEED_WS: ${ORDO_FEED_WS:-ws://auction:8548/feed}
       ORDO_ARB_MIN_PROFIT_ETH: ${ORDO_ARB_MIN_PROFIT_ETH:-0.000004}
       ORDO_ARB_GAS_RESERVE_ETH: ${ORDO_ARB_GAS_RESERVE_ETH:-0.0008}
       ORDO_ARB_MAX_NOTIONAL_ETH: ${ORDO_ARB_MAX_NOTIONAL_ETH:-}

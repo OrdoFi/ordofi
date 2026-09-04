@@ -11,6 +11,7 @@ import { ROUTER } from "@ordofi/core/router";
 import { QUOTER_V2, buildCycleSwap, poolTiers as tiersFor, quoteCycle as quoteCycleShared, type Cycle } from "@ordofi/core/arb";
 import { proveDelivery } from "@ordofi/core/guard";
 import { Telemetry, edgeBps, wethReturned } from "./telemetry.js";
+import { subscribeFeed, tokensTouched } from "./feed.js";
 
 /**
  * OrdoFi house arbitrage bot — the profit engine that seeds the loop.
@@ -63,6 +64,8 @@ const MAX_NOTIONAL = process.env.ORDO_ARB_MAX_NOTIONAL_ETH
   ? parseEther(process.env.ORDO_ARB_MAX_NOTIONAL_ETH)
   : null;
 const INTERVAL_MS = Number(process.env.ORDO_ARB_INTERVAL_MS ?? 12000);
+// The auction's relay of the sequencer feed. Empty disables event-driven scanning.
+const FEED_WS = process.env.ORDO_FEED_WS ?? "";
 // Circuit breaker. Every lost race costs gas and nothing else, but a long run
 // of them unattended would still bleed the wallet; past this much gas in a
 // rolling day the bot keeps scanning and stops sending.
@@ -413,4 +416,35 @@ setInterval(() => { discoverCycles().then((c) => { if (c.length) cycles = rankCy
 if (cycles.length === 0) {
   console.warn("[arb] no cross-tier cycles found — the arb surface is empty right now; will re-scan every 10 min");
 }
+
+// The timer is now the backstop, not the strategy: it catches dislocations
+// that drifted open without a swap of their own (a pool going stale against a
+// moving market). The feed below is what actually finds things in time.
 setInterval(() => { tick(cycles).catch((e) => console.warn(`[arb] tick: ${(e as Error).message}`)); }, INTERVAL_MS);
+
+/** Tokens we have a cycle for; the feed is filtered down to these. */
+const trackedTokens = (): string[] => [...new Set(cycles.flatMap((c) => c.tokens.slice(1, -1).map((t) => t.toLowerCase())))];
+
+if (FEED_WS) {
+  let tracked = trackedTokens();
+  setInterval(() => { tracked = trackedTokens(); }, 600_000);
+
+  subscribeFeed({
+    url: FEED_WS,
+    log: (l) => console.log(l),
+    onTxs: (txs) => {
+      if (busy || halted) return; // a scan is already running, or we have stopped firing
+      const hit = new Set<string>();
+      for (const { raw } of txs) for (const t of tokensTouched(raw, tracked)) hit.add(t);
+      if (hit.size === 0) return;
+
+      // Only the cycles through tokens this batch actually moved. A handful of
+      // quotes, issued now, instead of three hundred issued half a minute late.
+      const candidates = cycles.filter((c) => c.tokens.slice(1, -1).some((t) => hit.has(t.toLowerCase())));
+      if (candidates.length === 0) return;
+      tick(candidates).catch((e) => console.warn(`[arb] feed tick: ${(e as Error).message}`));
+    },
+  });
+} else {
+  console.warn("[arb] ORDO_FEED_WS is not set — falling back to the timer alone, which is too slow to win a race");
+}
