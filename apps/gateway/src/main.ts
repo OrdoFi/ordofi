@@ -8,6 +8,7 @@ import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
+import { quoteSwap } from "./ordoswap.js";
 import {
   BLOCK_MS,
   HedgeBudget,
@@ -202,6 +203,39 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
     }
     case "ordo_bundlerInfo":
       return bundlerInfo(upstream, params[0] as string);
+    case "ordo_quoteSwap": {
+      if (!CONFIG.ordoSwapAddress) throw new RpcError(-32601, "ordo_quoteSwap is not enabled on this gateway (ORDO_SWAP_ADDRESS unset)");
+      const p = (params[0] ?? {}) as Record<string, unknown>;
+      const addr = (v: unknown, name: string): `0x${string}` => {
+        if (typeof v !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(v)) throw new RpcError(-32602, `ordo_quoteSwap: ${name} must be an address`);
+        return v as `0x${string}`;
+      };
+      const big = (v: unknown, name: string, optional = false): bigint => {
+        if (v === undefined || v === null) {
+          if (optional) return 0n;
+          throw new RpcError(-32602, `ordo_quoteSwap: ${name} is required`);
+        }
+        try {
+          return BigInt(v as string);
+        } catch {
+          throw new RpcError(-32602, `ordo_quoteSwap: ${name} must be a number (hex or decimal string)`);
+        }
+      };
+      metrics.inc("swap_quote_total", { key: apiKey.label });
+      return quoteSwap(
+        {
+          tokenIn: addr(p.tokenIn, "tokenIn"),
+          tokenOut: addr(p.tokenOut, "tokenOut"),
+          fee: Number(p.fee),
+          amountIn: big(p.amountIn, "amountIn"),
+          amountOutMinimum: big(p.amountOutMinimum, "amountOutMinimum", true),
+          recipient: addr(p.recipient, "recipient"),
+          nativeOut: Boolean(p.nativeOut),
+          from: p.from === undefined ? undefined : addr(p.from, "from"),
+        },
+        { rpc: upstream, ordoSwap: CONFIG.ordoSwapAddress as `0x${string}` },
+      );
+    }
     default:
       return upstream(method, params);
   }
@@ -511,7 +545,7 @@ server.listen(CONFIG.port, () => {
     `OrdoFi gateway | fast path: chainId/net_version local, head cached ${BLOCK_MS}ms, fees 1s, mined receipts 10m; hedged reads after ${CONFIG.hedgeAfterMs}ms across ${rpcUrls().length} upstream(s), at most ${Math.round(CONFIG.hedgeBudgetRatio * 100)}% of reads; anon ${CONFIG.anonRateLimit} upstream reads + ${CONFIG.anonSendRateLimit} sends /min/IP, ${CONFIG.anonMaxInflight} in flight/IP`,
   );
   console.log(
-    `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo`,
+    `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo${CONFIG.ordoSwapAddress ? `, ordo_quoteSwap (OrdoSwap ${CONFIG.ordoSwapAddress})` : ""}`,
   );
   const auctionKeys = [...apiKeys.values()].filter((k) => k.mode === "auction");
   console.log(

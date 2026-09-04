@@ -157,7 +157,13 @@ export const CONFIG = {
     "net_listening",
     "eth_sendRawTransaction",
     "ordo_simulate",
+    "ordo_quoteSwap",
   ]),
+  /**
+   * OrdoSwap (contracts/src/OrdoSwap.sol): the swap that runs its own
+   * back-run and pays the surplus to the user. Empty disables ordo_quoteSwap.
+   */
+  ordoSwapAddress: (process.env.ORDO_SWAP_ADDRESS ?? "").trim().toLowerCase(),
 };
 
 /** Simple fixed-window per-key rate limiter. */

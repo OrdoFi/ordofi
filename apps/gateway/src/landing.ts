@@ -137,7 +137,7 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
   </div>
   <div>
     <h2>From code</h2>
-    <p class="lede">Standard <code>eth_*</code> methods pass through. OrdoFi adds <code>ordo_simulate</code>, <code>ordo_sendPrivateTransaction</code>, <code>ordo_sendBundle</code> and <code>ordo_bundlerInfo</code>.</p>
+    <p class="lede">Standard <code>eth_*</code> methods pass through. OrdoFi adds <code>ordo_simulate</code>, <code>ordo_sendPrivateTransaction</code>, <code>ordo_sendBundle</code>, <code>ordo_bundlerInfo</code> and <code>ordo_quoteSwap</code> — a swap whose back-run runs inside the same transaction and pays the surplus to the user.</p>
 <pre><span class="c"># dry-run a signed transaction, no key needed</span>
 curl https://rpc.ordofi.network <span class="k">\\</span>
   -H <span class="s">'content-type: application/json'</span> <span class="k">\\</span>
