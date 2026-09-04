@@ -115,6 +115,8 @@ async function signedBackrun(best: Sized, bidWei: bigint): Promise<Hex> {
 
 // --- bond upkeep --------------------------------------------------------------
 
+let warnedBroke = false;
+
 async function bondBalance(): Promise<bigint> {
   const data = encodeFunctionData({ abi: BOND_ABI, functionName: "bond", args: [account.address] });
   const out = (await rpcFetch("eth_call", [{ to: SETTLEMENT, data }, "latest"])) as Hex;
@@ -134,6 +136,22 @@ async function ensureBond(): Promise<void> {
   const topUp = BOND_TARGET - bond;
   const balanceHex = (await rpcFetch("eth_getBalance", [account.address, "latest"])) as string;
   const balance = BigInt(balanceHex);
+
+  // A wallet that cannot cover the top-up is a funding problem, not a fault:
+  // say so once and carry on. Estimating the bond transaction anyway throws
+  // "insufficient funds", which at boot used to kill the process — a bot that
+  // exits because it is poor cannot even report that it is poor.
+  if (balance <= topUp) {
+    if (!warnedBroke) {
+      warnedBroke = true;
+      console.warn(
+        `[bot] bond is ${formatEther(bond)} ETH, target ${formatEther(BOND_TARGET)}, and the wallet holds ${formatEther(balance)} ETH — ` +
+          `not enough to top up. Bids will be refused by bond gating until ${account.address} is funded.`,
+      );
+    }
+    return;
+  }
+  warnedBroke = false;
 
   // Bonding runs OrdoSettlement.receive(), which writes storage. The
   // self-transfer estimate is nowhere near enough: reusing it sent three
@@ -204,7 +222,9 @@ const strategy = (): StrategyConfig => ({
 // --- the bot -------------------------------------------------------------------
 
 await refreshChainState();
-await ensureBond();
+// Never fatal: the bot is useful to watch even when it cannot bond, and the
+// timer below retries every 30 seconds.
+await ensureBond().catch((e) => console.warn(`[bot] bond upkeep failed: ${(e as Error).message}`));
 setInterval(() => {
   refreshChainState()
     .then(ensureBond)
