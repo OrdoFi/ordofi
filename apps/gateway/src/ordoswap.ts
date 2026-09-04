@@ -125,7 +125,24 @@ export function candidateCycles(token: Hex, fee: number, buying: boolean, tiers:
   return out;
 }
 
+/**
+ * Which tiers a pair has never changes once a pool exists, and a pool that
+ * does not exist yet is rare enough to re-check on a slow clock. Without this
+ * every quote paid twelve factory round trips before doing anything.
+ */
+const tierCache = new Map<string, { tiers: number[]; at: number }>();
+const TIER_TTL_MS = 10 * 60_000;
+
 async function tiersFor(rpc: Rpc, a: Hex, b: Hex): Promise<number[]> {
+  const key = [a.toLowerCase(), b.toLowerCase()].sort().join(":");
+  const hit = tierCache.get(key);
+  if (hit && Date.now() - hit.at < TIER_TTL_MS) return hit.tiers;
+  const tiers = await tiersUncached(rpc, a, b);
+  tierCache.set(key, { tiers, at: Date.now() });
+  return tiers;
+}
+
+async function tiersUncached(rpc: Rpc, a: Hex, b: Hex): Promise<number[]> {
   const hits = await Promise.all(
     FEES.map(async (fee) => {
       try {
@@ -141,6 +158,17 @@ async function tiersFor(rpc: Rpc, a: Hex, b: Hex): Promise<number[]> {
     }),
   );
   return hits.filter((f): f is number => f !== null);
+}
+
+/** Values that change on the order of blocks, shared by every quote in flight for a few seconds. */
+const briefCache = new Map<string, { v: Promise<unknown>; at: number }>();
+function brief(key: string, load: () => Promise<unknown>, ttlMs = 3_000): Promise<unknown> {
+  const hit = briefCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.v;
+  const v = load();
+  briefCache.set(key, { v, at: Date.now() });
+  v.catch(() => briefCache.delete(key));
+  return v;
 }
 
 /** The ladder for this float: distinct, non-zero, ascending. */
@@ -227,9 +255,9 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
     tiersFor(rpc, WETH, token),
     token === USDG ? Promise.resolve([] as number[]) : tiersFor(rpc, USDG, token),
     tiersFor(rpc, WETH, USDG),
-    rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP_ABI, functionName: "float" }) }, "latest"]),
-    rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP_ABI, functionName: "protocolBps" }) }, "latest"]),
-    rpc("eth_gasPrice", []),
+    brief(`float:${ordoSwap}`, () => rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP_ABI, functionName: "float" }) }, "latest"])),
+    brief(`bps:${ordoSwap}`, () => rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP_ABI, functionName: "protocolBps" }) }, "latest"])),
+    brief("gasPrice", () => rpc("eth_gasPrice", [])),
   ]);
   if (!tiers.includes(req.fee)) throw new RpcError(-32602, `ordo_quoteSwap: no ${req.fee} pool for this pair`);
   const float = BigInt(floatHex as string);

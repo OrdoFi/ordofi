@@ -319,7 +319,17 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   const fmt = (x, max = 6) => x === 0 ? "0" : x < 0.000001 ? x.toExponential(2) : x.toLocaleString(undefined, { maximumFractionDigits: x < 1 ? max : x < 1000 ? 4 : 2 });
   const usd = (x) => "$" + x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const shortHash = (h) => h.slice(0, 10) + "…" + h.slice(-6);
-  const parseAmt = (s, d) => { if (!/^\\d*\\.?\\d*$/.test(s) || s === "" || s === ".") return null; const [i, f = ""] = s.split("."); return BigInt((i || "0") + f.slice(0, d).padEnd(d, "0")); };
+  // "0,001" is how half of Europe types a thousandth. Commas are decimals here.
+  const parseAmt = (s, d) => { s = String(s).trim().replace(/\\s/g, ""); s = s.includes(".") ? s.replace(/,/g, "") : s.replace(",", "."); if (!/^\\d*\\.?\\d*$/.test(s) || s === "" || s === ".") return null; const [i, f = ""] = s.split("."); const v = BigInt((i || "0") + f.slice(0, d).padEnd(d, "0")); return v > 0n ? v : null; };
+
+  // Quoter V2 straight from the page: one round trip, the price in ~300 ms,
+  // while the gateway does the slower MEV search. quoteExactInput(bytes,uint256).
+  async function fastPrice(inAddr, outAddr, fee, amountIn) {
+    const path = inAddr.slice(2) + fee.toString(16).padStart(6, "0") + outAddr.slice(2);
+    const data = "0xcdca1753" + (64).toString(16).padStart(64, "0") + amountIn.toString(16).padStart(64, "0") + (43).toString(16).padStart(64, "0") + path.padEnd(128, "0");
+    const out = await rpc("eth_call", [{ to: "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7", data }, "latest"]);
+    return BigInt("0x" + out.slice(2, 66));
+  }
 
   // Count-up animation for the receive box.
   let tween = null;
@@ -374,13 +384,24 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     paintButton();
     const dIn = await decimalsOf(tokIn), dOut = await decimalsOf(tokOut);
     const amountIn = parseAmt($("amt").value, dIn);
-    if (!amountIn || amountIn === 0n) { resetQuote(); return; }
+    if (!amountIn) { resetQuote($("amt").value ? "that is not a number" : undefined); return; }
     const inT = TOKENS[tokIn], outT = TOKENS[tokOut];
     if (inT.address === outT.address) { resetQuote("same token"); return; }
     const base = { tokenIn: inT.address, tokenOut: outT.address, amountIn: hex(amountIn), amountOutMinimum: "0x0", recipient: account || "0x000000000000000000000000000000000000dEaD", nativeOut: !!outT.native };
     if (!inT.native && account) base.from = account;
     if (!inT.native && !account) base.from = "0x000000000000000000000000000000000000dEaD";
-    // Every tier at once; the best price wins, the reclaim breaks ties.
+
+    // Price first, from the quoter, so the number moves the moment you stop typing…
+    Promise.all(FEES.map((fee) => fastPrice(inT.address, outT.address, fee, amountIn).then((out) => ({ fee, out })).catch(() => null))).then((ps) => {
+      if (id !== quoting || quote) return;
+      const best = ps.filter(Boolean).sort((a, b) => (b.out > a.out ? 1 : -1))[0];
+      if (!best) return;
+      const recv = $("recv"); recv.classList.remove("dim", "busy"); tweenTo(recv, units(best.out, dOut), dOut);
+      $("rate").textContent = "1 " + tokIn + " = " + fmt(units(best.out, dOut) / units(amountIn, dIn)) + " " + tokOut;
+      $("route").textContent = tokIn + " → " + tokOut + " · " + (best.fee / 10000) + "% pool";
+      $("mev-note").textContent = "checking what comes back…";
+    });
+    // …and the full answer, with the MEV search, behind it.
     const tries = await Promise.all(FEES.map((fee) => rpc("ordo_quoteSwap", [{ ...base, fee }]).then((q) => ({ fee, q })).catch(() => null)));
     if (id !== quoting) return;
     const ok = tries.filter(Boolean).filter((t) => BigInt(t.q.amountOut) > 0n);
@@ -447,7 +468,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     go.classList.remove("busy");
     if (busy) return;
     if (!account) { go.textContent = "Connect wallet"; go.disabled = false; return; }
-    if (!quote) { go.textContent = $("amt").value ? "Quoting…" : "Enter an amount"; go.disabled = true; return; }
+    if (!quote) { go.textContent = parseAmt($("amt").value, 18) ? "Quoting…" : "Enter an amount"; go.disabled = true; return; }
     const bal = await balanceOf(tokIn).catch(() => null);
     if (bal !== null && bal < quote.amountIn) { go.textContent = "Insufficient " + tokIn; go.disabled = true; return; }
     needsApprove = false;
