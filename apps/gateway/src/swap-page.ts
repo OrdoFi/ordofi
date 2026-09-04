@@ -645,6 +645,33 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     go.disabled = false;
   }
 
+  // -32005 is "limit exceeded", and every wallet renders it in its own words —
+  // MetaMask says "Request is being rate limited", which reads as though Ordo
+  // is turning the user away. Whoever throttled, the useful thing to say is
+  // that nothing was sent and nothing was spent.
+  const isThrottle = (e) => e && (e.code === -32005 || /rate limit|too many|throttl/i.test(e.message || ""));
+  function explain(e) {
+    if (!e) return "something went wrong";
+    if (e.code === 4001 || /rejected|denied/i.test(e.message || "")) return "cancelled in wallet";
+    if (isThrottle(e)) return "the network is busy right now — nothing was sent and nothing was spent. Try again in a moment.";
+    return (e.message || String(e)).slice(0, 160);
+  }
+
+  /**
+   * Ask the wallet to send, and if the answer is a throttle rather than the
+   * user's decision, wait and ask once more. A signed swap the user has already
+   * confirmed should not be lost to a busy second.
+   */
+  async function sendTx(params) {
+    try {
+      return await provider.request({ method: "eth_sendTransaction", params: [params] });
+    } catch (e) {
+      if (!isThrottle(e)) throw e;
+      await new Promise((r) => setTimeout(r, 1200));
+      return provider.request({ method: "eth_sendTransaction", params: [params] });
+    }
+  }
+
   async function go() {
     if (!account) return openWallets();
     if (!quote || busy) return;
@@ -653,7 +680,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     try {
       if (needsApprove) {
         btn.innerHTML = '<span class="spin"></span>Confirm approval in your wallet…';
-        const h = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: tokIn.address, data: "0x095ea7b3" + pad(SWAP) + "f".repeat(64) }] });
+        const h = await sendTx({ from: account, to: tokIn.address, data: "0x095ea7b3" + pad(SWAP) + "f".repeat(64) });
         btn.innerHTML = '<span class="spin"></span>Approving…';
         await waitReceipt(h);
         busy = false; await requote(); await paintButton(); return;
@@ -665,7 +692,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
       if (!tokIn.native) req.from = account;
       const q = await rpc("ordo_quoteSwap", [req]);
       btn.innerHTML = '<span class="spin"></span>Confirm in your wallet…';
-      const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: q.to, data: q.data, value: q.value, gas: q.gas }] });
+      const hash = await sendTx({ from: account, to: q.to, data: q.data, value: q.value, gas: q.gas });
       btn.innerHTML = '<span class="spin"></span>Swapping…';
       $("result").innerHTML = 'sent · <a href="' + EXPLORER + "/tx/" + hash + '" target="_blank" rel="noopener">' + shortHash(hash) + "</a>";
       const rec = await waitReceipt(hash);
@@ -686,8 +713,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
       $("amt").value = ""; resetQuote();
       paintBalances(); refreshStats();
     } catch (e) {
-      const msg = e && (e.code === 4001 || /rejected|denied/i.test(e.message || "")) ? "cancelled in wallet" : (e.message || String(e)).slice(0, 160);
-      $("result").className = "result bad"; $("result").textContent = msg;
+      $("result").className = "result bad"; $("result").textContent = explain(e);
     } finally {
       busy = false; btn.classList.remove("busy"); paintButton();
     }

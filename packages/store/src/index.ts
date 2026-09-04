@@ -59,6 +59,20 @@ export interface ApiKeyRow {
   createdAt: number;
 }
 
+/**
+ * Requests a minute an application key may make, counting only the ones that
+ * reach an upstream — the gateway answers chain id, the cached head and mined
+ * receipts from memory and charges nothing for them.
+ *
+ * This was 600, which is ten a second, and it was throttling v4.fun thousands
+ * of times an hour. A key is not a user: it is an application, and every one
+ * of its users' wallets shares it, so it must be sized well above the 3,000 a
+ * minute a single anonymous IP already gets. A 429 to a partner's users reads
+ * to them as "Ordo is broken", which costs incomparably more than the upstream
+ * calls the limit was saving.
+ */
+export const DEFAULT_KEY_RATE_LIMIT = Number(process.env.ORDO_KEY_RATE_LIMIT ?? 12_000);
+
 /** A Uniswap V4 pool as its Initialize event described it. */
 export interface V4PoolRow {
   poolId: string;
@@ -268,7 +282,7 @@ export class OrdoStore {
       // A key with somewhere to send rebates defaults into the auction; one
       // without can only want protection.
       mode: rebateAddress ? "auction" : "direct",
-      rateLimit: opts.rateLimit ?? 600,
+      rateLimit: opts.rateLimit ?? DEFAULT_KEY_RATE_LIMIT,
       createdAt: Date.now(),
     };
     this.db

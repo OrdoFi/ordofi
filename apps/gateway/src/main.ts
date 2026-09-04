@@ -47,6 +47,16 @@ try {
   console.warn(`gateway | portal keys unavailable (${(e as Error).message})`);
 }
 
+/**
+ * Store-backed keys are re-read periodically rather than remembered for the
+ * life of the process. Caching them forever meant that raising a partner's
+ * rate limit — the fix for the one incident this cache is implicated in — did
+ * not take effect until the next deploy. A minute of staleness is nothing; a
+ * limit that cannot be changed without a rollout is a problem.
+ */
+const KEY_TTL_MS = 60_000;
+const keySeenAt = new Map<string, number>();
+
 function storeBackedKey(presented: string): ApiKey | null {
   if (!store) return null;
   try {
@@ -60,6 +70,7 @@ function storeBackedKey(presented: string): ApiKey | null {
       mode: row.mode,
     };
     apiKeys.set(presented, key);
+    keySeenAt.set(presented, Date.now());
     return key;
   } catch {
     return null;
@@ -317,10 +328,16 @@ function authenticate(
       ? req.headers.authorization.replace(/^Bearer\s+/i, "")
       : undefined);
 
-  if (header && apiKeys.has(header)) return apiKeys.get(header)!;
+  if (header && apiKeys.has(header)) {
+    // Operator keys from the env list are authoritative and never re-read;
+    // ones that came from the store go stale so a changed limit lands.
+    const seen = keySeenAt.get(header);
+    if (seen === undefined || Date.now() - seen < KEY_TTL_MS) return apiKeys.get(header)!;
+  }
   if (header) {
     const fromStore = storeBackedKey(header);
     if (fromStore) return fromStore;
+    if (apiKeys.has(header)) return apiKeys.get(header)!; // store unreachable: keep serving
   }
   if (CONFIG.allowAnon && CONFIG.anonMethods.has(method)) return "anon";
   return null;
