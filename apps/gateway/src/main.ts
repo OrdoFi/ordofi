@@ -8,7 +8,7 @@ import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
-import { quoteSwap } from "./ordoswap2.js";
+import { prewarm as prewarmSwapRoutes, quoteSwap } from "./ordoswap2.js";
 import { swapHtml } from "./swap-page.js";
 import { SwapStats } from "./swapstats.js";
 import { TokenList } from "./tokens.js";
@@ -365,6 +365,11 @@ if (tokenList) {
   const tick = () => tokenList.refresh().catch((e) => console.warn(`gateway | token list: ${(e as Error).message}`));
   tick();
   setInterval(tick, 60_000).unref();
+  // Once the list is in, keep the markets of the 150 busiest tokens warm so
+  // their first quote never pays for discovery. Origin only; edges do not quote.
+  if (!CONFIG.edgeOrigin) {
+    setTimeout(() => prewarmSwapRoutes((m, p) => upstream(m, p), store, () => tokenList.top(150) as `0x${string}`[]), 5_000).unref();
+  }
 }
 
 let stopping = false;

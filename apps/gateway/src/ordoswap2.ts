@@ -237,6 +237,30 @@ function viaPools(pools: Pool[]): Pool[] {
   return [...v3, ...v4].slice(0, MAX_VIA_POOLS);
 }
 
+/**
+ * Discover the markets of the most-traded tokens against ETH and USDG ahead of
+ * anyone asking, and keep doing so before the pair cache expires — so the first
+ * quote for a popular token is as fast as the tenth. Runs through the same
+ * limiter as everything else, so it never crowds out a live quote.
+ */
+export function prewarm(rpc: Rpc, v4: V4Source | null, tokens: () => Hex[], everyMs = 8 * 60_000): () => void {
+  let stopped = false;
+  const pass = async () => {
+    for (const t of tokens()) {
+      if (stopped) return;
+      if (t === WETH || t === USDG) continue;
+      await Promise.all([poolsFor(rpc, v4, WETH, t), poolsFor(rpc, v4, USDG, t)]).catch(() => {});
+    }
+  };
+  void pass();
+  const timer = setInterval(() => void pass(), everyMs);
+  timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
 /** Forget every cached pair and tier. For tests, which share this module. */
 export function resetCaches(): void {
   pairCache.clear();
