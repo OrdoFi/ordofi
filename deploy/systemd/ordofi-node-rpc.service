@@ -1,0 +1,12 @@
+# Promotes our Nitro node to first RPC upstream once it is at the head, and
+# demotes it if it lags. See deploy/node-rpc.sh. Installed by deploy/node-rpc-install.sh.
+[Unit]
+Description=OrdoFi: keep our own node first in the RPC lists while it is healthy
+After=network-online.target docker.service wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ordofi
+ExecStart=/usr/bin/env bash /opt/ordofi/deploy/node-rpc.sh auto
+TimeoutStartSec=600

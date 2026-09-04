@@ -1,0 +1,11 @@
+[Unit]
+Description=OrdoFi: check the node every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=20s
+Unit=ordofi-node-rpc.service
+
+[Install]
+WantedBy=timers.target
