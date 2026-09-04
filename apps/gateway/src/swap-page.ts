@@ -167,7 +167,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .tick { display:inline-flex; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff; align-items:center; justify-content:center; font-size:13px; margin-right:8px; vertical-align:-5px; animation:pop .5s .1s both; }
 
   /* ---- below the fold ---- */
-  .status { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--border); border-top:none; }
+  .status { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border:1px solid var(--border); border-top:none; }
   .status > div { padding:22px 24px; border-right:1px solid var(--border); }
   .status > div:last-child { border-right:none; }
   .status .k { font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
@@ -228,7 +228,8 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     .status { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .status > div { padding:16px; }
     .status > div:nth-child(2) { border-right:none; }
-    .status > div:nth-child(n+3) { border-top:1px solid var(--border); }
+    /* Three figures in two columns: the last one takes the width rather than leaving a hole. */
+    .status > div:nth-child(3) { border-top:1px solid var(--border); border-right:none; grid-column:1 / -1; }
     .status .v { font-size:22px; }
     section { padding:40px 0; }
     h2.s { font-size:24px; }
@@ -309,7 +310,6 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   <div><div class="k">Returned to users</div><div class="v ok" id="st-user">—</div></div>
   <div><div class="k">Swaps</div><div class="v" id="st-swaps">—</div></div>
   <div><div class="k">Back-runs reclaimed</div><div class="v" id="st-reclaims">—</div></div>
-  <div><div class="k">Contract</div><div class="v mono" style="font-size:15px"><a href="${explorer}/address/${address}" target="_blank" rel="noopener">${short(address)}</a><small>90% of surplus to the user · float only owner-withdrawable</small></div></div>
 </div></div>
 
 <section><div class="wrap">
