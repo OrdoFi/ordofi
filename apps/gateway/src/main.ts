@@ -8,7 +8,7 @@ import { RpcError } from "./errors.js";
 import { Metrics } from "./metrics.js";
 import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.js";
 import { routeOrderFlow } from "./orderflow.js";
-import { quoteSwap } from "./ordoswap.js";
+import { quoteSwap } from "./ordoswap2.js";
 import { swapHtml } from "./swap-page.js";
 import { SwapStats } from "./swapstats.js";
 import { TokenList } from "./tokens.js";
@@ -232,14 +232,15 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
         {
           tokenIn: addr(p.tokenIn, "tokenIn"),
           tokenOut: addr(p.tokenOut, "tokenOut"),
-          fee: p.fee === undefined || p.fee === null || p.fee === "" ? undefined : Number(p.fee),
           amountIn: big(p.amountIn, "amountIn"),
           amountOutMinimum: big(p.amountOutMinimum, "amountOutMinimum", true),
           recipient: addr(p.recipient, "recipient"),
           nativeOut: Boolean(p.nativeOut),
           from: p.from === undefined ? undefined : addr(p.from, "from"),
         },
-        { rpc: upstream, ordoSwap: CONFIG.ordoSwapAddress as `0x${string}` },
+        // V4 pools come from the watcher's index in the shared store; without it
+        // (a bare dev box) the quote still covers every V3 market.
+        { rpc: upstream, ordoSwap: CONFIG.ordoSwapAddress as `0x${string}`, v4: store },
       );
     }
     default:
@@ -358,7 +359,7 @@ if (swapStats && !CONFIG.edgeOrigin) {
   setInterval(tick, 30_000).unref();
 }
 // The picker's token list, refreshed from the app every minute.
-const tokenList = CONFIG.ordoSwapAddress ? new TokenList(process.env.ORDO_TOKEN_LIST_URL ?? "https://app.ordofi.network/api/trade/tokens") : null;
+const tokenList = CONFIG.ordoSwapAddress ? new TokenList(process.env.ORDO_TOKEN_LIST_URL ?? "https://app.ordofi.network/api/trade/tokens", fetch, store) : null;
 if (tokenList) {
   const tick = () => tokenList.refresh().catch((e) => console.warn(`gateway | token list: ${(e as Error).message}`));
   tick();

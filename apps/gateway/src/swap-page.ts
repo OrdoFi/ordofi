@@ -115,6 +115,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .trow .px small { display:block; color:var(--muted); font-size:10.5px; }
   .tag { font-family:var(--mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; padding:1px 6px; border:1px solid var(--border2); color:var(--muted); font-weight:500; white-space:nowrap; }
   .tag.soon { border-color:var(--accent); color:var(--accent); }
+  .tag.v4 { border-color:#7a5cff; color:#7a5cff; }
   .pempty { padding:28px 18px; text-align:center; color:var(--muted); font-size:13.5px; }
   .pempty .spin { display:inline-block; width:14px; height:14px; border:2px solid var(--border2); border-top-color:var(--text); border-radius:50%; animation:rot .7s linear infinite; vertical-align:-2px; margin-right:8px; }
   .flip { display:flex; justify-content:center; margin:-6px 0; position:relative; z-index:1; }
@@ -257,8 +258,8 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
 <section><div class="wrap">
   <h2 class="s">How one transaction does it</h2>
   <div class="grid3">
-    <div><div class="n">01</div><h4>Your swap</h4><p>Exactly your input is pulled and swapped through Uniswap V3 with your own slippage floor. Output goes straight to you. The contract's capital is never an input to your leg.</p></div>
-    <div><div class="n">02</div><h4>Its back-run</h4><p>Your swap moved one fee tier of the pair away from the others. In the same transaction the contract trades its own float around that gap — buy on the tier you left cheap, sell into the one you left dear — and the round trip must return more than it put in or it does not run.</p></div>
+    <div><div class="n">01</div><h4>Your swap</h4><p>Exactly your input is pulled and swapped through Uniswap V3 or V4 — including hooked launchpad pools — with your own slippage floor. Output goes straight to you. The contract's capital is never an input to your leg.</p></div>
+    <div><div class="n">02</div><h4>Its back-run</h4><p>Your swap moved one market of the pair away from the others — another fee tier, or another venue. In the same transaction the contract trades its own float around that gap — buy on the tier you left cheap, sell into the one you left dear — and the round trip must return more than it put in or it does not run.</p></div>
     <div><div class="n">03</div><h4>Your surplus</h4><p>What the round trip made is split on-chain: 90% to you, 10% stays in the float. If the gap closed before inclusion, the back-run is skipped and your swap still lands. It can never fail because of the reclaim.</p></div>
   </div>
 </div></section>
@@ -317,7 +318,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   // ---- token registry ------------------------------------------------------
   // Every token the chain has, from /swap/tokens, plus anything pasted by address.
   // ETH is native in and out: the contract wraps on the way in and unwraps out.
-  const ETH = { address: WETH, native: true, symbol: "ETH", name: "Ether", decimals: 18, icon: ${JSON.stringify(app + "/token-eth.png")}, usd: null, stock: false, v3: true };
+  const ETH = { address: WETH, native: true, symbol: "ETH", name: "Ether", decimals: 18, icon: ${JSON.stringify(app + "/token-eth.png")}, usd: null, stock: false, v3: true, v4: true };
   const registry = new Map(); // address -> token (WETH's slot is the ERC-20 WETH; ETH is separate)
   let ranked = [];             // tokens in activity order, for the picker
   let listReady = false;
@@ -343,7 +344,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   }
 
   let tokIn = ETH;
-  let tokOut = { address: USDG, symbol: "USDG", name: "Global Dollar", decimals: 6, icon: ${JSON.stringify(app + "/token-usdg.png")}, usd: 1, stock: false, v3: true };
+  let tokOut = { address: USDG, symbol: "USDG", name: "Global Dollar", decimals: 6, icon: ${JSON.stringify(app + "/token-usdg.png")}, usd: 1, stock: false, v3: true, v4: true };
   let slippageBps = 50n;
   let provider = null, account = null, quote = null, quoting = 0, busy = false;
 
@@ -375,7 +376,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
         rpc("eth_call", [{ to: a, data: "0x06fdde03" }, "latest"]),
         rpc("eth_call", [{ to: a, data: "0x313ce567" }, "latest"]),
       ]);
-      const t = { address: a, symbol: str(sym).slice(0, 12) || a.slice(0, 8), name: str(name).slice(0, 60) || "Unknown token", decimals: Number(BigInt(dec)), icon: null, usd: null, stock: false, v3: true, custom: true };
+      const t = { address: a, symbol: str(sym).slice(0, 12) || a.slice(0, 8), name: str(name).slice(0, 60) || "Unknown token", decimals: Number(BigInt(dec)), icon: null, usd: null, stock: false, v3: true, v4: true, custom: true };
       registry.set(a, t);
       return t;
     } catch { return null; }
@@ -430,8 +431,9 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   }
   function closePicker() { $("picker").classList.remove("open"); }
   const priceCell = (t) => t.usd != null ? '<div class="px">' + (t.usd >= 1 ? usd(t.usd) : "$" + t.usd.toPrecision(3)) + (t.swaps24h ? "<small>" + t.swaps24h.toLocaleString() + " swaps/24h</small>" : "") + "</div>" : "";
-  const row = (t) => '<div class="trow' + (t.v3 ? "" : " off") + '" data-a="' + t.address + (t.native ? "|eth" : "") + '">' + avatar(t) +
-    '<div class="m"><div class="sy">' + esc(t.symbol) + (t.stock ? '<span class="tag">stock</span>' : "") + (t.v3 ? "" : '<span class="tag soon">V4 · soon</span>') + (t.custom ? '<span class="tag">custom</span>' : "") + '</div><div class="nm">' + esc(t.name) + "</div></div>" + priceCell(t) + "</div>";
+  const routable = (t) => !!(t.v3 || t.v4);
+  const row = (t) => '<div class="trow' + (routable(t) ? "" : " off") + '" data-a="' + t.address + (t.native ? "|eth" : "") + '">' + avatar(t) +
+    '<div class="m"><div class="sy">' + esc(t.symbol) + (t.stock ? '<span class="tag">stock</span>' : "") + (!t.v3 && t.v4 ? '<span class="tag v4">V4</span>' : "") + (routable(t) ? "" : '<span class="tag soon">no pool</span>') + (t.custom ? '<span class="tag">custom</span>' : "") + '</div><div class="nm">' + esc(t.name) + "</div></div>" + priceCell(t) + "</div>";
   async function renderPicker() {
     const q = $("pk-q").value.trim();
     const list = $("pk-list");
@@ -439,7 +441,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
       list.innerHTML = '<div class="pempty"><span class="spin"></span>looking up ' + esc(q.slice(0, 10)) + "…</div>";
       const t = await lookupToken(q);
       if ($("pk-q").value.trim() !== q) return;
-      list.innerHTML = t ? row(t) + (t.custom ? '<div class="pempty" style="text-align:left;font-size:12px">Not in our list — read from the chain. If it has no Uniswap V3 pool the quote will say so.</div>' : "") : '<div class="pempty">no ERC-20 at that address</div>';
+      list.innerHTML = t ? row(t) + (t.custom ? '<div class="pempty" style="text-align:left;font-size:12px">Not in our list — read from the chain. If it has no Uniswap V3 or V4 pool the quote will say so.</div>' : "") : '<div class="pempty">no ERC-20 at that address</div>';
       return;
     }
     if (!listReady) { list.innerHTML = '<div class="pempty"><span class="spin"></span>loading tokens…</div>'; return; }
@@ -448,12 +450,12 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (tab === "tokens") items = [ETH, ...items.filter((t) => t.address !== WETH)];
     if (needle) items = items.filter((t) => t.symbol.toLowerCase().includes(needle) || t.name.toLowerCase().includes(needle) || t.address.startsWith(needle));
     // Routable first within the same activity order; the rest listed so search still finds them.
-    items = [...items.filter((t) => t.v3), ...items.filter((t) => !t.v3)];
+    items = [...items.filter(routable), ...items.filter((t) => !routable(t))];
     const shown = items.slice(0, needle ? 60 : 120);
     list.innerHTML = shown.length ? shown.map(row).join("") + (items.length > shown.length ? '<div class="pempty">' + (items.length - shown.length).toLocaleString() + " more — keep typing</div>" : "") : '<div class="pempty">nothing matches</div>';
   }
   function pick(t) {
-    if (!t.v3) return;
+    if (!routable(t)) return;
     const other = pickSide === "in" ? tokOut : tokIn;
     if (pickSide === "in") tokIn = t; else tokOut = t;
     if (other.address === t.address && other.native === t.native) { if (pickSide === "in") tokOut = t.native || t.address === WETH ? registry.get(USDG) || tokOut : ETH; else tokIn = t.native || t.address === WETH ? registry.get(USDG) || tokIn : ETH; }
@@ -465,7 +467,8 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   let debounce = null;
   function onInput() { clearTimeout(debounce); debounce = setTimeout(requote, 200); setBusy(true); }
   function setBusy(on) { $("recv").classList.toggle("busy", on && !!$("amt").value); }
-  const routeLabel = (route) => route.map((h, i) => (i === 0 ? sym(h.tokenIn) : "") + " → " + sym(h.tokenOut) + " " + (h.fee / 10000) + "%").join("");
+  const feeLabel = (h) => h.venue === "v4" ? (h.fee === 8388608 ? "V4 · hook" : "V4 " + (h.fee / 10000) + "%") : (h.fee / 10000) + "%";
+  const routeLabel = (route) => route.map((h, i) => (i === 0 ? sym(h.tokenIn) : "") + " → " + sym(h.tokenOut) + " " + feeLabel(h)).join("");
   const sym = (a) => { const t = registry.get(a.toLowerCase()); return a.toLowerCase() === WETH ? (tokIn.native && tokIn.address === WETH ? "ETH" : tokOut.native && tokOut.address === WETH ? "ETH" : "WETH") : t ? t.symbol : a.slice(0, 6); };
 
   async function requote() {
@@ -486,7 +489,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (!tokIn.native) req.from = account || DEAD;
     let q;
     try { q = await rpc("ordo_quoteSwap", [req]); }
-    catch (e) { if (id !== quoting) return; resetQuote(/no route/i.test(e.message) ? "no Uniswap V3 route for this pair" : e.message.slice(0, 90)); return; }
+    catch (e) { if (id !== quoting) return; resetQuote(/no route/i.test(e.message) ? "no pool connects these two tokens" : e.message.slice(0, 90)); return; }
     if (id !== quoting) return;
     setBusy(false);
     if (BigInt(q.amountOut) === 0n) { resetQuote("no route for this pair right now"); return; }
@@ -518,7 +521,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (q.reclaim) {
       const eth = units(q.reclaim.surplusToUser, 18);
       m.classList.add("yes");
-      $("mev-v").innerHTML = "+" + fmt(eth) + " ETH<small>" + usd(eth * ethUsd()) + "</small>";
+      $("mev-v").innerHTML = "+" + fmt(eth) + " ETH<small>" + usd(eth * ethUsd()) + " · " + esc(q.reclaim.label) + "</small>";
       $("mev-note").textContent = "paid to you in the same transaction";
     } else {
       m.classList.remove("yes");
@@ -567,7 +570,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
       if (!tokIn.native) req.from = account;
       const q = await rpc("ordo_quoteSwap", [req]);
       btn.innerHTML = '<span class="spin"></span>Confirm in your wallet…';
-      const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: q.to, data: q.data, value: q.value, gas: q.reclaim ? "0x9eb10" : (q.route.length > 1 ? "0x61a80" : "0x493e0") }] });
+      const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: q.to, data: q.data, value: q.value, gas: q.gas }] });
       btn.innerHTML = '<span class="spin"></span>Swapping…';
       $("result").innerHTML = 'sent · <a href="' + EXPLORER + "/tx/" + hash + '" target="_blank" rel="noopener">' + shortHash(hash) + "</a>";
       const rec = await waitReceipt(hash);

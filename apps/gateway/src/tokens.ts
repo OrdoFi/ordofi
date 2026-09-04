@@ -23,8 +23,15 @@ export interface PickerToken {
   swaps24h: number;
   /** One of Robinhood's tokenized stocks/ETFs. */
   stock: boolean;
-  /** Has at least one Uniswap V3 pool against WETH or USDG, so Ordo Swap can route it. */
+  /** Has at least one Uniswap V3 pool against WETH or USDG. */
   v3: boolean;
+  /** Has at least one Uniswap V4 pool (any hook), per the watcher's index. */
+  v4: boolean;
+}
+
+/** Where V4 pools are known from: the shared store, when the gateway has one. */
+export interface V4Index {
+  v4PoolsFor(currency: string): unknown[];
 }
 
 interface AppToken {
@@ -44,7 +51,7 @@ export function isStock(t: AppToken): boolean {
   return /robinhood tok/i.test(t.name ?? "") || (t.icon ?? "").startsWith("https://cdn.robinhood.com/");
 }
 
-export function toPicker(list: AppToken[]): PickerToken[] {
+export function toPicker(list: AppToken[], v4?: V4Index | null): PickerToken[] {
   const out: PickerToken[] = [];
   const seen = new Set<string>();
   for (const t of list) {
@@ -52,6 +59,14 @@ export function toPicker(list: AppToken[]): PickerToken[] {
     if (!/^0x[0-9a-f]{40}$/.test(address) || seen.has(address)) continue;
     if (!t.symbol || typeof t.decimals !== "number") continue;
     seen.add(address);
+    let hasV4 = false;
+    if (v4) {
+      try {
+        hasV4 = v4.v4PoolsFor(address).length > 0;
+      } catch {
+        hasV4 = false;
+      }
+    }
     out.push({
       address,
       symbol: String(t.symbol).slice(0, 12),
@@ -64,6 +79,7 @@ export function toPicker(list: AppToken[]): PickerToken[] {
       // The app's tiers are "pools against WETH / against USDG", so the two
       // bases themselves report none. They are the route, not a destination.
       v3: BASES.has(address) || Boolean(t.tiers?.eth?.length || t.tiers?.usdg?.length),
+      v4: BASES.has(address) || hasV4,
     });
   }
   out.sort((a, b) => b.swaps24h - a.swaps24h);
@@ -78,13 +94,14 @@ export class TokenList {
   constructor(
     private readonly source: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly v4: V4Index | null = null,
   ) {}
 
   async refresh(): Promise<void> {
     const r = await this.fetchImpl(this.source, { signal: AbortSignal.timeout(15_000) });
     if (!r.ok) throw new Error(`token list ${r.status}`);
     const list = (await r.json()) as AppToken[];
-    const next = toPicker(list);
+    const next = toPicker(list, this.v4);
     if (next.length === 0) return; // an empty answer is a broken source, not an empty chain
     this.tokens = next;
     this.json = JSON.stringify({ updatedAt: Date.now(), tokens: next });

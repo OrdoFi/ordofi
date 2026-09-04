@@ -42,6 +42,9 @@ x-gateway: &gateway
     ORDO_BUNDLER_ADDRESS: ${ORDO_BUNDLER_ADDRESS:-}
     # OrdoSwap (contracts/src/OrdoSwap.sol): enables ordo_quoteSwap.
     ORDO_SWAP_ADDRESS: ${ORDO_SWAP_ADDRESS:-}
+    # Where /swap/stats starts reading Swapped/Reclaimed events (the deploy block).
+    ORDO_SWAP_FROM_BLOCK: ${ORDO_SWAP_FROM_BLOCK:-54564088}
+    ORDO_SWAP_PROOF_TX: ${ORDO_SWAP_PROOF_TX:-0xd3402046255c3f0b954989660d3faae2c39a46930fd442f813e39b116b8d0641}
     # The swap page's token list, from the app over the compose network. The
     # public hostname is a hairpin from inside the box and times out.
     ORDO_TOKEN_LIST_URL: ${ORDO_TOKEN_LIST_URL:-http://web:3000/api/trade/tokens}
