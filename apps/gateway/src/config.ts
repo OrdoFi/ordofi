@@ -174,6 +174,15 @@ export const CONFIG = {
     .split(",")
     .map((a) => a.trim().toLowerCase())
     .filter((a) => /^0x[0-9a-f]{40}$/.test(a)),
+  /**
+   * WalletConnect project id (free, dashboard.reown.com). It is not a secret —
+   * it ships in the page — it is what identifies us to the relay that carries
+   * the pairing between a phone's browser and its wallet app. Without one the
+   * relay refuses the connection, so /swap falls back to telling mobile users
+   * to open the page inside their wallet's browser, which is what it did
+   * before. Nothing else on the gateway depends on it.
+   */
+  wcProjectId: (process.env.ORDO_WC_PROJECT_ID ?? "").trim(),
 };
 
 /** Simple fixed-window per-key rate limiter. */

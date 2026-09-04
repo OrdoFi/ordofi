@@ -12,9 +12,22 @@
  */
 import { toEventSelector } from "viem";
 import { SWAP_EVENTS } from "./swapstats.js";
+import { HANDOFF_METHODS, MOBILE_WALLETS } from "./wallets.js";
 
-export function swapHtml(opts: { address: string; explorer: string; rpc: string; app: string; docs: string; proofTx: string }): string {
+export function swapHtml(opts: {
+  address: string;
+  explorer: string;
+  rpc: string;
+  app: string;
+  docs: string;
+  proofTx: string;
+  /** WalletConnect, when a project id is configured and the bundle is built. Null: extensions only. */
+  wc?: { projectId: string; src: string } | null;
+}): string {
   const { address, explorer, rpc, app, docs, proofTx } = opts;
+  const wc = opts.wc
+    ? JSON.stringify({ projectId: opts.wc.projectId, src: opts.wc.src, wallets: MOBILE_WALLETS, handoff: HANDOFF_METHODS })
+    : "null";
   const short = (a: string) => `${a.slice(0, 10)}…${a.slice(-6)}`;
   const TOPIC_RECLAIMED = toEventSelector(SWAP_EVENTS[1]);
   const TOPIC_SWAPPED = toEventSelector(SWAP_EVENTS[0]);
@@ -201,9 +214,23 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .sheet .x { cursor:pointer; color:var(--muted); }
   .wrow { display:flex; align-items:center; gap:12px; padding:13px 18px; cursor:pointer; border-bottom:1px solid var(--border); }
   .wrow:hover { background:#fff; }
-  .wrow img { width:28px; height:28px; }
+  .wrow img, .wrow .tile { width:28px; height:28px; flex:none; }
+  .wrow .tile { display:grid; place-items:center; color:#fff; font-family:var(--display); font-weight:700; font-size:14px; border-radius:7px; }
   .wrow .n { font-weight:600; font-size:13.5px; }
+  .wrow .via { margin-left:auto; font-family:var(--mono); font-size:10px; color:var(--muted); letter-spacing:.06em; text-transform:uppercase; }
+  .wrow.busy { opacity:.55; cursor:default; }
+  .wrow.busy .via { color:var(--accent); }
+  .wsec { padding:11px 18px 7px; font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--border); background:rgba(0,0,0,.015); }
   .wnote { padding:13px 18px; font-size:11.5px; color:var(--muted); line-height:1.6; }
+  .wnote a { color:var(--accent); text-decoration:underline; }
+  .qr { display:none; padding:20px 18px 6px; text-align:center; border-bottom:1px solid var(--border); }
+  .qr.on { display:block; }
+  /* Not .box — that is the amount field, and inheriting a flex row here stretches the code. */
+  .qrbox { display:block; width:232px; max-width:100%; margin:0 auto; background:#fff; padding:12px; border:1px solid var(--border); }
+  .qrbox svg { display:block; width:100%; height:auto; }
+  .qr p { font-size:12px; color:var(--muted); margin-top:11px; word-break:break-all; }
+  .qr button { font-family:var(--mono); font-size:11px; margin-top:9px; padding:6px 11px; border:1px solid var(--border2); background:transparent; cursor:pointer; color:var(--dim); }
+  .qr button:hover { border-color:var(--text); color:var(--text); }
 
   @media (max-width:900px) {
     .wrap { padding:0 16px; }
@@ -347,7 +374,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   <span>contract <a href="${explorer}/address/${address}" target="_blank" rel="noopener" class="mono">${short(address)}</a> &nbsp;·&nbsp; <a href="/swap/stats">/swap/stats</a> &nbsp;·&nbsp; <a href="/health">/health</a></span>
 </footer></div>
 
-<div class="modal" id="wm"><div class="sheet"><div class="mh">Connect a wallet<span class="x" id="wm-x">✕</span></div><div id="wm-list"></div><div class="wnote">Any EIP-1193 wallet. The page will add Robinhood Chain with rpc.ordofi.network as its RPC if it is missing.</div></div></div>
+<div class="modal" id="wm"><div class="sheet"><div class="mh">Connect a wallet<span class="x" id="wm-x">✕</span></div><div class="qr" id="wm-qr"><div class="qrbox" id="wm-qr-box"></div><p id="wm-qr-note">Scan with your wallet app.</p><button id="wm-qr-copy">copy link</button></div><div id="wm-list"></div><div class="wnote" id="wm-note">Any EIP-1193 wallet. The page will add Robinhood Chain with rpc.ordofi.network as its RPC if it is missing.</div></div></div>
 
 <div class="picker" id="picker"><div class="psheet">
   <div class="ph">
@@ -367,6 +394,11 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
   const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
   const CHAIN_HEX = "0x1237";
+  const CHAIN_ID = parseInt(CHAIN_HEX, 16);
+  const MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  // WalletConnect's relay: what a phone browser uses to reach a wallet app.
+  // Null when no project id is configured — then this page is extensions only.
+  const WC = ${wc};
   const TOPIC_RECLAIMED = ${JSON.stringify(TOPIC_RECLAIMED)};
   const TOPIC_SWAPPED = ${JSON.stringify(TOPIC_SWAPPED)};
   const FALLBACK_ETHUSD = 2523;
@@ -678,6 +710,9 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     const btn = $("go"); busy = true; btn.disabled = true; btn.classList.add("busy");
     $("result").className = "result"; $("result").textContent = ""; $("done").innerHTML = "";
     try {
+      // A restored WalletConnect session is adopted silently, so this is the
+      // first moment we are entitled to ask the wallet about its network.
+      await ensureChain();
       if (needsApprove) {
         btn.innerHTML = '<span class="spin"></span>Confirm approval in your wallet…';
         const h = await sendTx({ from: account, to: tokIn.address, data: "0x095ea7b3" + pad(SWAP) + "f".repeat(64) });
@@ -728,58 +763,227 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   }
 
   // ---- wallet ----------------------------------------------------------------------
+  // Two ways in. An extension announces itself to the page (EIP-6963) and every
+  // request opens a window over the tab. A phone has no extension: the wallet is
+  // another app, reached over WalletConnect's relay, and every request that needs
+  // a human means leaving the browser and coming back. See src/wallets.ts.
   const found = new Map();
   window.addEventListener("eip6963:announceProvider", (e) => { found.set(e.detail.info.uuid, e.detail); });
   window.dispatchEvent(new Event("eip6963:requestProvider"));
+
+  function injectedWallets() {
+    const l = [...found.values()].map((d) => ({ name: d.info.name, icon: d.info.icon, provider: d.provider }));
+    if (!l.length && window.ethereum) l.push({ name: "Browser wallet", icon: null, provider: window.ethereum });
+    return l;
+  }
+
   function openWallets() {
-    const list = [...found.values()];
-    if (list.length === 0 && window.ethereum) return connect(window.ethereum);
-    if (list.length === 1) return connect(list[0].provider);
-    if (list.length === 0) {
-      const mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+    const inj = injectedWallets();
+    // Inside a wallet's own browser there is one provider and no reason to ask.
+    if (inj.length === 1 && (MOBILE || !WC)) return connect(inj[0].provider);
+    if (!inj.length && !WC) {
       $("result").className = "result bad";
-      $("result").innerHTML = mobile
+      $("result").innerHTML = MOBILE
         ? 'no wallet in this browser — <a href="https://metamask.app.link/dapp/' + location.host + location.pathname + '">open in MetaMask</a> or use your wallet\u2019s built-in browser'
         : "no wallet found — install MetaMask or Rabby";
       return;
     }
-    $("wm-list").innerHTML = list.map((d, i) => '<div class="wrow" data-i="' + i + '"><img src="' + d.info.icon + '" alt="" /><div class="n">' + esc(d.info.name) + "</div></div>").join("");
-    $("wm-list").querySelectorAll(".wrow").forEach((el) => el.onclick = () => { $("wm").classList.remove("open"); connect(list[Number(el.dataset.i)].provider); });
+    const tile = (w) => '<div class="tile" style="background:' + w.color + '">' + w.mark + "</div>";
+    let html = "";
+    if (inj.length) {
+      if (WC) html += '<div class="wsec">In this browser</div>';
+      html += inj.map((w, i) => '<div class="wrow" data-inj="' + i + '">' +
+        (w.icon ? '<img src="' + esc(w.icon) + '" alt="" />' : '<div class="tile" style="background:var(--dim)">' + esc(w.name.slice(0, 1)) + "</div>") +
+        '<div class="n">' + esc(w.name) + "</div></div>").join("");
+    }
+    if (WC && MOBILE) {
+      // A wallet already in this browser does not also need the relay.
+      const have = new Set(inj.map((w) => w.name.toLowerCase()));
+      const apps = WC.wallets.filter((w) => !have.has(w.name.toLowerCase()));
+      html += '<div class="wsec">On this phone</div>' + apps.map((w) => '<div class="wrow" data-wc="' + w.id + '">' + tile(w) +
+        '<div class="n">' + esc(w.name) + '</div><span class="via">open app</span></div>').join("");
+    } else if (WC) {
+      html += (inj.length ? '<div class="wsec">On your phone</div>' : "") +
+        '<div class="wrow" data-wc="">' + tile({ color: "#3b99fc", mark: "W" }) +
+        '<div class="n">WalletConnect</div><span class="via">scan</span></div>';
+    }
+    $("wm-list").innerHTML = html;
+    $("wm-list").querySelectorAll(".wrow").forEach((el) => el.onclick = () => {
+      if (el.classList.contains("busy")) return;
+      if (el.dataset.inj !== undefined) { closeWallets(); return connect(inj[Number(el.dataset.inj)].provider); }
+      connectWC(WC.wallets.find((w) => w.id === el.dataset.wc) || null, el);
+    });
+    $("wm-note").innerHTML = WC && MOBILE
+      ? "Your wallet opens, you approve, and you land back here connected. Robinhood Chain is added on the way if your wallet does not have it."
+      : "Any EIP-1193 wallet. The page will add Robinhood Chain with rpc.ordofi.network as its RPC if it is missing.";
     $("wm").classList.add("open");
+    if (WC) wcInit().catch(() => {}); // warm the relay while they read the list
   }
+  function closeWallets() {
+    $("wm").classList.remove("open");
+    $("wm-qr").classList.remove("on");
+    $("wm-list").querySelectorAll(".busy").forEach((el) => el.classList.remove("busy"));
+  }
+
+  // ---- WalletConnect -----------------------------------------------------------------
+  // The bundle (508 kB) is fetched the first time someone opens the sheet and
+  // never on a page view, so a desktop user with an extension pays nothing for it.
+  let wcBoot = null;
+  function wcInit() {
+    if (!wcBoot) wcBoot = (async () => {
+      const { EthereumProvider } = await import(WC.src);
+      const p = await EthereumProvider.init({
+        projectId: WC.projectId,
+        // Optional, not required: a wallet that has never heard of chain 4663
+        // should still be allowed to connect — we add the chain afterwards.
+        optionalChains: [CHAIN_ID],
+        rpcMap: { [CHAIN_ID]: RPC },
+        showQrModal: false, // the sheet above is ours
+        metadata: { name: "Ordo Swap", description: "The swap that keeps its own MEV", url: location.origin, icons: [${JSON.stringify(app + "/favicon-32.png")}] },
+      });
+      p.on("disconnect", () => { if (provider === p) forget(); });
+      return p;
+    })().catch((e) => { wcBoot = null; throw e; });
+    return wcBoot;
+  }
+
+  async function connectWC(w, el) {
+    if (el) { el.classList.add("busy"); const v = el.querySelector(".via"); if (v) v.textContent = w ? "opening…" : "loading…"; }
+    try {
+      const p = await wcInit();
+      if (p.session && p.accounts && p.accounts.length) { closeWallets(); return adopt(p, w, true); }
+      const onUri = (uri) => {
+        if (w) { try { localStorage.setItem("ordo:wc", w.id); } catch {} location.href = w.pair.replace("{uri}", encodeURIComponent(uri)); }
+        else showQr(uri);
+      };
+      p.on("display_uri", onUri);
+      try { await p.enable(); } finally { p.removeListener("display_uri", onUri); }
+      closeWallets();
+      await adopt(p, w, true);
+    } catch (e) {
+      closeWallets();
+      $("result").className = "result bad";
+      $("result").textContent = /user (rejected|disapproved)|closed modal/i.test(e.message || "") ? "connection cancelled" : explain(e);
+    }
+  }
+
+  /**
+   * A session survives the trip to the wallet app and back, and a reload: the
+   * relay keeps it and the provider restores it from storage. Restoring must be
+   * silent — asking the wallet to switch chains on page load would throw the
+   * user into another app for no reason — so the chain is settled at send time.
+   */
+  async function restoreWC() {
+    if (!WC || !hasWcSession()) return;
+    try {
+      const p = await wcInit();
+      if (!p.session || !p.accounts || !p.accounts.length) return;
+      let id = null; try { id = localStorage.getItem("ordo:wc"); } catch {}
+      await adopt(p, WC.wallets.find((w) => w.id === id) || null, false);
+    } catch { /* a stale session is not something to put on screen */ }
+  }
+  function hasWcSession() {
+    try {
+      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.indexOf("wc@2:") === 0) return true; }
+    } catch {}
+    return false;
+  }
+
+  /**
+   * Hand the phone to the wallet app for the requests a person has to see, and
+   * only those: a chain id read on every quote must not throw them out of the
+   * browser. The relay has already delivered the request by the time the wallet
+   * comes forward, so the prompt is waiting for them.
+   */
+  function handoff(p, w) {
+    if (!MOBILE || !w || p.__ordoHandoff) return;
+    const needs = new Set(WC.handoff);
+    const send = p.request.bind(p);
+    p.request = (args) => {
+      const out = send(args);
+      if (args && needs.has(args.method)) setTimeout(() => { location.href = w.open; }, 40);
+      return out;
+    };
+    p.__ordoHandoff = true;
+  }
+
+  async function showQr(uri) {
+    const { qrcode } = await import(WC.src);
+    const q = qrcode(0, "L"); q.addData(uri); q.make();
+    $("wm-qr-box").innerHTML = q.createSvgTag({ scalable: true, margin: 0 });
+    $("wm-qr-note").textContent = "Scan with your wallet app.";
+    $("wm-qr").classList.add("on");
+    $("wm-qr-copy").onclick = () => {
+      const done = () => { $("wm-qr-copy").textContent = "copied"; setTimeout(() => { $("wm-qr-copy").textContent = "copy link"; }, 1200); };
+      // Browsers refuse the clipboard in plenty of ordinary situations. Showing
+      // the link is worse than copying it but much better than nothing happening.
+      const show = () => { $("wm-qr-note").textContent = uri; $("wm-qr-copy").textContent = "select it above"; };
+      const p = navigator.clipboard && navigator.clipboard.writeText(uri);
+      if (p && p.then) p.then(done, show); else show();
+    };
+  }
+
+  // ---- connect / disconnect ----------------------------------------------------------
+  let isWc = false;
   const onAccounts = (a) => { account = a[0] || null; if (!account) disconnect(); else onConnected(); };
-  const onChain = () => ensureChain().catch(() => {});
+  // An extension switching networks under us should be corrected; a phone must
+  // not be dragged back into its wallet app because a session updated.
+  const onChain = () => { if (!isWc) ensureChain().catch(() => {}); };
   async function connect(p) {
     try {
       const accs = await p.request({ method: "eth_requestAccounts" });
-      provider = p; account = accs[0];
+      provider = p; account = accs[0]; isWc = false;
       await ensureChain();
       p.on && p.on("accountsChanged", onAccounts);
       p.on && p.on("chainChanged", onChain);
       onConnected();
     } catch (e) {
-      $("result").className = "result bad"; $("result").textContent = (e.message || String(e)).slice(0, 140);
+      $("result").className = "result bad"; $("result").textContent = explain(e);
     }
   }
-  async function disconnect() {
-    const p = provider;
-    provider = null; account = null;
-    if (p) {
-      p.removeListener && p.removeListener("accountsChanged", onAccounts);
-      p.removeListener && p.removeListener("chainChanged", onChain);
-      try { await p.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] }); } catch { /* not every wallet supports it */ }
-    }
+  /** Take up a WalletConnect session, whether just approved or restored from a reload. */
+  async function adopt(p, w, prompt) {
+    handoff(p, w);
+    provider = p; isWc = true;
+    account = (p.accounts && p.accounts[0]) || null;
+    if (!account) { const a = await p.request({ method: "eth_accounts" }); account = a[0]; }
+    // A restore can be followed by a connect on the same provider; listening twice
+    // would run the handler twice.
+    p.removeListener("accountsChanged", onAccounts);
+    p.removeListener("chainChanged", onChain);
+    p.on("accountsChanged", onAccounts);
+    p.on("chainChanged", onChain);
+    onConnected();
+    if (prompt) await ensureChain().catch((e) => { $("result").className = "result bad"; $("result").textContent = explain(e); });
+  }
+  function forget() {
+    provider = null; account = null; isWc = false;
+    try { localStorage.removeItem("ordo:wc"); } catch {}
     $("result").className = "result"; $("result").textContent = ""; $("done").innerHTML = "";
     onConnected();
   }
+  async function disconnect() {
+    const p = provider, wc = isWc;
+    forget();
+    if (!p) return;
+    p.removeListener && p.removeListener("accountsChanged", onAccounts);
+    p.removeListener && p.removeListener("chainChanged", onChain);
+    if (wc) { try { await p.disconnect(); } catch { /* the relay may already be gone */ } wcBoot = null; return; }
+    try { await p.request({ method: "wallet_revokePermissions", params: [{ eth_accounts: {} }] }); } catch { /* not every wallet supports it */ }
+  }
   async function ensureChain() {
-    const cur = await provider.request({ method: "eth_chainId" });
-    if (cur === CHAIN_HEX) return;
-    try { await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_HEX }] }); }
+    let cur = null;
+    try { cur = await provider.request({ method: "eth_chainId" }); } catch { /* ask anyway */ }
+    if (cur === CHAIN_HEX || Number(cur) === CHAIN_ID) return;
+    const switchTo = () => provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_HEX }] });
+    try { await switchTo(); return; }
     catch (e) {
-      if (e.code !== 4902 && !/unrecognized|not added|4902/i.test(e.message || "")) throw e;
-      await provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: CHAIN_HEX, chainName: "Robinhood Chain", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: [${JSON.stringify(rpc)}], blockExplorerUrls: [EXPLORER] }] });
+      if (e.code !== 4902 && !/unrecognized|not added|4902|unsupported chain|missing or invalid/i.test(e.message || "")) throw e;
     }
+    await provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: CHAIN_HEX, chainName: "Robinhood Chain", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: [${JSON.stringify(rpc)}], blockExplorerUrls: [EXPLORER] }] });
+    // Most wallets switch as part of adding; the ones that do not need asking.
+    const after = await provider.request({ method: "eth_chainId" }).catch(() => null);
+    if (after !== CHAIN_HEX && Number(after) !== CHAIN_ID) await switchTo();
   }
   function onConnected() {
     const b = $("nav-connect");
@@ -813,7 +1017,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   $("pick-out").addEventListener("click", () => openPicker("out"));
   $("pk-x").addEventListener("click", closePicker);
   $("picker").addEventListener("click", (e) => { if (e.target === $("picker")) closePicker(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closePicker(); $("wm").classList.remove("open"); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closePicker(); closeWallets(); } });
   $("pk-q").addEventListener("input", renderPicker);
   $("pk-q").addEventListener("paste", () => setTimeout(renderPicker, 0));
   $("tab-stocks").addEventListener("click", () => { tab = "stocks"; $("tab-stocks").classList.add("on"); $("tab-tokens").classList.remove("on"); renderPicker(); });
@@ -837,8 +1041,9 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   $("slip").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { $("slip").querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); slippageBps = BigInt(Math.round(Number(b.dataset.v) * 100)); $("slip-v").textContent = b.dataset.v + "%"; if (quote) paintQuote(); }));
   $("go").addEventListener("click", go);
   $("nav-connect").addEventListener("click", () => account ? disconnect() : openWallets());
-  $("wm-x").addEventListener("click", () => $("wm").classList.remove("open"));
-  $("wm").addEventListener("click", (e) => { if (e.target === $("wm")) $("wm").classList.remove("open"); });
+  $("wm-x").addEventListener("click", closeWallets);
+  $("wm").addEventListener("click", (e) => { if (e.target === $("wm")) closeWallets(); });
+  restoreWC();
   refreshStats(); setInterval(refreshStats, 20000);
   paintButton();
 })();

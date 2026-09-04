@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { landingHtml } from "./landing.ts";
 import { join } from "node:path";
 import { ENDPOINTS, isRetryableRpcError, rpcFetch, rpcOnce, rpcUrls, sendRawTransaction, sequencerUrl } from "@ordofi/core";
@@ -351,6 +353,19 @@ const LANDING = landingHtml({
   app: "https://app.ordofi.network",
 });
 
+// WalletConnect, for the phones. The bundle is built from a pinned version and
+// committed (npm run build:wc); if it is missing, or no project id is set, the
+// page simply does not offer it. Served under a hash of its own contents so it
+// can be cached forever and still change when we rebuild it.
+const WC_BUNDLE = (() => {
+  try {
+    const bytes = readFileSync(new URL("../public/wc.js", import.meta.url));
+    return { bytes, tag: createHash("sha256").update(bytes).digest("hex").slice(0, 10) };
+  } catch {
+    return null;
+  }
+})();
+
 // Ordo Swap's home: the page, and the tally behind it. Only when the contract
 // is configured; otherwise /swap says so rather than showing an empty product.
 const SWAP_PAGE = CONFIG.ordoSwapAddress
@@ -361,6 +376,7 @@ const SWAP_PAGE = CONFIG.ordoSwapAddress
       app: "https://app.ordofi.network",
       docs: "https://app.ordofi.network/docs",
       proofTx: process.env.ORDO_SWAP_PROOF_TX ?? "0xd3402046255c3f0b954989660d3faae2c39a46930fd442f813e39b116b8d0641",
+      wc: CONFIG.wcProjectId && WC_BUNDLE ? { projectId: CONFIG.wcProjectId, src: `/swap/wc.js?v=${WC_BUNDLE.tag}` } : null,
     })
   : null;
 const swapStats = CONFIG.ordoSwapAddress
@@ -431,6 +447,26 @@ const server = createServer((req, res) => {
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=120" });
     res.end(SWAP_PAGE);
+    return;
+  }
+  if (req.method === "GET" && url === "/swap/wc.js") {
+    if (!WC_BUNDLE) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("WalletConnect bundle not built — npm run build:wc");
+      return;
+    }
+    // Content-addressed by the ?v= the page asks for, so a year is safe.
+    const tag = `"${WC_BUNDLE.tag}"`;
+    if (req.headers["if-none-match"] === tag) {
+      res.writeHead(304, { etag: tag, "cache-control": "public, max-age=31536000, immutable" }).end();
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "public, max-age=31536000, immutable",
+      etag: tag,
+    });
+    res.end(WC_BUNDLE.bytes);
     return;
   }
   if (req.method === "GET" && url === "/swap/tokens") {
@@ -655,6 +691,17 @@ server.listen(CONFIG.port, () => {
   console.log(
     `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo${CONFIG.ordoSwapAddress ? `, ordo_quoteSwap (OrdoSwap ${CONFIG.ordoSwapAddress})` : ""}`,
   );
+  if (SWAP_PAGE) {
+    console.log(
+      `OrdoFi gateway | /swap wallets: extensions always; phone browsers ${
+        !WC_BUNDLE
+          ? "no (bundle missing — npm run build:wc)"
+          : !CONFIG.wcProjectId
+            ? "no (no ORDO_WC_PROJECT_ID) — a phone can only use /swap from inside a wallet's own browser"
+            : `over WalletConnect (/swap/wc.js @ ${WC_BUNDLE.tag})`
+      }`,
+    );
+  }
   const auctionKeys = [...apiKeys.values()].filter((k) => k.mode === "auction");
   console.log(
     `OrdoFi gateway | order flow: ${auctionKeys.length}/${apiKeys.size} key(s) and ${

@@ -50,6 +50,10 @@ x-gateway: &gateway
     # The swap page's token list, from the app over the compose network. The
     # public hostname is a hairpin from inside the box and times out.
     ORDO_TOKEN_LIST_URL: ${ORDO_TOKEN_LIST_URL:-http://web:3000/api/trade/tokens}
+    # WalletConnect (free, dashboard.reown.com). Not a secret — it ships in the
+    # page. Without it /swap can only be used from a wallet's own browser on a
+    # phone; with it, Safari and Chrome can reach the wallet app.
+    ORDO_WC_PROJECT_ID: ${ORDO_WC_PROJECT_ID:-}
   # Shared index: the portal writes hashed API keys, the gateway reads them.
   volumes: ["ordo-data:/app/data"]
   depends_on: [auction]
