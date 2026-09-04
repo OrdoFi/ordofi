@@ -249,7 +249,12 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   const reclaim = chooseReclaim(results.reclaims, gasPrice, protocolBps);
   if (!reclaim) {
     const best = results.reclaims.reduce((m, r) => (r.profit > m ? r.profit : m), 0n);
-    return plain(req, ordoSwap, results.amountOut, best > 0n ? "the gap this swap opens does not cover the gas of closing it" : "this swap opens no cross-tier gap");
+    return plain(
+      req,
+      ordoSwap,
+      results.amountOut,
+      results.note ?? (best > 0n ? "the gap this swap opens does not cover the gas of closing it" : "this swap opens no cross-tier gap"),
+    );
   }
   const surplusToUser = (reclaim.profit * (10_000n - protocolBps)) / 10_000n;
   return {
@@ -293,6 +298,8 @@ const hex = (n: bigint): Hex => `0x${n.toString(16)}`;
 interface Searched {
   amountOut: bigint;
   reclaims: { cycle: Cycle; size: bigint; profit: bigint }[];
+  /** Why the search could not run, when it could not. */
+  note?: string;
 }
 
 /** WETH-in: one `quote()` eth_call per (cycle, size), each with the swap's value attached. */
@@ -367,7 +374,17 @@ async function quoteTokenIn(
   const results: { status?: string; returnData?: Hex; error?: { message?: string } }[] = blocks?.[0]?.calls ?? [];
   const swapRes = results[1];
   if (!swapRes || swapRes.status !== "0x1") {
-    throw new RpcError(-32000, `ordo: the swap itself would revert — ${swapRes?.error?.message ?? "unknown reason"}`, { ordoProtected: true });
+    // The sender cannot make this swap right now — usually no balance or no
+    // approval yet, which is the state every widget is in before the wallet is
+    // connected. Still answer what the swap would return, from the quoter, so
+    // the caller can show a price; the reclaim search needs the real state.
+    const out = await rpc("eth_call", [
+      { to: QUOTER_V2, data: encodeFunctionData({ abi: QUOTER_ABI, functionName: "quoteExactInput", args: [userPath, amountIn] }) },
+      "latest",
+    ]).catch(() => null);
+    if (!out) throw new RpcError(-32000, `ordo: the swap itself would revert — ${swapRes?.error?.message ?? "unknown reason"}`, { ordoProtected: true });
+    const [amountOut] = decodeFunctionResult({ abi: QUOTER_ABI, functionName: "quoteExactInput", data: out as Hex }) as [bigint, bigint[], number[], bigint];
+    return { amountOut, reclaims: [], note: "connect a wallet that holds the token and has approved the contract to see what would come back" };
   }
   const [amountOut] = decodeFunctionResult({ abi: ORDO_SWAP_ABI, functionName: "swap", data: swapRes.returnData! }) as [bigint, bigint];
   const reclaims: Searched["reclaims"] = [];
