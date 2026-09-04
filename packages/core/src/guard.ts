@@ -293,10 +293,15 @@ export async function proveDelivery(
   for (const log of txOut.logs ?? []) {
     if ((log.topics?.[0] ?? "").toLowerCase() !== TRANSFER_TOPIC || log.topics.length < 3) continue;
     const to = ("0x" + String(log.topics[2]).slice(-40)) as Hex;
+    const fromAddr = ("0x" + String(log.topics[1]).slice(-40)) as Hex;
     // Burns to address(0) are how WETH withdraws and how some tokens take fees;
     // every other black hole is a loss.
     if (sameAddr(to, BLACKHOLES[0])) continue;
     if (!BLACKHOLES.some((h) => sameAddr(h, to))) continue;
+    // A mint straight into a black hole (Transfer from address zero) is the
+    // token's own design — a vault locking its first shares against inflation,
+    // Uniswap's MINIMUM_LIQUIDITY — and never the sender's money.
+    if (sameAddr(fromAddr, BLACKHOLES[0])) continue;
     const amount = log.data && log.data !== "0x" ? BigInt(log.data) : 0n;
     if (amount === 0n) continue;
     const allowed = (req.allowLeaks ?? []).find((a) => sameAddr(a.to, to) && sameAddr(a.asset as Hex, log.address as Hex) && amount <= a.max);
