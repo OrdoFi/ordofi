@@ -375,7 +375,8 @@ if (tokenList) {
 let stopping = false;
 
 const server = createServer((req, res) => {
-  const url = req.url ?? "/";
+  // The path alone: a shared link like /swap?ref=x or /swap#eth must still be the swap page.
+  const url = (req.url ?? "/").split(/[?#]/, 1)[0] || "/";
 
   // Browser dapps call the RPC straight from the page; wallets do not need
   // this, but nothing here is origin-sensitive, so allow it.

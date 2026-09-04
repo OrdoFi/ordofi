@@ -22,7 +22,8 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#efeeea" />
 <title>Ordo Swap — the swap that keeps its own MEV · Robinhood Chain</title>
 <meta name="description" content="Every swap on Robinhood Chain leaks value to the bot that lands behind it. Ordo Swap runs that back-run inside your own transaction and pays the surplus to you. Live on mainnet." />
 <link rel="icon" type="image/png" sizes="32x32" href="${app}/favicon-32.png" />
@@ -30,8 +31,11 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
 <style>
   :root { --bg:#efeeea; --card:#f3f2ee; --border:#d8d5ce; --border2:#c6c2b9; --text:#1d1616; --dim:#3a3430; --muted:#6d6660; --accent:#ff6414; --accent2:#e35505; --soft:#ffe3d2; --ok:#1e9e6a; --okbg:#e6f6ee; --bad:#c0392b; --lime:#b8ff3c;
     --mono:"Fira Code",ui-monospace,Menlo,monospace; --sans:Inter,-apple-system,sans-serif; --display:"Funnel Display",Inter,sans-serif; }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:var(--bg); color:var(--text); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html { -webkit-text-size-adjust:100%; }
+  body { background:var(--bg); color:var(--text); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+  body.lock { overflow:hidden; }
+  #rows { overflow-x:auto; -webkit-overflow-scrolling:touch; }
   a { color:inherit; text-decoration:none; } a:hover { color:var(--accent); }
   ::selection { background:var(--accent); color:#fff; }
   .wrap { max-width:1040px; margin:0 auto; padding:0 28px; }
@@ -195,9 +199,56 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .wrow .n { font-weight:600; font-size:13.5px; }
   .wnote { padding:13px 18px; font-size:11.5px; color:var(--muted); line-height:1.6; }
 
-  @media (max-width:900px) { .hero { grid-template-columns:1fr; gap:32px; } header { padding:40px 0 40px; } .status { grid-template-columns:repeat(2,minmax(0,1fr)); } .grid3 { grid-template-columns:1fr; } .hide-s { display:none; } }
-  @media (max-width:600px) { nav .links { gap:12px; font-size:13px; } .logo { font-size:19px; } .card { padding:20px 18px 18px; } }
-  @media (max-width:430px) { nav .links a:nth-child(n+3) { display:none; } }
+  @media (max-width:900px) {
+    .wrap { padding:0 16px; }
+    header { padding:14px 0 30px; }
+    /* On a phone you came to swap: the card first, the pitch under it. */
+    .hero { grid-template-columns:minmax(0,1fr); gap:26px; }
+    .hero > .card { order:-1; }
+    .eyebrow { margin-bottom:12px; }
+    h1 { font-size:clamp(28px,8vw,38px); max-width:none; }
+    .sub { font-size:14.5px; }
+    .proofline { font-size:11px; }
+    .card { padding:18px 16px 16px; }
+    .card h2 { font-size:19px; }
+    label.f { margin-top:14px; }
+    .box { padding:12px 12px; }
+    .box input, .box .ro { font-size:20px; }
+    .pill { min-height:42px; padding:8px 10px 8px 8px; }
+    .flip button { width:44px; height:44px; font-size:18px; }
+    .slip button { padding:8px 12px; font-size:12px; }
+    .mev { padding:12px; }
+    .go { padding:16px; font-size:16px; }
+    .status { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .status > div { padding:16px; }
+    .status > div:nth-child(2) { border-right:none; }
+    .status > div:nth-child(n+3) { border-top:1px solid var(--border); }
+    .status .v { font-size:22px; }
+    section { padding:40px 0; }
+    h2.s { font-size:24px; }
+    .grid3 { grid-template-columns:1fr; }
+    .grid3 > div { border-right:none; border-bottom:1px solid var(--border); }
+    .grid3 > div:last-child { border-bottom:none; }
+    .hide-s { display:none; }
+    #rows table { min-width:440px; }
+    pre { font-size:11.5px; padding:14px; }
+    footer { flex-direction:column; gap:8px; }
+    /* The picker rises from the bottom and fills the screen, the way a phone expects. */
+    .picker { align-items:flex-end; padding:0; }
+    .psheet { width:100%; max-width:100%; height:88dvh; max-height:88dvh; padding-bottom:env(safe-area-inset-bottom); animation:up .25s cubic-bezier(.2,.9,.3,1.05); }
+    @keyframes up { from { transform:translateY(28px); opacity:0 } to { transform:none; opacity:1 } }
+    .psheet .ph { padding:14px 16px 10px; }
+    .search { padding:12px; }
+    .search input { font-size:16px; }
+    .tabs button { padding:11px; }
+    .trow { padding:13px 16px; }
+    .trow .ico { width:34px; height:34px; }
+    .modal { align-items:flex-end; padding:0; }
+    .sheet { width:100%; max-width:100%; padding-bottom:env(safe-area-inset-bottom); }
+    .wrow { padding:15px 18px; }
+  }
+  @media (max-width:600px) { nav .links { gap:12px; font-size:13px; } .logo { font-size:19px; } .navbtn { padding:8px 12px; } }
+  @media (max-width:430px) { nav .links a { display:none; } }
 </style>
 </head>
 <body>
@@ -425,11 +476,12 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     $("pk-q").value = "";
     tab = (side === "in" ? tokIn : tokOut).stock ? "stocks" : "tokens";
     $("tab-stocks").classList.toggle("on", tab === "stocks"); $("tab-tokens").classList.toggle("on", tab === "tokens");
-    $("picker").classList.add("open");
+    $("picker").classList.add("open"); document.body.classList.add("lock");
     renderPicker();
-    setTimeout(() => $("pk-q").focus(), 30);
+    // Focus the search on a desktop; on a phone that would throw the keyboard over half the list.
+    if (!matchMedia("(max-width:900px)").matches) setTimeout(() => $("pk-q").focus(), 30);
   }
-  function closePicker() { $("picker").classList.remove("open"); }
+  function closePicker() { $("picker").classList.remove("open"); document.body.classList.remove("lock"); }
   const priceCell = (t) => t.usd != null ? '<div class="px">' + (t.usd >= 1 ? usd(t.usd) : "$" + t.usd.toPrecision(3)) + (t.swaps24h ? "<small>" + t.swaps24h.toLocaleString() + " swaps/24h</small>" : "") + "</div>" : "";
   const routable = (t) => !!(t.v3 || t.v4);
   const row = (t) => '<div class="trow' + (routable(t) ? "" : " off") + '" data-a="' + t.address + (t.native ? "|eth" : "") + '">' + avatar(t) +
@@ -625,7 +677,14 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     const list = [...found.values()];
     if (list.length === 0 && window.ethereum) return connect(window.ethereum);
     if (list.length === 1) return connect(list[0].provider);
-    if (list.length === 0) { $("result").className = "result bad"; $("result").textContent = "no wallet found — install MetaMask or Rabby"; return; }
+    if (list.length === 0) {
+      const mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+      $("result").className = "result bad";
+      $("result").innerHTML = mobile
+        ? 'no wallet in this browser — <a href="https://metamask.app.link/dapp/' + location.host + location.pathname + '">open in MetaMask</a> or use your wallet\u2019s built-in browser'
+        : "no wallet found — install MetaMask or Rabby";
+      return;
+    }
     $("wm-list").innerHTML = list.map((d, i) => '<div class="wrow" data-i="' + i + '"><img src="' + d.info.icon + '" alt="" /><div class="n">' + esc(d.info.name) + "</div></div>").join("");
     $("wm-list").querySelectorAll(".wrow").forEach((el) => el.onclick = () => { $("wm").classList.remove("open"); connect(list[Number(el.dataset.i)].provider); });
     $("wm").classList.add("open");
