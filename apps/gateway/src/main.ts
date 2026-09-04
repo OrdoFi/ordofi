@@ -135,8 +135,11 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
       metrics.inc("upstream_throttled_total");
       throw new RpcError(-32005, "the network is busy, please try again in a moment");
     }
+    // A real answer from a healthy upstream, code and data intact. The data is
+    // the revert reason — the one thing a wallet can show for a failed
+    // eth_call or eth_estimateGas — and used to be lost right here.
     const code = (e as { code?: number }).code;
-    if (typeof code === "number") throw new RpcError(code, (e as Error).message);
+    if (typeof code === "number") throw new RpcError(code, (e as Error).message, (e as { data?: unknown }).data);
     metrics.inc("upstream_challenge_total");
     throw new RpcError(-32000, `all RPC upstreams refused the request — ${(e as Error).message}`);
   } finally {
