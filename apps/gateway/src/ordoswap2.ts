@@ -156,6 +156,13 @@ const WORTH_IT = 3n;
 const LADDER_PERMILLE = [100n, 400n, 1000n];
 /** Most back-run candidates simulated for one swap. */
 const MAX_RECLAIM_CANDIDATES = 4;
+/**
+ * How long the back-run search may take after the price is known. Whatever
+ * has answered by then is what is chosen; a candidate still simulating is
+ * treated as not worth it. A quote that arrives is worth more than a
+ * marginally better one that does not.
+ */
+const RECLAIM_DEADLINE_MS = 1_500;
 const hex = (n: bigint): Hex => `0x${n.toString(16)}`;
 const low = (a: string) => a.toLowerCase() as Hex;
 const isEther = (a: string) => low(a) === WETH || low(a) === NATIVE;
@@ -492,12 +499,13 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   const tries = candidates.flatMap((route) => sizes.map((size) => ({ route, size })));
   const results: { route: Route; size: bigint; profit: bigint }[] = [];
   if (etherIn) {
-    await Promise.all(
+    const all = Promise.all(
       tries.map(async ({ route, size }) => {
         const q = await quoteCall(rpc, ordoSwap, chosen.route.legs, req.amountIn, { legs: route.legs, amountIn: size, minProfit: 0n, gas: 0n }, deps.valueSource ?? WETH);
         if (q && !q.failed && q.profit > 0n) results.push({ route, size, profit: q.profit });
       }),
     );
+    await Promise.race([all, new Promise((r) => setTimeout(r, RECLAIM_DEADLINE_MS).unref?.())]);
   } else {
     const calls = [
       approveCall(req.from!, tokenIn, ordoSwap, req.amountIn),
