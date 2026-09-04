@@ -12,6 +12,7 @@ import { bondingEnabled, checkBond } from "./bonds.js";
 import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
 import { settlementEnabled, submitSettlement } from "./settle.js";
 import { createFeedRelay, feedStats } from "./feedrelay.js";
+import { viaHtml } from "./via.js";
 import {
   acknowledge,
   anchoringConfigured,
@@ -267,8 +268,27 @@ async function handleSubmit(body: any): Promise<any> {
   };
 }
 
+/**
+ * Rendered once: it is the same for every visitor, and the numbers on it come
+ * from this host's own endpoints after the page loads.
+ */
+const VIA_PAGE = viaHtml({
+  settlement: SETTLEMENT_ADDRESS,
+  receiptLog: process.env.ORDO_RECEIPT_LOG_ADDRESS ?? "",
+  explorer: "https://robinhoodchain.blockscout.com",
+  app: "https://app.ordofi.network",
+  rpc: "https://rpc.ordofi.network",
+  docs: "https://app.ordofi.network/docs",
+});
+
 const server = createServer((req, res) => {
   const url = req.url ?? "/";
+
+  if (req.method === "GET" && (url === "/" || url.startsWith("/?"))) {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" });
+    res.end(VIA_PAGE);
+    return;
+  }
 
   if (req.method === "GET" && url.startsWith("/receipts")) {
     const json = (body: unknown, code = 200) => {
