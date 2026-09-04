@@ -51,8 +51,12 @@ export type Rpc = (method: string, params: unknown[]) => Promise<unknown>;
 export interface SwapRequest {
   tokenIn: Hex;
   tokenOut: Hex;
-  /** Fee tier of the pool the user is swapping through. */
-  fee: number;
+  /**
+   * Fee tier of the pool to swap through, for a direct single hop. Omit it and
+   * the route is found: direct at any tier, or through WETH or USDG, whichever
+   * returns the most.
+   */
+  fee?: number;
   amountIn: bigint;
   /** The user's slippage floor for their own swap. Passed through to the router. */
   amountOutMinimum: bigint;
@@ -72,11 +76,20 @@ export interface Reclaim {
   label: string;
 }
 
+export interface Hop {
+  tokenIn: Hex;
+  tokenOut: Hex;
+  fee: number;
+}
+
 export interface SwapQuote {
   to: Hex;
   data: Hex;
   value: Hex;
   amountOut: Hex;
+  /** The V3 path the swap takes, hop by hop. */
+  route: Hop[];
+  path: Hex;
   /** Present when a reclaim is attached. */
   reclaim: null | {
     path: Hex;
@@ -238,19 +251,40 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   const tokenOut = req.tokenOut.toLowerCase() as Hex;
   if (tokenIn === tokenOut) throw new RpcError(-32602, "ordo_quoteSwap: tokenIn and tokenOut are the same");
   if (req.amountIn <= 0n) throw new RpcError(-32602, "ordo_quoteSwap: amountIn must be positive");
-  if (!FEES.includes(req.fee)) throw new RpcError(-32602, `ordo_quoteSwap: fee must be one of ${FEES.join(", ")}`);
+  if (req.fee !== undefined && !FEES.includes(req.fee)) throw new RpcError(-32602, `ordo_quoteSwap: fee must be one of ${FEES.join(", ")}`);
   if (req.nativeOut && tokenOut !== WETH) throw new RpcError(-32602, "ordo_quoteSwap: nativeOut requires tokenOut to be WETH");
   const wethIn = tokenIn === WETH;
   const wethOut = tokenOut === WETH;
-  if (!wethIn && !wethOut) {
-    // A token-to-token swap opens gaps on two pairs at once; v1 reclaims only WETH-legged swaps.
-    return plain(req, ordoSwap, null, "reclaim is only searched for swaps with WETH on one side (v1)");
+
+  // The route: the one asked for, or the best one there is.
+  let route: Hop[];
+  let routedOut: bigint | null = null;
+  if (req.fee !== undefined) {
+    const tiers = await tiersFor(rpc, tokenIn, tokenOut);
+    if (!tiers.includes(req.fee)) throw new RpcError(-32602, `ordo_quoteSwap: no ${req.fee} pool for this pair`);
+    route = [{ tokenIn, tokenOut, fee: req.fee }];
+  } else {
+    const found = await bestRoute(rpc, tokenIn, tokenOut, req.amountIn);
+    if (!found) throw new RpcError(-32000, "ordo_quoteSwap: no route — this pair has no Uniswap V3 pool, directly or through WETH or USDG");
+    route = found.route;
+    routedOut = found.amountOut;
+  }
+  const userPath = encodePath(
+    [route[0].tokenIn, ...route.map((h) => h.tokenOut)],
+    route.map((h) => h.fee),
+  );
+  const single = route.length === 1;
+
+  if (!single || (!wethIn && !wethOut)) {
+    // A multi-hop route, or a token-to-token hop, opens gaps on more than one
+    // pair at once; v1 searches the back-run only for single hops against WETH.
+    const out = routedOut ?? (await quoteExactIn(rpc, userPath, req.amountIn));
+    return plain(req, ordoSwap, userPath, route, out, single ? "back-run search covers single-hop swaps against WETH (v1)" : "back-run search covers single-hop swaps (v1); this one routes through " + (route[0].tokenOut === USDG ? "USDG" : "WETH"));
   }
   if (!wethIn && !req.from) throw new RpcError(-32602, "ordo_quoteSwap: token-in swaps need `from` (the sender) to simulate");
 
+  const fee = route[0].fee;
   const token = wethIn ? tokenOut : tokenIn;
-  const userPath = encodePath([tokenIn, tokenOut], [req.fee]);
-
   const [tiers, usdgTiers, wethUsdgTiers, floatHex, bpsHex, gasPriceHex] = await Promise.all([
     tiersFor(rpc, WETH, token),
     token === USDG ? Promise.resolve([] as number[]) : tiersFor(rpc, USDG, token),
@@ -259,15 +293,15 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
     brief(`bps:${ordoSwap}`, () => rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP_ABI, functionName: "protocolBps" }) }, "latest"])),
     brief("gasPrice", () => rpc("eth_gasPrice", [])),
   ]);
-  if (!tiers.includes(req.fee)) throw new RpcError(-32602, `ordo_quoteSwap: no ${req.fee} pool for this pair`);
   const float = BigInt(floatHex as string);
   const protocolBps = BigInt(bpsHex as string);
   const gasPrice = BigInt(gasPriceHex as string);
-  const cycles = candidateCycles(token, req.fee, wethIn, tiers, usdgTiers, wethUsdgTiers[0]);
+  const cycles = candidateCycles(token, fee, wethIn, tiers, usdgTiers, wethUsdgTiers[0]);
   // Never more than the swap itself: past that the reclaim is trading the pool, not closing the gap.
   const sizes = sizeLadder(float, req.amountIn);
   if (cycles.length === 0 || sizes.length === 0) {
-    return plain(req, ordoSwap, null, cycles.length === 0 ? "this pair has one tier; a swap on it opens no cross-tier gap" : "reclaim float is empty");
+    const out = routedOut ?? (await quoteExactIn(rpc, userPath, req.amountIn));
+    return plain(req, ordoSwap, userPath, route, out, cycles.length === 0 ? "this pair has one tier; a swap on it opens no cross-tier gap" : "reclaim float is empty");
   }
 
   const results = wethIn
@@ -280,6 +314,8 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
     return plain(
       req,
       ordoSwap,
+      userPath,
+      route,
       results.amountOut,
       results.note ?? (best > 0n ? "the gap this swap opens does not cover the gas of closing it" : "this swap opens no cross-tier gap"),
     );
@@ -294,6 +330,8 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
     }),
     value: wethIn ? hex(req.amountIn) : "0x0",
     amountOut: hex(results.amountOut),
+    route,
+    path: userPath,
     reclaim: {
       path: reclaim.path,
       amountIn: hex(reclaim.amountIn),
@@ -305,8 +343,57 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   };
 }
 
-function plain(req: SwapRequest, ordoSwap: Hex, amountOut: bigint | null, note: string): SwapQuote {
-  const userPath = encodePath([req.tokenIn, req.tokenOut], [req.fee]);
+/** One quoter call for a whole path; null when it cannot be routed right now. */
+async function quoteExactIn(rpc: Rpc, path: Hex, amountIn: bigint): Promise<bigint | null> {
+  try {
+    const out = (await rpc("eth_call", [
+      { to: QUOTER_V2, data: encodeFunctionData({ abi: QUOTER_ABI, functionName: "quoteExactInput", args: [path, amountIn] }) },
+      "latest",
+    ])) as Hex;
+    return (decodeFunctionResult({ abi: QUOTER_ABI, functionName: "quoteExactInput", data: out }) as [bigint, bigint[], number[], bigint])[0];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The paths worth trying between two tokens: every direct tier, and every
+ * two-hop through WETH or USDG — the two tokens everything on this chain has
+ * depth against. Exported for tests.
+ */
+export function candidateRoutes(tokenIn: Hex, tokenOut: Hex, tiersOf: (a: Hex, b: Hex) => number[]): Hop[][] {
+  const routes: Hop[][] = tiersOf(tokenIn, tokenOut).map((fee) => [{ tokenIn, tokenOut, fee }]);
+  for (const mid of [WETH, USDG]) {
+    if (mid === tokenIn || mid === tokenOut) continue;
+    for (const f1 of tiersOf(tokenIn, mid)) for (const f2 of tiersOf(mid, tokenOut)) routes.push([{ tokenIn, tokenOut: mid, fee: f1 }, { tokenIn: mid, tokenOut, fee: f2 }]);
+  }
+  return routes;
+}
+
+async function bestRoute(rpc: Rpc, tokenIn: Hex, tokenOut: Hex, amountIn: bigint): Promise<{ route: Hop[]; amountOut: bigint } | null> {
+  const pairs: [Hex, Hex][] = [[tokenIn, tokenOut], [tokenIn, WETH], [WETH, tokenOut], [tokenIn, USDG], [USDG, tokenOut]];
+  const tiers = new Map<string, number[]>();
+  await Promise.all(
+    pairs.map(async ([a, b]) => {
+      if (a === b) return;
+      tiers.set([a, b].sort().join(":"), await tiersFor(rpc, a, b));
+    }),
+  );
+  const tiersOf = (a: Hex, b: Hex) => (a === b ? [] : tiers.get([a, b].sort().join(":")) ?? []);
+  const routes = candidateRoutes(tokenIn, tokenOut, tiersOf);
+  if (routes.length === 0) return null;
+  const quoted = await Promise.all(
+    routes.map(async (route) => ({
+      route,
+      amountOut: await quoteExactIn(rpc, encodePath([route[0].tokenIn, ...route.map((h) => h.tokenOut)], route.map((h) => h.fee)), amountIn),
+    })),
+  );
+  let best: { route: Hop[]; amountOut: bigint } | null = null;
+  for (const q of quoted) if (q.amountOut !== null && q.amountOut > 0n && (!best || q.amountOut > best.amountOut)) best = { route: q.route, amountOut: q.amountOut };
+  return best;
+}
+
+function plain(req: SwapRequest, ordoSwap: Hex, userPath: Hex, route: Hop[], amountOut: bigint | null, note: string): SwapQuote {
   return {
     to: ordoSwap,
     data: encodeFunctionData({
@@ -316,6 +403,8 @@ function plain(req: SwapRequest, ordoSwap: Hex, amountOut: bigint | null, note: 
     }),
     value: req.tokenIn.toLowerCase() === WETH ? hex(req.amountIn) : "0x0",
     amountOut: amountOut === null ? "0x0" : hex(amountOut),
+    route,
+    path: userPath,
     reclaim: null,
     note,
   };

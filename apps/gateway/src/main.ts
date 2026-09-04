@@ -11,6 +11,7 @@ import { routeOrderFlow } from "./orderflow.js";
 import { quoteSwap } from "./ordoswap.js";
 import { swapHtml } from "./swap-page.js";
 import { SwapStats } from "./swapstats.js";
+import { TokenList } from "./tokens.js";
 import {
   BLOCK_MS,
   HedgeBudget,
@@ -231,7 +232,7 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
         {
           tokenIn: addr(p.tokenIn, "tokenIn"),
           tokenOut: addr(p.tokenOut, "tokenOut"),
-          fee: Number(p.fee),
+          fee: p.fee === undefined || p.fee === null || p.fee === "" ? undefined : Number(p.fee),
           amountIn: big(p.amountIn, "amountIn"),
           amountOutMinimum: big(p.amountOutMinimum, "amountOutMinimum", true),
           recipient: addr(p.recipient, "recipient"),
@@ -356,6 +357,13 @@ if (swapStats && !CONFIG.edgeOrigin) {
   setTimeout(tick, 3_000).unref();
   setInterval(tick, 30_000).unref();
 }
+// The picker's token list, refreshed from the app every minute.
+const tokenList = CONFIG.ordoSwapAddress ? new TokenList(process.env.ORDO_TOKEN_LIST_URL ?? "https://app.ordofi.network/api/trade/tokens") : null;
+if (tokenList) {
+  const tick = () => tokenList.refresh().catch((e) => console.warn(`gateway | token list: ${(e as Error).message}`));
+  tick();
+  setInterval(tick, 60_000).unref();
+}
 
 let stopping = false;
 
@@ -385,6 +393,16 @@ const server = createServer((req, res) => {
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=120" });
     res.end(SWAP_PAGE);
+    return;
+  }
+  if (req.method === "GET" && url === "/swap/tokens") {
+    if (!tokenList) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "Ordo Swap is not enabled on this gateway" }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=60" });
+    res.end(tokenList.body());
     return;
   }
   if (req.method === "GET" && url === "/swap/stats") {

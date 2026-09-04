@@ -78,10 +78,45 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   .box .ro.dim { color:var(--border2); }
   .box .ro.busy { opacity:.35; background:linear-gradient(90deg, transparent 0%, rgba(0,0,0,.05) 50%, transparent 100%); background-size:200% 100%; animation:shimmer 1.1s linear infinite; }
   @keyframes shimmer { from { background-position:200% 0 } to { background-position:-200% 0 } }
-  .pill { display:flex; align-items:center; gap:7px; border:1px solid var(--border); background:#fff; padding:6px 10px 6px 8px; font-size:13px; font-weight:600; position:relative; white-space:nowrap; }
-  .pill .ico { width:22px; height:22px; flex:none; border-radius:50%; background:var(--soft); color:var(--accent2); font-family:var(--mono); font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:600; overflow:hidden; }
-  .pill .ico img { width:100%; height:100%; display:block; }
-  .pill select { position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; }
+  .pill { display:flex; align-items:center; gap:7px; border:1px solid var(--border); background:#fff; padding:6px 10px 6px 8px; font-size:13px; font-weight:600; white-space:nowrap; cursor:pointer; font-family:var(--sans); color:var(--text); transition:border-color .15s, transform .08s; }
+  .pill:hover { border-color:var(--text); }
+  .pill:active { transform:scale(.98); }
+  .pill .chev { color:var(--muted); font-size:11px; }
+  .ico { width:22px; height:22px; flex:none; border-radius:50%; background:var(--soft); color:var(--accent2); font-family:var(--mono); font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:600; overflow:hidden; }
+  .ico img { width:100%; height:100%; display:block; object-fit:cover; }
+
+  /* ---- token picker ---- */
+  .picker { position:fixed; inset:0; background:rgba(25,24,23,.45); display:none; align-items:flex-start; justify-content:center; padding-top:8vh; z-index:300; }
+  .picker.open { display:flex; }
+  .psheet { background:#fff; border:1px solid var(--border); width:460px; max-width:calc(100vw - 24px); max-height:82vh; display:flex; flex-direction:column; animation:rise .22s cubic-bezier(.2,.9,.3,1.1); }
+  @keyframes rise { from { transform:translateY(10px); opacity:0 } to { transform:none; opacity:1 } }
+  .psheet .ph { padding:16px 18px 12px; border-bottom:1px solid var(--border); }
+  .psheet .ph .t { display:flex; justify-content:space-between; align-items:center; font-family:var(--display); font-weight:600; font-size:17px; margin-bottom:12px; }
+  .psheet .x { cursor:pointer; color:var(--muted); font-size:15px; padding:2px 6px; }
+  .psheet .x:hover { color:var(--text); }
+  .search { display:flex; align-items:center; gap:10px; border:1px solid var(--border); background:var(--bg); padding:10px 12px; }
+  .search:focus-within { border-color:var(--text); }
+  .search input { flex:1; border:none; background:transparent; outline:none; font-family:var(--sans); font-size:14px; color:var(--text); }
+  .search input::placeholder { color:var(--muted); }
+  .search .q { color:var(--muted); font-size:13px; }
+  .tabs { display:flex; gap:0; margin-top:12px; border:1px solid var(--border); }
+  .tabs button { flex:1; padding:9px; font-family:var(--sans); font-size:13px; font-weight:600; background:transparent; border:none; cursor:pointer; color:var(--muted); border-right:1px solid var(--border); }
+  .tabs button:last-child { border-right:none; }
+  .tabs button.on { background:var(--text); color:#fff; }
+  .plist { overflow-y:auto; flex:1; }
+  .trow { display:flex; align-items:center; gap:12px; padding:11px 18px; cursor:pointer; border-bottom:1px solid var(--border); }
+  .trow:hover { background:var(--card); }
+  .trow.off { opacity:.45; cursor:default; }
+  .trow .ico { width:32px; height:32px; font-size:11px; }
+  .trow .m { flex:1; min-width:0; }
+  .trow .sy { font-weight:600; font-size:14px; display:flex; align-items:center; gap:8px; }
+  .trow .nm { font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .trow .px { font-family:var(--mono); font-size:12px; color:var(--dim); text-align:right; }
+  .trow .px small { display:block; color:var(--muted); font-size:10.5px; }
+  .tag { font-family:var(--mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; padding:1px 6px; border:1px solid var(--border2); color:var(--muted); font-weight:500; white-space:nowrap; }
+  .tag.soon { border-color:var(--accent); color:var(--accent); }
+  .pempty { padding:28px 18px; text-align:center; color:var(--muted); font-size:13.5px; }
+  .pempty .spin { display:inline-block; width:14px; height:14px; border:2px solid var(--border2); border-top-color:var(--text); border-radius:50%; animation:rot .7s linear infinite; vertical-align:-2px; margin-right:8px; }
   .flip { display:flex; justify-content:center; margin:-6px 0; position:relative; z-index:1; }
   .flip button { width:34px; height:34px; border:1px solid var(--border); background:#fff; cursor:pointer; font-size:16px; color:var(--dim); transition:transform .35s cubic-bezier(.2,.8,.2,1), border-color .15s; }
   .flip button:hover { border-color:var(--text); }
@@ -185,14 +220,14 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     <label class="f"><span>You pay</span><span class="bal" id="bal-in"></span></label>
     <div class="box">
       <input id="amt" placeholder="0.0" inputmode="decimal" autocomplete="off" />
-      <div class="pill"><span class="ico" id="ico-in"></span><span id="sym-in">ETH</span> ▾<select id="tok-in"></select></div>
+      <button class="pill" id="pick-in" type="button"><span class="ico" id="ico-in"></span><span id="sym-in">ETH</span><span class="chev">▾</span></button>
     </div>
     <div class="usd" id="usd-in"></div>
 
     <div class="flip"><button id="flip" title="flip">↕</button></div>
 
     <label class="f"><span>You receive</span><span class="bal" id="bal-out"></span></label>
-    <div class="box"><div class="ro dim" id="recv">0.0</div><div class="pill"><span class="ico" id="ico-out"></span><span id="sym-out">USDG</span> ▾<select id="tok-out"></select></div></div>
+    <div class="box"><div class="ro dim" id="recv">0.0</div><button class="pill" id="pick-out" type="button"><span class="ico" id="ico-out"></span><span id="sym-out">USDG</span><span class="chev">▾</span></button></div>
     <div class="usd" id="usd-out"></div>
 
     <div class="mev" id="mev">
@@ -256,6 +291,15 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
 
 <div class="modal" id="wm"><div class="sheet"><div class="mh">Connect a wallet<span class="x" id="wm-x">✕</span></div><div id="wm-list"></div><div class="wnote">Any EIP-1193 wallet. The page will add Robinhood Chain with rpc.ordofi.network as its RPC if it is missing.</div></div></div>
 
+<div class="picker" id="picker"><div class="psheet">
+  <div class="ph">
+    <div class="t"><span>Select a token</span><span class="x" id="pk-x">✕</span></div>
+    <div class="search"><span class="q">⌕</span><input id="pk-q" placeholder="Paste any contract address or search by name" autocomplete="off" spellcheck="false" /></div>
+    <div class="tabs"><button data-tab="stocks" id="tab-stocks">Stocks</button><button data-tab="tokens" class="on" id="tab-tokens">Tokens</button></div>
+  </div>
+  <div class="plist" id="pk-list"><div class="pempty"><span class="spin"></span>loading tokens…</div></div>
+</div></div>
+
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -263,30 +307,47 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   const SWAP = ${JSON.stringify(address)};
   const EXPLORER = ${JSON.stringify(explorer)};
   const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
+  const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
   const CHAIN_HEX = "0x1237";
   const TOPIC_RECLAIMED = ${JSON.stringify(TOPIC_RECLAIMED)};
   const TOPIC_SWAPPED = ${JSON.stringify(TOPIC_SWAPPED)};
-  const ETHUSD = 2523;
-  const FEES = [100, 500, 3000, 10000];
+  const FALLBACK_ETHUSD = 2523;
+  const DEAD = "0x000000000000000000000000000000000000dEaD";
 
-  // ETH is native in and out: the contract wraps on the way in and unwraps on the way out.
-  const TOKENS = {
-    ETH:  { address: WETH, native: true, decimals: 18, img: ${JSON.stringify(app + "/token-eth.png")} },
-    USDG: { address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", decimals: 6, img: ${JSON.stringify(app + "/token-usdg.png")} },
-    GME:  { address: "0x1b0e319c6a659f002271b69db8a7df2f911c153e" },
-    NVDA: { address: "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec" },
-    GOOGL:{ address: "0x2e0847e8910a9732eb3fb1bb4b70a580adad4fe3" },
-    AAPL: { address: "0xaf3d76f1834a1d425780943c99ea8a608f8a93f9" },
-    TSLA: { address: "0x322f0929c4625ed5bad873c95208d54e1c003b2d" },
-    SPY:  { address: "0x117cc2133c37b721f49de2a7a74833232b3b4c0c" },
-    GLD:  { address: "0xc9a981fee1f9dec688bb123ccdecc63d0debfc4e" },
-    PONS: { address: "0x39dbed3a2bd333467115de45665cc57f813c4571" },
-  };
-  let tokIn = "ETH", tokOut = "USDG", slippageBps = 50n;
+  // ---- token registry ------------------------------------------------------
+  // Every token the chain has, from /swap/tokens, plus anything pasted by address.
+  // ETH is native in and out: the contract wraps on the way in and unwraps out.
+  const ETH = { address: WETH, native: true, symbol: "ETH", name: "Ether", decimals: 18, icon: ${JSON.stringify(app + "/token-eth.png")}, usd: null, stock: false, v3: true };
+  const registry = new Map(); // address -> token (WETH's slot is the ERC-20 WETH; ETH is separate)
+  let ranked = [];             // tokens in activity order, for the picker
+  let listReady = false;
+  const byAddr = (a) => (a.toLowerCase() === WETH ? ETH : registry.get(a.toLowerCase()));
+  function ethUsd() { return ETH.usd || FALLBACK_ETHUSD; }
+
+  async function loadTokens() {
+    try {
+      const r = await fetch("/swap/tokens").then((x) => x.json());
+      for (const t of r.tokens) registry.set(t.address, t);
+      const w = registry.get(WETH);
+      if (w) { ETH.usd = w.usd; ETH.icon = ETH.icon || w.icon; }
+      const u = registry.get(USDG);
+      if (u) { u.icon = u.icon || ${JSON.stringify(app + "/token-usdg.png")}; }
+      ranked = r.tokens;
+      listReady = true;
+      if (tokIn.address === WETH && tokIn.native) tokIn = ETH;
+      paintToken("in", tokIn); paintToken("out", tokOut);
+      if ($("picker").classList.contains("open")) renderPicker();
+    } catch (e) {
+      $("pk-list").innerHTML = '<div class="pempty">could not load the token list — paste an address instead</div>';
+    }
+  }
+
+  let tokIn = ETH;
+  let tokOut = { address: USDG, symbol: "USDG", name: "Global Dollar", decimals: 6, icon: ${JSON.stringify(app + "/token-usdg.png")}, usd: 1, stock: false, v3: true };
+  let slippageBps = 50n;
   let provider = null, account = null, quote = null, quoting = 0, busy = false;
-  const decimalsCache = new Map();
 
-  // ---- rpc ------------------------------------------------------------
+  // ---- rpc ------------------------------------------------------------------
   let rid = 0;
   const rpc = async (method, params) => {
     const r = await fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++rid, method, params }) });
@@ -296,40 +357,39 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
   };
   const hex = (n) => "0x" + BigInt(n).toString(16);
   const pad = (a) => "0".repeat(24) + a.slice(2).toLowerCase();
-  async function decimalsOf(sym) {
-    const t = TOKENS[sym];
-    if (t.decimals !== undefined) return t.decimals;
-    if (decimalsCache.has(sym)) return decimalsCache.get(sym);
-    const d = Number(BigInt(await rpc("eth_call", [{ to: t.address, data: "0x313ce567" }, "latest"])));
-    decimalsCache.set(sym, d); t.decimals = d; return d;
-  }
-  async function balanceOf(sym) {
+  const str = (ret) => { try { const len = Number(BigInt("0x" + ret.slice(66, 130))); return decodeURIComponent(ret.slice(130, 130 + len * 2).replace(/(..)/g, "%$1")).replace(/\\0/g, ""); } catch { return ""; } };
+  async function balanceOf(t) {
     if (!account) return null;
-    const t = TOKENS[sym];
     if (t.native) return BigInt(await rpc("eth_getBalance", [account, "latest"]));
     return BigInt(await rpc("eth_call", [{ to: t.address, data: "0x70a08231" + pad(account) }, "latest"]));
   }
-  async function allowance(sym) {
-    const t = TOKENS[sym];
-    return BigInt(await rpc("eth_call", [{ to: t.address, data: "0xdd62ed3e" + pad(account) + pad(SWAP) }, "latest"]));
+  async function allowance(t) { return BigInt(await rpc("eth_call", [{ to: t.address, data: "0xdd62ed3e" + pad(account) + pad(SWAP) }, "latest"])); }
+
+  /** A token we have never seen: read it off the chain. Null if it is not an ERC-20. */
+  async function lookupToken(addr) {
+    const a = addr.toLowerCase();
+    if (byAddr(a)) return byAddr(a);
+    try {
+      const [sym, name, dec] = await Promise.all([
+        rpc("eth_call", [{ to: a, data: "0x95d89b41" }, "latest"]),
+        rpc("eth_call", [{ to: a, data: "0x06fdde03" }, "latest"]),
+        rpc("eth_call", [{ to: a, data: "0x313ce567" }, "latest"]),
+      ]);
+      const t = { address: a, symbol: str(sym).slice(0, 12) || a.slice(0, 8), name: str(name).slice(0, 60) || "Unknown token", decimals: Number(BigInt(dec)), icon: null, usd: null, stock: false, v3: true, custom: true };
+      registry.set(a, t);
+      return t;
+    } catch { return null; }
   }
 
-  // ---- formatting -------------------------------------------------------
+  // ---- formatting -------------------------------------------------------------
   const units = (wei, d) => Number(BigInt(wei)) / 10 ** d;
-  const fmt = (x, max = 6) => x === 0 ? "0" : x < 0.000001 ? x.toExponential(2) : x.toLocaleString(undefined, { maximumFractionDigits: x < 1 ? max : x < 1000 ? 4 : 2 });
+  const fmt = (x, max = 6) => x === 0 ? "0" : Math.abs(x) < 0.000001 ? x.toExponential(2) : x.toLocaleString(undefined, { maximumFractionDigits: x < 1 ? max : x < 1000 ? 4 : 2 });
   const usd = (x) => "$" + x.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const shortHash = (h) => h.slice(0, 10) + "…" + h.slice(-6);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   // "0,001" is how half of Europe types a thousandth. Commas are decimals here.
   const parseAmt = (s, d) => { s = String(s).trim().replace(/\\s/g, ""); s = s.includes(".") ? s.replace(/,/g, "") : s.replace(",", "."); if (!/^\\d*\\.?\\d*$/.test(s) || s === "" || s === ".") return null; const [i, f = ""] = s.split("."); const v = BigInt((i || "0") + f.slice(0, d).padEnd(d, "0")); return v > 0n ? v : null; };
-
-  // Quoter V2 straight from the page: one round trip, the price in ~300 ms,
-  // while the gateway does the slower MEV search. quoteExactInput(bytes,uint256).
-  async function fastPrice(inAddr, outAddr, fee, amountIn) {
-    const path = inAddr.slice(2) + fee.toString(16).padStart(6, "0") + outAddr.slice(2);
-    const data = "0xcdca1753" + (64).toString(16).padStart(64, "0") + amountIn.toString(16).padStart(64, "0") + (43).toString(16).padStart(64, "0") + path.padEnd(128, "0");
-    const out = await rpc("eth_call", [{ to: "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7", data }, "latest"]);
-    return BigInt("0x" + out.slice(2, 66));
-  }
+  const avatar = (t, cls = "ico") => '<span class="' + cls + '">' + (t.icon ? '<img src="' + esc(t.icon) + '" alt="" onerror="this.parentNode.textContent=\\'' + esc(t.symbol.slice(0, 3)) + '\\'" />' : esc(t.symbol.slice(0, 3))) + "</span>";
 
   // Count-up animation for the receive box.
   let tween = null;
@@ -340,94 +400,104 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     tween = requestAnimationFrame(step);
   }
 
-  // Rough USD for the hint lines: ETH via constant, USDG 1:1, stocks via their ETH quote.
-  let lastEthPerOut = null;
-  function usdOf(sym, amount, ethPer) {
-    if (sym === "ETH") return amount * ETHUSD;
-    if (sym === "USDG") return amount;
-    return ethPer ? amount * ethPer * ETHUSD : null;
-  }
-
-  // ---- tokens ui --------------------------------------------------------
-  function paintToken(side, sym) {
-    const t = TOKENS[sym];
-    $("sym-" + side).textContent = sym;
-    const ico = $("ico-" + side);
-    ico.innerHTML = t.img ? '<img src="' + t.img + '" alt="" />' : sym.slice(0, 3);
-    const sel = $("tok-" + side);
-    sel.innerHTML = Object.keys(TOKENS).map((s) => '<option value="' + s + '"' + (s === sym ? " selected" : "") + ">" + s + "</option>").join("");
+  // ---- tokens ui ----------------------------------------------------------------
+  function paintToken(side, t) {
+    $("sym-" + side).textContent = t.symbol;
+    $("ico-" + side).outerHTML = avatar(t).replace('class="ico"', 'class="ico" id="ico-' + side + '"');
   }
   async function paintBalances() {
-    for (const [side, sym] of [["in", tokIn], ["out", tokOut]]) {
+    for (const [side, t] of [["in", tokIn], ["out", tokOut]]) {
       const el = $("bal-" + side);
       if (!account) { el.textContent = ""; continue; }
       try {
-        const [b, d] = await Promise.all([balanceOf(sym), decimalsOf(sym)]);
-        el.innerHTML = "balance " + fmt(units(b, d)) + (side === "in" ? " <b id=\\"max\\">max</b>" : "");
-        if (side === "in") $("max").onclick = () => { $("amt").value = String(units(b, d) - (TOKENS[sym].native ? 0.0005 : 0)).replace(/^-.*$/, "0"); onInput(); };
+        const b = await balanceOf(t);
+        el.innerHTML = "balance " + fmt(units(b, t.decimals)) + (side === "in" ? ' <b id="max">max</b>' : "");
+        if (side === "in") $("max").onclick = () => { const v = units(b, t.decimals) - (t.native ? 0.0005 : 0); $("amt").value = v > 0 ? String(v) : "0"; onInput(); };
       } catch { el.textContent = ""; }
     }
   }
 
-  // ---- quoting ------------------------------------------------------------
+  // ---- picker -------------------------------------------------------------------
+  let pickSide = "in", tab = "tokens";
+  function openPicker(side) {
+    pickSide = side;
+    $("pk-q").value = "";
+    tab = (side === "in" ? tokIn : tokOut).stock ? "stocks" : "tokens";
+    $("tab-stocks").classList.toggle("on", tab === "stocks"); $("tab-tokens").classList.toggle("on", tab === "tokens");
+    $("picker").classList.add("open");
+    renderPicker();
+    setTimeout(() => $("pk-q").focus(), 30);
+  }
+  function closePicker() { $("picker").classList.remove("open"); }
+  const priceCell = (t) => t.usd != null ? '<div class="px">' + (t.usd >= 1 ? usd(t.usd) : "$" + t.usd.toPrecision(3)) + (t.swaps24h ? "<small>" + t.swaps24h.toLocaleString() + " swaps/24h</small>" : "") + "</div>" : "";
+  const row = (t) => '<div class="trow' + (t.v3 ? "" : " off") + '" data-a="' + t.address + (t.native ? "|eth" : "") + '">' + avatar(t) +
+    '<div class="m"><div class="sy">' + esc(t.symbol) + (t.stock ? '<span class="tag">stock</span>' : "") + (t.v3 ? "" : '<span class="tag soon">V4 · soon</span>') + (t.custom ? '<span class="tag">custom</span>' : "") + '</div><div class="nm">' + esc(t.name) + "</div></div>" + priceCell(t) + "</div>";
+  async function renderPicker() {
+    const q = $("pk-q").value.trim();
+    const list = $("pk-list");
+    if (/^0x[0-9a-fA-F]{40}$/.test(q)) {
+      list.innerHTML = '<div class="pempty"><span class="spin"></span>looking up ' + esc(q.slice(0, 10)) + "…</div>";
+      const t = await lookupToken(q);
+      if ($("pk-q").value.trim() !== q) return;
+      list.innerHTML = t ? row(t) + (t.custom ? '<div class="pempty" style="text-align:left;font-size:12px">Not in our list — read from the chain. If it has no Uniswap V3 pool the quote will say so.</div>' : "") : '<div class="pempty">no ERC-20 at that address</div>';
+      return;
+    }
+    if (!listReady) { list.innerHTML = '<div class="pempty"><span class="spin"></span>loading tokens…</div>'; return; }
+    const needle = q.toLowerCase();
+    let items = ranked.filter((t) => (tab === "stocks") === !!t.stock);
+    if (tab === "tokens") items = [ETH, ...items.filter((t) => t.address !== WETH)];
+    if (needle) items = items.filter((t) => t.symbol.toLowerCase().includes(needle) || t.name.toLowerCase().includes(needle) || t.address.startsWith(needle));
+    // Routable first within the same activity order; the rest listed so search still finds them.
+    items = [...items.filter((t) => t.v3), ...items.filter((t) => !t.v3)];
+    const shown = items.slice(0, needle ? 60 : 120);
+    list.innerHTML = shown.length ? shown.map(row).join("") + (items.length > shown.length ? '<div class="pempty">' + (items.length - shown.length).toLocaleString() + " more — keep typing</div>" : "") : '<div class="pempty">nothing matches</div>';
+  }
+  function pick(t) {
+    if (!t.v3) return;
+    const other = pickSide === "in" ? tokOut : tokIn;
+    if (pickSide === "in") tokIn = t; else tokOut = t;
+    if (other.address === t.address && other.native === t.native) { if (pickSide === "in") tokOut = t.native || t.address === WETH ? registry.get(USDG) || tokOut : ETH; else tokIn = t.native || t.address === WETH ? registry.get(USDG) || tokIn : ETH; }
+    paintToken("in", tokIn); paintToken("out", tokOut);
+    closePicker(); paintBalances(); onInput();
+  }
+
+  // ---- quoting -------------------------------------------------------------------
   let debounce = null;
-  function onInput() { clearTimeout(debounce); debounce = setTimeout(requote, 220); setBusy(true); }
+  function onInput() { clearTimeout(debounce); debounce = setTimeout(requote, 200); setBusy(true); }
   function setBusy(on) { $("recv").classList.toggle("busy", on && !!$("amt").value); }
+  const routeLabel = (route) => route.map((h, i) => (i === 0 ? sym(h.tokenIn) : "") + " → " + sym(h.tokenOut) + " " + (h.fee / 10000) + "%").join("");
+  const sym = (a) => { const t = registry.get(a.toLowerCase()); return a.toLowerCase() === WETH ? (tokIn.native && tokIn.address === WETH ? "ETH" : tokOut.native && tokOut.address === WETH ? "ETH" : "WETH") : t ? t.symbol : a.slice(0, 6); };
 
   async function requote() {
     const id = ++quoting;
     quote = null;
-    // Never show the previous pair's numbers under a new one, even for a moment.
-    $("rate").textContent = "…"; $("minout").textContent = "…"; $("route").textContent = tokIn + " → " + tokOut;
+    $("rate").textContent = "…"; $("minout").textContent = "…"; $("route").textContent = tokIn.symbol + " → " + tokOut.symbol;
     $("usd-out").textContent = "";
-    $("mev").classList.remove("yes"); $("mev-v").textContent = "…"; $("mev-note").textContent = "quoting every pool";
+    $("mev").classList.remove("yes"); $("mev-v").textContent = "…"; $("mev-note").textContent = "finding the best route";
     paintButton();
-    const dIn = await decimalsOf(tokIn), dOut = await decimalsOf(tokOut);
-    const amountIn = parseAmt($("amt").value, dIn);
+    const amountIn = parseAmt($("amt").value, tokIn.decimals);
     if (!amountIn) { resetQuote($("amt").value ? "that is not a number" : undefined); return; }
-    const inT = TOKENS[tokIn], outT = TOKENS[tokOut];
-    if (inT.address === outT.address) { resetQuote("same token"); return; }
-    const base = { tokenIn: inT.address, tokenOut: outT.address, amountIn: hex(amountIn), amountOutMinimum: "0x0", recipient: account || "0x000000000000000000000000000000000000dEaD", nativeOut: !!outT.native };
-    if (!inT.native && account) base.from = account;
-    if (!inT.native && !account) base.from = "0x000000000000000000000000000000000000dEaD";
-
-    // Price first, from the quoter, so the number moves the moment you stop typing…
-    Promise.all(FEES.map((fee) => fastPrice(inT.address, outT.address, fee, amountIn).then((out) => ({ fee, out })).catch(() => null))).then((ps) => {
-      if (id !== quoting || quote) return;
-      const best = ps.filter(Boolean).sort((a, b) => (b.out > a.out ? 1 : -1))[0];
-      if (!best) return;
-      const recv = $("recv"); recv.classList.remove("dim", "busy"); tweenTo(recv, units(best.out, dOut), dOut);
-      $("rate").textContent = "1 " + tokIn + " = " + fmt(units(best.out, dOut) / units(amountIn, dIn)) + " " + tokOut;
-      $("route").textContent = tokIn + " → " + tokOut + " · " + (best.fee / 10000) + "% pool";
-      $("mev-note").textContent = "checking what comes back…";
-    });
-    // …and the full answer, with the MEV search, behind it.
-    const tries = await Promise.all(FEES.map((fee) => rpc("ordo_quoteSwap", [{ ...base, fee }]).then((q) => ({ fee, q })).catch(() => null)));
+    if (tokIn.address === tokOut.address && !!tokIn.native === !!tokOut.native) { resetQuote("same token"); return; }
+    const inn = units(amountIn, tokIn.decimals);
+    $("usd-in").textContent = tokIn.usd != null ? "≈ " + usd(inn * tokIn.usd) : "";
+    // An estimate from list prices, instantly, dimmed, while the real route is quoted.
+    if (tokIn.usd != null && tokOut.usd) { const recv = $("recv"); recv.classList.remove("dim"); recv.classList.add("busy"); tweenTo(recv, (inn * tokIn.usd) / tokOut.usd, tokOut.decimals); }
+    const req = { tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: hex(amountIn), amountOutMinimum: "0x0", recipient: account || DEAD, nativeOut: !!tokOut.native };
+    if (!tokIn.native) req.from = account || DEAD;
+    let q;
+    try { q = await rpc("ordo_quoteSwap", [req]); }
+    catch (e) { if (id !== quoting) return; resetQuote(/no route/i.test(e.message) ? "no Uniswap V3 route for this pair" : e.message.slice(0, 90)); return; }
     if (id !== quoting) return;
-    const ok = tries.filter(Boolean).filter((t) => BigInt(t.q.amountOut) > 0n);
     setBusy(false);
-    if (!ok.length) { resetQuote("no pool for this pair"); return; }
-    // What the user ends up with: the output plus the surplus, both in the
-    // output token. A pool with a slightly worse price and a back-run attached
-    // beats a pool with the best price and nothing behind it.
-    const score = (t) => {
-      const out = BigInt(t.q.amountOut);
-      if (!t.q.reclaim) return out;
-      const surplusWei = BigInt(t.q.reclaim.surplusToUser); // ETH
-      if (outT.native) return out + surplusWei;
-      if (inT.native) return out + (surplusWei * out) / amountIn; // ETH → out at this quote's own rate
-      return out;
-    };
-    ok.sort((a, b) => { const d = score(b) - score(a); return d > 0n ? 1 : d < 0n ? -1 : 0; });
-    const best = ok[0];
-    quote = { ...best.q, fee: best.fee, amountIn, dIn, dOut };
+    if (BigInt(q.amountOut) === 0n) { resetQuote("no route for this pair right now"); return; }
+    quote = { ...q, amountIn };
     paintQuote();
   }
 
   function resetQuote(note) {
     quoting++;
     setBusy(false);
-    const recv = $("recv"); recv.textContent = "0.0"; recv.classList.add("dim"); recv.dataset.v = "0";
+    const recv = $("recv"); recv.textContent = "0.0"; recv.classList.add("dim"); recv.classList.remove("busy"); recv.dataset.v = "0";
     $("usd-in").textContent = ""; $("usd-out").textContent = "";
     $("rate").textContent = "—"; $("minout").textContent = "—"; $("route").textContent = "—";
     const m = $("mev"); m.classList.remove("yes"); $("mev-v").textContent = "—"; $("mev-note").textContent = note || "type an amount";
@@ -436,22 +506,19 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
 
   function paintQuote() {
     const q = quote; if (!q) return;
-    const out = units(q.amountOut, q.dOut), inn = units(q.amountIn, q.dIn);
-    const recv = $("recv"); recv.classList.remove("dim"); tweenTo(recv, out, q.dOut);
-    // ETH per unit of the out token, for USD hints on stock tokens.
-    const ethPerOut = tokIn === "ETH" ? inn / out : tokOut === "ETH" ? null : lastEthPerOut;
-    if (tokIn === "ETH") lastEthPerOut = ethPerOut;
-    const uIn = usdOf(tokIn, inn, tokOut === "ETH" ? out / inn : null), uOut = usdOf(tokOut, out, ethPerOut);
-    $("usd-in").textContent = uIn != null ? "≈ " + usd(uIn) : ""; $("usd-out").textContent = uOut != null ? "≈ " + usd(uOut) : "";
-    $("rate").textContent = "1 " + tokIn + " = " + fmt(out / inn) + " " + tokOut;
+    const out = units(q.amountOut, tokOut.decimals), inn = units(q.amountIn, tokIn.decimals);
+    const recv = $("recv"); recv.classList.remove("dim", "busy"); tweenTo(recv, out, tokOut.decimals);
+    const uOut = tokOut.usd != null ? out * tokOut.usd : tokIn.usd != null ? inn * tokIn.usd : null;
+    $("usd-out").textContent = uOut != null ? "≈ " + usd(uOut) : "";
+    $("rate").textContent = "1 " + tokIn.symbol + " = " + fmt(out / inn) + " " + tokOut.symbol;
     const minOut = (BigInt(q.amountOut) * (10000n - slippageBps)) / 10000n;
-    $("minout").textContent = fmt(units(minOut, q.dOut)) + " " + tokOut;
-    $("route").textContent = tokIn + " → " + tokOut + " · " + (q.fee / 10000) + "% pool" + (q.reclaim ? " + back-run" : "");
+    $("minout").textContent = fmt(units(minOut, tokOut.decimals)) + " " + tokOut.symbol;
+    $("route").textContent = routeLabel(q.route) + (q.reclaim ? " + back-run" : "");
     const m = $("mev");
     if (q.reclaim) {
       const eth = units(q.reclaim.surplusToUser, 18);
       m.classList.add("yes");
-      $("mev-v").innerHTML = "+" + fmt(eth) + " ETH<small>" + usd(eth * ETHUSD) + " · " + q.reclaim.label.replace(/^0x[0-9a-f]{6}/, tokIn === "ETH" ? tokOut : tokIn) + "</small>";
+      $("mev-v").innerHTML = "+" + fmt(eth) + " ETH<small>" + usd(eth * ethUsd()) + "</small>";
       $("mev-note").textContent = "paid to you in the same transaction";
     } else {
       m.classList.remove("yes");
@@ -461,7 +528,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     paintButton();
   }
 
-  // ---- button -------------------------------------------------------------
+  // ---- button ----------------------------------------------------------------------
   let needsApprove = false;
   async function paintButton() {
     const go = $("go");
@@ -470,11 +537,11 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (!account) { go.textContent = "Connect wallet"; go.disabled = false; return; }
     if (!quote) { go.textContent = parseAmt($("amt").value, 18) ? "Quoting…" : "Enter an amount"; go.disabled = true; return; }
     const bal = await balanceOf(tokIn).catch(() => null);
-    if (bal !== null && bal < quote.amountIn) { go.textContent = "Insufficient " + tokIn; go.disabled = true; return; }
+    if (bal !== null && bal < quote.amountIn) { go.textContent = "Insufficient " + tokIn.symbol; go.disabled = true; return; }
     needsApprove = false;
-    if (!TOKENS[tokIn].native) {
+    if (!tokIn.native) {
       const a = await allowance(tokIn).catch(() => 0n);
-      if (a < quote.amountIn) { needsApprove = true; go.textContent = "Approve " + tokIn; go.disabled = false; return; }
+      if (a < quote.amountIn) { needsApprove = true; go.textContent = "Approve " + tokIn.symbol; go.disabled = false; return; }
     }
     go.textContent = quote.reclaim ? "Swap and keep the MEV" : "Swap";
     go.disabled = false;
@@ -488,7 +555,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     try {
       if (needsApprove) {
         btn.innerHTML = '<span class="spin"></span>Confirm approval in your wallet…';
-        const h = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: TOKENS[tokIn].address, data: "0x095ea7b3" + pad(SWAP) + "f".repeat(64) }] });
+        const h = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: tokIn.address, data: "0x095ea7b3" + pad(SWAP) + "f".repeat(64) }] });
         btn.innerHTML = '<span class="spin"></span>Approving…';
         await waitReceipt(h);
         busy = false; await requote(); await paintButton(); return;
@@ -496,14 +563,15 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
       // Re-quote right before sending so the reclaim is against the freshest state.
       await requote(); if (!quote) throw new Error("quote expired, try again");
       const minOut = (BigInt(quote.amountOut) * (10000n - slippageBps)) / 10000n;
-      const q = await rpc("ordo_quoteSwap", [{ tokenIn: TOKENS[tokIn].address, tokenOut: TOKENS[tokOut].address, fee: quote.fee, amountIn: hex(quote.amountIn), amountOutMinimum: hex(minOut), recipient: account, nativeOut: !!TOKENS[tokOut].native, ...(TOKENS[tokIn].native ? {} : { from: account }) }]);
+      const req = { tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: hex(quote.amountIn), amountOutMinimum: hex(minOut), recipient: account, nativeOut: !!tokOut.native };
+      if (!tokIn.native) req.from = account;
+      const q = await rpc("ordo_quoteSwap", [req]);
       btn.innerHTML = '<span class="spin"></span>Confirm in your wallet…';
-      const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: q.to, data: q.data, value: q.value, gas: q.reclaim ? "0x9eb10" : "0x493e0" }] });
+      const hash = await provider.request({ method: "eth_sendTransaction", params: [{ from: account, to: q.to, data: q.data, value: q.value, gas: q.reclaim ? "0x9eb10" : (q.route.length > 1 ? "0x61a80" : "0x493e0") }] });
       btn.innerHTML = '<span class="spin"></span>Swapping…';
       $("result").innerHTML = 'sent · <a href="' + EXPLORER + "/tx/" + hash + '" target="_blank" rel="noopener">' + shortHash(hash) + "</a>";
       const rec = await waitReceipt(hash);
       if (rec.status !== "0x1") throw new Error("the transaction reverted");
-      // Read what actually happened off the receipt.
       let got = null, back = null;
       for (const l of rec.logs) {
         if (l.address.toLowerCase() !== SWAP.toLowerCase()) continue;
@@ -511,9 +579,9 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
         if (l.topics[0] === TOPIC_SWAPPED) got = w[3];
         if (l.topics[0] === TOPIC_RECLAIMED) back = w[1];
       }
-      const outStr = got !== null ? fmt(units(got, quote.dOut)) + " " + tokOut : "done";
+      const outStr = got !== null ? fmt(units(got, tokOut.decimals)) + " " + tokOut.symbol : "done";
       $("done").innerHTML = '<div class="done"><b><span class="tick">✓</span>Received ' + outStr + "</b>" +
-        (back ? '<div class="big">+' + fmt(units(back, 18)) + " ETH back</div><p>The back-run ran inside your transaction and paid you " + usd(units(back, 18) * ETHUSD) + " that would have gone to a bot.</p>" :
+        (back ? '<div class="big">+' + fmt(units(back, 18)) + " ETH back</div><p>The back-run ran inside your transaction and paid you " + usd(units(back, 18) * ethUsd()) + " that would have gone to a bot.</p>" :
                 '<p style="margin-top:6px">No back-run this time' + (quote.reclaim ? " — the gap closed before inclusion, so it was skipped and cost you nothing." : " — this swap opened no gap worth closing.") + "</p>") +
         '<p style="margin-top:8px"><a href="' + EXPLORER + "/tx/" + hash + '" target="_blank" rel="noopener">' + shortHash(hash) + " →</a></p></div>";
       $("result").textContent = "";
@@ -535,7 +603,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     throw new Error("still pending — check the explorer");
   }
 
-  // ---- wallet -------------------------------------------------------------
+  // ---- wallet ----------------------------------------------------------------------
   const found = new Map();
   window.addEventListener("eip6963:announceProvider", (e) => { found.set(e.detail.info.uuid, e.detail); });
   window.dispatchEvent(new Event("eip6963:requestProvider"));
@@ -544,7 +612,7 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     if (list.length === 0 && window.ethereum) return connect(window.ethereum);
     if (list.length === 1) return connect(list[0].provider);
     if (list.length === 0) { $("result").className = "result bad"; $("result").textContent = "no wallet found — install MetaMask or Rabby"; return; }
-    $("wm-list").innerHTML = list.map((d, i) => '<div class="wrow" data-i="' + i + '"><img src="' + d.info.icon + '" alt="" /><div class="n">' + d.info.name + "</div></div>").join("");
+    $("wm-list").innerHTML = list.map((d, i) => '<div class="wrow" data-i="' + i + '"><img src="' + d.info.icon + '" alt="" /><div class="n">' + esc(d.info.name) + "</div></div>").join("");
     $("wm-list").querySelectorAll(".wrow").forEach((el) => el.onclick = () => { $("wm").classList.remove("open"); connect(list[Number(el.dataset.i)].provider); });
     $("wm").classList.add("open");
   }
@@ -562,12 +630,6 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
       $("result").className = "result bad"; $("result").textContent = (e.message || String(e)).slice(0, 140);
     }
   }
-  /**
-   * Forget the wallet. EIP-1193 has no "disconnect" a page can call; what a
-   * page can do is drop its reference and ask the wallet to revoke the site
-   * permission where that is supported (MetaMask), so the next Connect asks
-   * again instead of silently reusing the old grant.
-   */
   async function disconnect() {
     const p = provider;
     provider = null; account = null;
@@ -595,26 +657,35 @@ export function swapHtml(opts: { address: string; explorer: string; rpc: string;
     paintBalances(); if ($("amt").value) requote(); else paintButton();
   }
 
-  // ---- stats ------------------------------------------------------------------
+  // ---- stats ----------------------------------------------------------------------------
   async function refreshStats() {
     const s = await fetch("/swap/stats").then((r) => r.json()).catch(() => null);
     if (!s) return;
     const eth = (wei) => Number(BigInt(wei)) / 1e18;
-    $("st-user").innerHTML = usd(eth(s.toUserWei) * ETHUSD) + "<small>" + eth(s.toUserWei).toFixed(6) + " ETH · since deploy</small>";
+    $("st-user").innerHTML = usd(eth(s.toUserWei) * ethUsd()) + "<small>" + eth(s.toUserWei).toFixed(6) + " ETH · since deploy</small>";
     $("st-swaps").innerHTML = s.swaps.toLocaleString() + "<small>through the contract</small>";
     $("st-reclaims").innerHTML = s.reclaims.toLocaleString() + "<small>" + (s.skipped ? s.skipped + " skipped (gap closed first)" : "none skipped") + "</small>";
     if (!s.recent.length) { $("rows").innerHTML = '<div class="empty">No reclaims yet.</div>'; return; }
-    $("rows").innerHTML = "<table><thead><tr><th>Tx</th><th class=\\"hide-s\\">User</th><th>Reclaimed</th><th>To the user</th><th class=\\"hide-s\\">Block</th></tr></thead><tbody>" +
-      s.recent.map((r) => "<tr><td class=\\"mono\\"><a href=\\"" + EXPLORER + "/tx/" + r.tx + "\\" target=\\"_blank\\" rel=\\"noopener\\">" + shortHash(r.tx) + "</a></td><td class=\\"mono hide-s\\">" + shortHash(r.recipient) + "</td><td>" + eth(r.profitWei).toFixed(6) + " ETH</td><td style=\\"color:var(--ok)\\">" + eth(r.toUserWei).toFixed(6) + " ETH <span class=\\"mono\\" style=\\"color:var(--muted)\\">" + usd(eth(r.toUserWei) * ETHUSD) + "</span></td><td class=\\"mono hide-s\\" style=\\"color:var(--muted)\\">" + r.block.toLocaleString() + "</td></tr>").join("") +
+    $("rows").innerHTML = '<table><thead><tr><th>Tx</th><th class="hide-s">User</th><th>Reclaimed</th><th>To the user</th><th class="hide-s">Block</th></tr></thead><tbody>' +
+      s.recent.map((r) => '<tr><td class="mono"><a href="' + EXPLORER + "/tx/" + r.tx + '" target="_blank" rel="noopener">' + shortHash(r.tx) + '</a></td><td class="mono hide-s">' + shortHash(r.recipient) + "</td><td>" + eth(r.profitWei).toFixed(6) + ' ETH</td><td style="color:var(--ok)">' + eth(r.toUserWei).toFixed(6) + ' ETH <span class="mono" style="color:var(--muted)">' + usd(eth(r.toUserWei) * ethUsd()) + '</span></td><td class="mono hide-s" style="color:var(--muted)">' + r.block.toLocaleString() + "</td></tr>").join("") +
       "</tbody></table>";
   }
 
-  // ---- wire up ----------------------------------------------------------------
+  // ---- wire up -------------------------------------------------------------------------------
   paintToken("in", tokIn); paintToken("out", tokOut);
+  loadTokens();
   $("amt").addEventListener("input", onInput);
-  $("tok-in").addEventListener("change", (e) => { tokIn = e.target.value; if (tokIn === tokOut) { tokOut = tokIn === "ETH" ? "USDG" : "ETH"; paintToken("out", tokOut); } paintToken("in", tokIn); paintBalances(); onInput(); });
-  $("tok-out").addEventListener("change", (e) => { tokOut = e.target.value; if (tokIn === tokOut) { tokIn = tokOut === "ETH" ? "USDG" : "ETH"; paintToken("in", tokIn); } paintToken("out", tokOut); paintBalances(); onInput(); });
-  $("flip").addEventListener("click", () => { $("flip").classList.toggle("spin"); [tokIn, tokOut] = [tokOut, tokIn]; paintToken("in", tokIn); paintToken("out", tokOut); if (quote) $("amt").value = fmt(units(quote.amountOut, quote.dOut)).replace(/,/g, ""); paintBalances(); onInput(); });
+  $("pick-in").addEventListener("click", () => openPicker("in"));
+  $("pick-out").addEventListener("click", () => openPicker("out"));
+  $("pk-x").addEventListener("click", closePicker);
+  $("picker").addEventListener("click", (e) => { if (e.target === $("picker")) closePicker(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closePicker(); $("wm").classList.remove("open"); } });
+  $("pk-q").addEventListener("input", renderPicker);
+  $("pk-q").addEventListener("paste", () => setTimeout(renderPicker, 0));
+  $("tab-stocks").addEventListener("click", () => { tab = "stocks"; $("tab-stocks").classList.add("on"); $("tab-tokens").classList.remove("on"); renderPicker(); });
+  $("tab-tokens").addEventListener("click", () => { tab = "tokens"; $("tab-tokens").classList.add("on"); $("tab-stocks").classList.remove("on"); renderPicker(); });
+  $("pk-list").addEventListener("click", (e) => { const r = e.target.closest(".trow"); if (!r || r.classList.contains("off")) return; const [a, flag] = r.dataset.a.split("|"); pick(flag === "eth" ? ETH : registry.get(a)); });
+  $("flip").addEventListener("click", () => { $("flip").classList.toggle("spin"); [tokIn, tokOut] = [tokOut, tokIn]; paintToken("in", tokIn); paintToken("out", tokOut); if (quote) $("amt").value = fmt(units(quote.amountOut, tokIn.decimals)).replace(/,/g, ""); paintBalances(); onInput(); });
   $("gear").addEventListener("click", () => $("slip").classList.toggle("open"));
   $("slip").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { $("slip").querySelectorAll("button").forEach((x) => x.classList.remove("on")); b.classList.add("on"); slippageBps = BigInt(Math.round(Number(b.dataset.v) * 100)); $("slip-v").textContent = b.dataset.v + "%"; if (quote) paintQuote(); }));
   $("go").addEventListener("click", go);

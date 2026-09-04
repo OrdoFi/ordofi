@@ -8,6 +8,7 @@ import {
   USDG,
   WETH,
   candidateCycles,
+  candidateRoutes,
   chooseReclaim,
   decodeQuote,
   quoteSwap,
@@ -98,15 +99,17 @@ function fakeRpc(opts: { profitFor: (size: bigint) => bigint; amountOut: bigint;
     if (method !== "eth_call") throw new Error(`unexpected ${method}`);
     const { to, data, value } = params[0] as { to: Hex; data: Hex; value?: Hex };
     if (to.toLowerCase() === V3_FACTORY) {
-      const [, , fee] = decodeFunctionData({
+      const [x, y, fee] = decodeFunctionData({
         abi: [{ type: "function", name: "getPool", inputs: [{ type: "address" }, { type: "address" }, { type: "uint24" }], outputs: [{ type: "address" }], stateMutability: "view" }],
         data,
       }).args as [Hex, Hex, number];
-      const a = ((decodeFunctionData({
-        abi: [{ type: "function", name: "getPool", inputs: [{ type: "address" }, { type: "address" }, { type: "uint24" }], outputs: [{ type: "address" }], stateMutability: "view" }],
-        data,
-      }).args as [Hex, Hex, number])[1]).toLowerCase();
-      const has = a === GME ? [500, 3000].includes(fee) : a === USDG ? fee === 100 : false;
+      const pair = [x.toLowerCase(), y.toLowerCase()].sort().join(":");
+      const pools: Record<string, number[]> = {
+        [[WETH, GME].sort().join(":")]: [500, 3000],
+        [[WETH, USDG].sort().join(":")]: [100],
+        [[GME, USDG].sort().join(":")]: [100],
+      };
+      const has = (pools[pair] ?? []).includes(fee);
       return has ? `0x${POOL.slice(2).padStart(64, "0")}` : `0x${"0".repeat(64)}`;
     }
     if (to.toLowerCase() === ORDO) {
@@ -183,14 +186,39 @@ test("bad input is refused before anything is simulated", async () => {
   assert.ok(FEES.includes(3000) && QUOTER_V2.startsWith("0x"));
 });
 
-test("a token-to-token swap is passed through as a plain swap in v1, without touching the chain", async () => {
+test("a token-to-token hop is a plain swap in v1: the pool is checked, no back-run is searched", async () => {
   const { rpc, calls } = fakeRpc({ amountOut: 1n, profitFor: () => 0n });
   const q = await quoteSwap(
-    { tokenIn: GME, tokenOut: USDG, fee: 500, amountIn: 10n, amountOutMinimum: 0n, recipient: USER, nativeOut: false, from: USER },
+    { tokenIn: GME, tokenOut: USDG, fee: 100, amountIn: 10n, amountOutMinimum: 0n, recipient: USER, nativeOut: false, from: USER },
     { rpc, ordoSwap: ORDO },
   );
   assert.equal(q.reclaim, null);
-  assert.match(q.note!, /WETH on one side/);
+  assert.match(q.note!, /single-hop swaps against WETH/);
   assert.equal(q.value, "0x0");
-  assert.equal(calls.length, 0);
+  assert.deepEqual(q.route, [{ tokenIn: GME, tokenOut: USDG, fee: 100 }]);
+  assert.ok(calls.every((c) => c.method === "eth_call"), "only pool lookups and the quoter were consulted");
+  await assert.rejects(
+    quoteSwap({ tokenIn: GME, tokenOut: USDG, fee: 500, amountIn: 10n, amountOutMinimum: 0n, recipient: USER, nativeOut: false, from: USER }, { rpc, ordoSwap: ORDO }),
+    /no 500 pool/,
+  );
+});
+
+test("routes are every direct tier plus every two-hop through WETH or USDG", () => {
+  const tiers: Record<string, number[]> = {
+    [[GME, USDG].sort().join(":")]: [100],
+    [[GME, WETH].sort().join(":")]: [500, 3000],
+    [[WETH, USDG].sort().join(":")]: [100, 500],
+  };
+  const tiersOf = (a: Hex, b: Hex) => tiers[[a, b].sort().join(":")] ?? [];
+  const routes = candidateRoutes(GME, USDG, tiersOf);
+  const labels = routes.map((r) => r.map((h) => `${h.tokenIn.slice(0, 6)}→${h.tokenOut.slice(0, 6)}@${h.fee}`).join(" "));
+  assert.deepEqual(labels, [
+    `${GME.slice(0, 6)}→${USDG.slice(0, 6)}@100`,
+    `${GME.slice(0, 6)}→${WETH.slice(0, 6)}@500 ${WETH.slice(0, 6)}→${USDG.slice(0, 6)}@100`,
+    `${GME.slice(0, 6)}→${WETH.slice(0, 6)}@500 ${WETH.slice(0, 6)}→${USDG.slice(0, 6)}@500`,
+    `${GME.slice(0, 6)}→${WETH.slice(0, 6)}@3000 ${WETH.slice(0, 6)}→${USDG.slice(0, 6)}@100`,
+    `${GME.slice(0, 6)}→${WETH.slice(0, 6)}@3000 ${WETH.slice(0, 6)}→${USDG.slice(0, 6)}@500`,
+  ]);
+  assert.equal(candidateRoutes(WETH, GME, tiersOf).length, 2 + 2 * 1, "WETH-in: two direct tiers, no WETH hop, two WETH/USDG tiers × one USDG/GME tier");
+  assert.deepEqual(candidateRoutes(GME, "0x00000000000000000000000000000000000000cc", tiersOf), [], "nothing reachable is no routes, not an error");
 });
