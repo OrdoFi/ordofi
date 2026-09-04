@@ -70,10 +70,19 @@ const FALLBACK_STICKY_MS = 30_000;
 // type-stripping only accepts erasable TypeScript syntax.
 class UpstreamRpcError extends Error {
   code: number;
+  /**
+   * The error's `data`, when the upstream sent one. For a revert this is the
+   * ABI-encoded reason — `Error(string)`, `Panic`, or a custom error — and it
+   * is the only way a wallet can tell a user *why* an eth_call or
+   * eth_estimateGas failed. Dropping it here turned every revert behind the
+   * gateway into a bare "execution reverted".
+   */
+  data?: unknown;
   readonly isRpcLevel = true;
-  constructor(message: string, code: number) {
+  constructor(message: string, code: number, data?: unknown) {
     super(message);
     this.code = code;
+    if (data !== undefined) this.data = data;
   }
 }
 
@@ -165,7 +174,7 @@ export async function rpcOnce(url: string, method: string, params: unknown[], ti
     // host's problem, not the request's: both must rotate, so they carry the
     // status as the code rather than whatever the upstream chose to put there.
     const throttled = res.status === 429 || res.status === 402 || res.status >= 500;
-    throw new UpstreamRpcError(body.error.message ?? "upstream error", throttled ? 429 : body.error.code ?? -32000);
+    throw new UpstreamRpcError(body.error.message ?? "upstream error", throttled ? 429 : body.error.code ?? -32000, body.error.data);
   }
   if (!res.ok && body.result === undefined) {
     throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);

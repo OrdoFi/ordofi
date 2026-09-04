@@ -175,3 +175,20 @@ test("a real failure on every upstream is not retried", async () => {
   await assert.rejects(rpcFetch("eth_blockNumber", []));
   assert.ok(calls.length <= 4, `dead hosts should not be hammered: ${calls.length} calls`);
 });
+
+test("a revert keeps its data: the reason is the only thing a wallet can show", async () => {
+  const { rpcFetch } = await freshRpcFetch();
+  const reason = "0x08c379a0" + "00".repeat(28) + "deadbeef";
+  stub({
+    [A]: () => ({ body: { jsonrpc: "2.0", id: 1, error: { code: 3, message: "execution reverted", data: reason } } }),
+    [B]: ok("0x1"),
+  });
+
+  await assert.rejects(rpcFetch("eth_call", [{}]), (e: { code: number; data?: unknown; message: string }) => {
+    assert.equal(e.code, 3);
+    assert.equal(e.message, "execution reverted");
+    assert.equal(e.data, reason, "revert data travels with the error");
+    return true;
+  });
+  assert.deepEqual(calls, [A], "a revert is a real answer; it is not retried elsewhere");
+});
