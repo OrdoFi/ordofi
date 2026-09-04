@@ -294,6 +294,7 @@ const VIA_PAGE = viaHtml({
   app: "https://app.ordofi.network",
   rpc: "https://rpc.ordofi.network",
   docs: "https://app.ordofi.network/docs",
+  houseSearcher: process.env.ORDO_HOUSE_SEARCHER ?? "",
 });
 
 const server = createServer((req, res) => {

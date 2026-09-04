@@ -113,6 +113,9 @@ services:
       # but nothing is ever collected on-chain.
       ORDO_AUCTIONEER_KEY: ${ORDO_AUCTIONEER_KEY:-}
       ORDO_RECEIPT_LOG_ADDRESS: ${ORDO_RECEIPT_LOG_ADDRESS:-}
+      # Marks rounds won by our own searcher on the public page, so a round we
+      # won with our own bot is never read as a market clearing.
+      ORDO_HOUSE_SEARCHER: ${ORDO_HOUSE_SEARCHER:-}
       ORDO_AUCTION_WINDOW_MS: ${ORDO_AUCTION_WINDOW_MS:-200}
       ORDO_REBATE_USER: ${ORDO_REBATE_USER:-0.9}
       ORDO_REBATE_APP: ${ORDO_REBATE_APP:-0.05}
@@ -164,6 +167,13 @@ services:
       ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
       SEARCHER_KEY: ${ORDO_HOUSE_SEARCHER_KEY:-}
       ORDO_MAX_BID_ETH: ${ORDO_HOUSE_MAX_BID_ETH:-0.0001}
+      # What it may put into one round trip, and what it keeps back for gas.
+      # It bids a share of a quoted edge or it does not bid, so an empty
+      # market costs nothing beyond the quotes.
+      ORDO_SEARCHER_BUDGET_ETH: ${ORDO_SEARCHER_BUDGET_ETH:-0.02}
+      ORDO_SEARCHER_GAS_RESERVE_ETH: ${ORDO_SEARCHER_GAS_RESERVE_ETH:-0.002}
+      ORDO_SEARCHER_MIN_PROFIT_ETH: ${ORDO_SEARCHER_MIN_PROFIT_ETH:-0.000004}
+      ORDO_SEARCHER_BID_SHARE_PCT: ${ORDO_SEARCHER_BID_SHARE_PCT:-70}
     depends_on: [auction]
     restart: unless-stopped
 

@@ -1,7 +1,10 @@
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { encodeFunctionData, decodeFunctionResult, formatEther, parseEther, type Hex } from "viem";
-import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
+import { WETH, normalizePrivateKey, rpcFetch } from "@ordofi/core";
+import { buildCycleSwap } from "@ordofi/core/arb";
+import { ROUTER } from "@ordofi/core/router";
 import { OrdoSearcher } from "@ordofi/sdk";
+import { CycleCache, evaluate, type Sized, type StrategyConfig } from "./strategy.js";
 
 /**
  * Reference OrdoFi searcher bot — also the house bot that keeps the auction
@@ -25,6 +28,7 @@ import { OrdoSearcher } from "@ordofi/sdk";
  *   ORDO_BOND_TARGET_ETH     bond to maintain on-chain (default 2x max bid)
  */
 
+const CHAIN_ID = 4663;
 const AUCTION_WS = process.env.ORDO_AUCTION_WS ?? "ws://localhost:8548/searcher";
 const SETTLEMENT = (process.env.ORDO_SETTLEMENT_ADDRESS ?? "") as Hex;
 const KEY = normalizePrivateKey(process.env.SEARCHER_KEY, "SEARCHER_KEY") ?? generatePrivateKey();
@@ -32,6 +36,15 @@ const MAX_BID = parseEther(process.env.ORDO_MAX_BID_ETH ?? "0.001");
 const BOND_TARGET = process.env.ORDO_BOND_TARGET_ETH
   ? parseEther(process.env.ORDO_BOND_TARGET_ETH)
   : MAX_BID * 2n;
+/** Capital for one round trip. Kept apart from the bond, which is collateral, not stock. */
+const TRADE_BUDGET = parseEther(process.env.ORDO_SEARCHER_BUDGET_ETH ?? "0.02");
+/** ETH the wallet keeps for gas and never trades. */
+const GAS_RESERVE = parseEther(process.env.ORDO_SEARCHER_GAS_RESERVE_ETH ?? "0.002");
+const MIN_PROFIT = parseEther(process.env.ORDO_SEARCHER_MIN_PROFIT_ETH ?? "0.000004");
+/** Share of the net edge offered to the auction; the rest covers races we lose. */
+const BID_SHARE_PCT = BigInt(process.env.ORDO_SEARCHER_BID_SHARE_PCT ?? "70");
+/** Quoting stops here, well inside the 200 ms window, so the bid still arrives. */
+const EVAL_BUDGET_MS = Number(process.env.ORDO_SEARCHER_EVAL_MS ?? 120);
 
 const account = privateKeyToAccount(KEY);
 
@@ -50,25 +63,49 @@ const BOND_ABI = [
 let nonce = 0;
 let maxFeePerGas = 2_000_000_000n;
 let gasLimit = 60_000n;
+/** A two-hop V3 round trip, not a transfer; measured rather than guessed would be better, but not inside the window. */
+let swapGasLimit = 400_000n;
+let tradeBudget = 0n;
 
 async function refreshChainState(): Promise<void> {
-  const [nonceHex, gasPriceHex, gasHex] = await Promise.all([
+  const [nonceHex, gasPriceHex, gasHex, balanceHex] = await Promise.all([
     rpcFetch("eth_getTransactionCount", [account.address, "pending"]),
     rpcFetch("eth_gasPrice", []),
     rpcFetch("eth_estimateGas", [{ from: account.address, to: account.address, value: "0x0" }]),
+    rpcFetch("eth_getBalance", [account.address, "latest"]),
   ]);
   nonce = parseInt(nonceHex as string, 16);
   maxFeePerGas = BigInt(gasPriceHex as string) * 2n;
   // Headroom over the estimate: the L1 data component drifts with calldata prices.
   gasLimit = (BigInt(gasHex as string) * 3n) / 2n;
+
+  // What the bot may actually put into a trade: its balance, less the gas it
+  // must keep and the bond it must maintain, capped by the configured budget.
+  const balance = BigInt(balanceHex as string);
+  const reserved = GAS_RESERVE + BOND_TARGET;
+  const free = balance > reserved ? balance - reserved : 0n;
+  tradeBudget = free > TRADE_BUDGET ? TRADE_BUDGET : free;
 }
 
-async function signedSelfTransfer(): Promise<Hex> {
+/** What one backrun is expected to cost in gas, at the gas price we last saw. */
+function gasCostWei(): bigint {
+  return swapGasLimit * maxFeePerGas;
+}
+
+/**
+ * The backrun itself: the round trip, signed, ready for the auction to place
+ * behind the user's transaction. `amountOutMinimum` is the principal plus the
+ * margin we did not bid away, so if the edge is gone by inclusion — the usual
+ * outcome — the swap reverts and the only loss is gas.
+ */
+async function signedBackrun(best: Sized, bidWei: bigint): Promise<Hex> {
+  const minReturn = best.amountIn + (best.grossWei - bidWei) / 2n;
   return account.signTransaction({
-    chainId: 4663,
-    to: account.address,
-    value: 0n,
-    gas: gasLimit,
+    chainId: CHAIN_ID,
+    to: ROUTER,
+    value: best.amountIn,
+    data: buildCycleSwap(best.cycle, best.amountIn, minReturn),
+    gas: swapGasLimit,
     maxFeePerGas,
     maxPriorityFeePerGas: 0n,
     nonce: nonce++,
@@ -147,6 +184,23 @@ async function ensureBond(): Promise<void> {
   console.warn(`[bot] bond ${hash} not confirmed within 15s; will re-check next cycle`);
 }
 
+// --- strategy ------------------------------------------------------------------
+
+const rpcCall = async (to: string, data: Hex): Promise<Hex> =>
+  (await rpcFetch("eth_call", [{ to, data }, "latest"])) as Hex;
+
+const cycleCache = new CycleCache(rpcCall, WETH as Hex);
+
+/** Rebuilt per opportunity: gas price and the tradable balance both move. */
+const strategy = (): StrategyConfig => ({
+  base: WETH as Hex,
+  maxBidWei: MAX_BID,
+  budgetWei: tradeBudget,
+  gasCostWei: gasCostWei(),
+  minProfitWei: MIN_PROFIT,
+  bidSharePct: BID_SHARE_PCT,
+});
+
 // --- the bot -------------------------------------------------------------------
 
 await refreshChainState();
@@ -162,13 +216,27 @@ const searcher = new OrdoSearcher({
   privateKey: KEY,
   settlementAddress: SETTLEMENT,
   onOpportunity: async (opp) => {
-    // Naive strategy: a small constant bid on anything that moves a pool.
-    // Everything here must be local — the auction closes in ~200ms.
+    // Everything here happens inside the bid window, so the only network calls
+    // are quotes; the pool's pair and its fee tiers were looked up the first
+    // time this pool appeared and are remembered.
     if (opp.hint.poolsTouched.length === 0) return null;
-    const maxBidWei = MAX_BID / 2n;
-    const backrunRawTx = await signedSelfTransfer();
-    console.log(`[bot] bidding ${formatEther(maxBidWei)} ETH on ${opp.id.slice(0, 8)} (${opp.hint.poolsTouched.length} pools)`);
-    return { maxBidWei, backrunRawTx };
+    const started = Date.now();
+
+    const cycles = (await Promise.all(opp.hint.poolsTouched.map((p) => cycleCache.cyclesFor(p)))).flat();
+    const decision = await evaluate(rpcCall, cycles, strategy(), { deadlineMs: EVAL_BUDGET_MS });
+
+    if (!decision.best || decision.bidWei === 0n) {
+      // The honest outcome most of the time, and the one the old fixed bid hid:
+      // there was nothing here worth paying for.
+      console.log(`[bot] no bid on ${opp.id.slice(0, 8)} — ${decision.reason}`);
+      return null;
+    }
+
+    const backrunRawTx = await signedBackrun(decision.best, decision.bidWei);
+    console.log(
+      `[bot] bidding ${formatEther(decision.bidWei)} ETH on ${opp.id.slice(0, 8)} — ${decision.reason} (${Date.now() - started}ms)`,
+    );
+    return { maxBidWei: decision.bidWei, backrunRawTx };
   },
 });
 

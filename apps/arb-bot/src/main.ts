@@ -1,15 +1,14 @@
 import { privateKeyToAccount } from "viem/accounts";
 import {
   encodeFunctionData,
-  decodeFunctionResult,
-  encodePacked,
   formatEther,
   parseEther,
   type Hex,
 } from "viem";
 import { join } from "node:path";
 import { normalizePrivateKey, rpcFetch } from "@ordofi/core";
-import { ROUTER, encodeExactInputSwap } from "@ordofi/core/router";
+import { ROUTER } from "@ordofi/core/router";
+import { QUOTER_V2, buildCycleSwap, poolTiers as tiersFor, quoteCycle as quoteCycleShared, type Cycle } from "@ordofi/core/arb";
 import { proveDelivery } from "@ordofi/core/guard";
 import { Telemetry, edgeBps, wethReturned } from "./telemetry.js";
 
@@ -56,10 +55,6 @@ const account = privateKeyToAccount(KEY);
 const CHAIN_ID = 4663;
 const WETH: Hex = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
 const USDG: Hex = "0x5fc5360d0400a0fd4f2af552add042d716f1d168";
-const V3_FACTORY: Hex = "0x1f7d7550b1b028f7571e69a784071f0205fd2efa";
-const QUOTER_V2: Hex = "0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7";
-const ZERO = "0x0000000000000000000000000000000000000000";
-const FEES = [100, 500, 3000, 10000];
 
 const SELF = process.env.ORDO_SELF_URL ?? "http://web:3000";
 const MIN_PROFIT = parseEther(process.env.ORDO_ARB_MIN_PROFIT_ETH ?? "0.000004");
@@ -93,55 +88,14 @@ const STARTED_AT = Date.now();
 let lastBalance: bigint | null = null;
 let lastBudget: bigint | null = null;
 
-const FACTORY_ABI = [
-  { type: "function", name: "getPool", stateMutability: "view", inputs: [{ type: "address" }, { type: "address" }, { type: "uint24" }], outputs: [{ type: "address" }] },
-] as const;
-const QUOTER_ABI = [
-  {
-    type: "function", name: "quoteExactInput", stateMutability: "nonpayable",
-    inputs: [{ type: "bytes" }, { type: "uint256" }],
-    outputs: [
-      { type: "uint256", name: "amountOut" },
-      { type: "uint160[]" }, { type: "uint32[]" }, { type: "uint256" },
-    ],
-  },
-] as const;
 async function ethCall(to: string, data: Hex): Promise<Hex> {
   return (await rpcFetch("eth_call", [{ to, data }, "latest"])) as Hex;
 }
 
-function encodePath(tokens: Hex[], fees: number[]): Hex {
-  const types: string[] = [];
-  const values: (Hex | number)[] = [];
-  tokens.forEach((t, i) => {
-    types.push("address");
-    values.push(t);
-    if (i < fees.length) {
-      types.push("uint24");
-      values.push(fees[i]);
-    }
-  });
-  return encodePacked(types as never, values as never);
-}
-
 // --- discovery: which cycles even exist -------------------------------------
 
-interface Cycle {
-  label: string;
-  tokens: Hex[]; // starts and ends at WETH
-  fees: number[]; // one per hop, so tokens.length === fees.length + 1
-}
-
 async function poolTiers(a: Hex, b: Hex): Promise<number[]> {
-  const hits = await Promise.all(FEES.map(async (fee) => {
-    try {
-      const out = await ethCall(V3_FACTORY, encodeFunctionData({ abi: FACTORY_ABI, functionName: "getPool", args: [a, b, fee] }));
-      return (decodeFunctionResult({ abi: FACTORY_ABI, functionName: "getPool", data: out }) as string).toLowerCase() !== ZERO ? fee : null;
-    } catch {
-      return null; // no pool at this tier
-    }
-  }));
-  return hits.filter((f): f is number => f !== null);
+  return tiersFor(ethCall, a, b);
 }
 
 /**
@@ -204,14 +158,7 @@ async function candidateMids(): Promise<{ address: Hex; symbol: string }[]> {
 // --- simulation --------------------------------------------------------------
 
 async function quoteCycle(c: Cycle, amountIn: bigint): Promise<bigint | null> {
-  const path = encodePath(c.tokens, c.fees);
-  try {
-    const out = await ethCall(QUOTER_V2, encodeFunctionData({ abi: QUOTER_ABI, functionName: "quoteExactInput", args: [path, amountIn] }));
-    const [amountOut] = decodeFunctionResult({ abi: QUOTER_ABI, functionName: "quoteExactInput", data: out }) as [bigint, bigint[], number[], bigint];
-    return amountOut;
-  } catch {
-    return null; // no liquidity along this path right now
-  }
+  return quoteCycleShared(ethCall, c, amountIn);
 }
 
 // --- chain state -------------------------------------------------------------
@@ -243,9 +190,7 @@ function sizeLadder(budget: bigint): bigint[] {
 
 /** WETH -> ... -> WETH round trip, paid back to this wallet as native ETH. */
 function buildTx(c: Cycle, amountIn: bigint, minReturn: bigint): Hex {
-  const path = encodePath(c.tokens, c.fees);
-  const deadline = BigInt(Math.floor(Date.now() / 1000) + 60);
-  return encodeExactInputSwap({ path, amountIn, amountOutMinimum: minReturn, nativeOut: true, deadline });
+  return buildCycleSwap(c, amountIn, minReturn);
 }
 
 let busy = false; // one scan/fire at a time — quotes are many and the RPC is shared

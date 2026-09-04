@@ -12,6 +12,7 @@
     "./stealth": "./src/stealth.ts",
     "./liquidity": "./src/liquidity.ts",
     "./router": "./src/router.ts",
+    "./arb": "./src/arb.ts",
     "./guard": "./src/guard.ts",
     "./blackhole-watch": "./src/blackhole-watch.ts"
   },

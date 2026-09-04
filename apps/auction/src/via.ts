@@ -13,8 +13,22 @@
  * origin and must not go blank because the app is down. Everything below the
  * fold is fetched from this same host.
  */
-export function viaHtml(opts: { settlement: string; receiptLog: string; explorer: string; app: string; rpc: string; docs: string }): string {
-  const { settlement, receiptLog, explorer, app, rpc, docs } = opts;
+export function viaHtml(opts: {
+  settlement: string;
+  receiptLog: string;
+  explorer: string;
+  app: string;
+  rpc: string;
+  docs: string;
+  /**
+   * The searcher OrdoFi runs itself. Rounds it wins are marked, because a
+   * round the operator won with its own bot is not the same fact as a round
+   * an outsider won, and a page that shows them identically is telling the
+   * reader something untrue about how much of this market exists yet.
+   */
+  houseSearcher: string;
+}): string {
+  const { settlement, receiptLog, explorer, app, rpc, docs, houseSearcher } = opts;
   const addr = (a: string) => (a ? `<a href="${explorer}/address/${a}" target="_blank" rel="noopener">${a.slice(0, 10)}…${a.slice(-6)}</a>` : "—");
   return `<!doctype html>
 <html lang="en">
@@ -77,6 +91,7 @@ export function viaHtml(opts: { settlement: string; receiptLog: string; explorer
   .roadmap li:last-child { border-bottom:none; }
   .tag { font-family:var(--mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; padding:2px 7px; border:1px solid var(--border2); color:var(--muted); white-space:nowrap; }
   .tag.live { color:var(--ok); border-color:var(--ok); }
+  .tag.house { color:var(--accent2); border-color:var(--accent2); margin-left:6px; }
   .roadmap b { font-family:var(--display); font-weight:600; font-size:16px; }
   .roadmap span.d { color:var(--muted); font-size:14px; }
   footer { padding:34px 0 60px; font-size:13px; color:var(--muted); display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }
@@ -107,7 +122,7 @@ export function viaHtml(opts: { settlement: string; receiptLog: string; explorer
 
 <section><div class="wrap">
   <h2>Rounds</h2>
-  <p class="lede">Every closed round, newest first: all bids received, who won, and the second price the winner was actually charged. A round with no bids closed without a sale and cost the user nothing.</p>
+  <p class="lede">Every closed round, newest first: all bids received, who won, and the second price the winner was actually charged. A round with no bids closed without a sale and cost the user nothing. Rounds won by <span class="tag house">house</span> were won by the searcher OrdoFi runs itself — the auction is new, and until outside searchers compete in it those rounds are us bidding, not a market clearing.</p>
   <div id="rounds"><div class="empty">loading…</div></div>
 </div></section>
 
@@ -169,6 +184,7 @@ auditReceipt(ack, receipt)   <span class="c">// packages/core/src/receipt.ts</sp
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
+  const HOUSE = ${JSON.stringify(houseSearcher.toLowerCase())};
   const short = (h) => !h ? "—" : h.slice(0, 8) + "…" + h.slice(-4);
   const eth = (wei) => {
     try {
@@ -215,10 +231,11 @@ auditReceipt(ack, receipt)   <span class="c">// packages/core/src/receipt.ts</sp
     const rows = rs.map((r) => {
       const bids = Array.isArray(r.bids) ? r.bids : [];
       const top = bids.map((b) => eth(b.bidWei)).sort((a, b) => Number(b) - Number(a))[0];
+      const isHouse = HOUSE && r.winner && r.winner.toLowerCase() === HOUSE;
       return "<tr>" +
         '<td class="mono"><a href="/receipts/' + esc(r.opportunityId) + '">' + short(r.opportunityId) + "</a></td>" +
         "<td>" + bids.length + (bids.length ? '<span class="mono" style="color:var(--muted)"> · top ' + top + " ETH</span>" : "") + "</td>" +
-        '<td class="mono">' + (r.winner ? short(r.winner) : '<span style="color:var(--muted)">no sale</span>') + "</td>" +
+        '<td class="mono">' + (r.winner ? short(r.winner) + (isHouse ? '<span class="tag house">house</span>' : "") : '<span style="color:var(--muted)">no sale</span>') + "</td>" +
         "<td>" + (r.winner ? eth(r.clearingPriceWei) + " ETH" : "—") + "</td>" +
         '<td class="hide-s">' + (r.winner ? eth((BigInt(r.clearingPriceWei) * 90n / 100n).toString()) + " ETH" : "—") + "</td>" +
         '<td class="hide-s mono" style="color:var(--muted)">' + ago(r.closedAt) + "</td>" +
