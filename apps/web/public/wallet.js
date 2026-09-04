@@ -58,6 +58,11 @@ const CSS = `
 .wm-kv div{border:1px solid var(--border);padding:10px 12px}
 .wm-kv .k{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .wm-kv .v{font-family:var(--mono);font-size:14px;margin-top:3px}
+.wm-prot{border:1px solid var(--border);padding:10px 12px;margin-top:10px}
+.wm-prot .k{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.wm-prot .v{font-size:12.5px;line-height:1.5;margin-top:4px;color:var(--text-dim)}.wm-prot .v.ok{color:#1e9e6a}
+.wm-prot button{font:inherit;font-size:12.5px;margin-top:8px;padding:8px 12px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;width:100%}
+.wm-prot button:disabled{opacity:.6;cursor:default}
 .wm-acts{display:flex;gap:8px;margin-top:14px}
 .wm-acts button,.wm-acts a{flex:1;font:inherit;font-size:12.5px;padding:9px;border:1px solid var(--border);background:#fff;cursor:pointer;text-align:center;color:var(--text-dim);text-decoration:none}
 .wm-acts .danger{color:var(--danger);border-color:var(--danger)}
@@ -169,9 +174,37 @@ class Wallet {
     const c = this.chain;
     if ((await this.provider.request({ method: "eth_chainId" })) === c.idHex) return;
     try { await this.provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: c.idHex }] }); }
-    catch { await this.provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: c.idHex, chainName: c.name + " · OrdoFi protected", rpcUrls: [c.rpc], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: [c.explorer] }] }); }
+    catch { await this.provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: c.idHex, chainName: c.name + " · OrdoFi protected", rpcUrls: [c.rpc], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: [c.explorer] }] });  localStorage.setItem(this.protectedKey(), "1"); }
     // A switch the user dismissed resolves in some wallets; ask again rather than trust it.
     if ((await this.provider.request({ method: "eth_chainId" })) !== c.idHex) throw new Error(`switch your wallet to ${c.name} first — nothing was sent`);
+  }
+
+  /**
+   * A wallet broadcasts through whichever RPC it holds for the chain. When the
+   * site added the chain, that is ours and every send is protected; a wallet
+   * that already knew Robinhood Chain through the public endpoint is not, and
+   * the only remedy is to offer ours. Wallets do not reveal their RPC, so the
+   * status shown is what this site has seen it accept, per wallet address.
+   */
+  protectedKey() { return `wm-protected:${String(this.account ?? "").toLowerCase()}`; }
+  renderProtection(el) {
+    if (!el) return;
+    const on = localStorage.getItem(this.protectedKey()) === "1";
+    el.innerHTML = on
+      ? `<div class="k">Protection</div><div class="v ok">Transactions go through rpc.ordofi.network — simulated, shielded from front-running, rebates on.</div>`
+      : `<div class="k">Protection</div><div class="v">Your wallet may still send through the public RPC. Route it through OrdoFi's: same chain, protected sends, rebates.</div><button id="wm-protect">Use OrdoFi protected RPC</button>`;
+    el.querySelector("#wm-protect")?.addEventListener("click", async (e) => {
+      e.target.disabled = true; e.target.textContent = "Check your wallet…";
+      try { await this.offerProtectedRpc(); this.renderProtection(el); }
+      catch (err) { e.target.disabled = false; e.target.textContent = "Use OrdoFi protected RPC"; el.insertAdjacentHTML("beforeend", `<div class="v" style="color:var(--danger)">${esc(rejected(err) ? "Cancelled in the wallet." : err.message)}</div>`); }
+    });
+  }
+  async offerProtectedRpc() {
+    const c = this.chain;
+    // MetaMask and Rabby treat this as "add or update the network": a wallet that
+    // already has the chain on another RPC asks the user to switch to ours.
+    await this.provider.request({ method: "wallet_addEthereumChain", params: [{ chainId: c.idHex, chainName: c.name + " · OrdoFi protected", rpcUrls: [c.rpc], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: [c.explorer] }] });
+    localStorage.setItem(this.protectedKey(), "1");
   }
 
   async openAccount() {
@@ -179,7 +212,9 @@ class Wallet {
     const body = this.modal.querySelector("#wm-body");
     body.innerHTML = `<div class="wm-acct"><div class="wm-addr"><span>${esc(this.account)}</span><button id="wm-copy">copy</button></div>
       <div class="wm-kv"><div><div class="k">Balance</div><div class="v" id="wm-bal">…</div></div><div><div class="k">Network</div><div class="v" id="wm-net">…</div></div></div>
+      <div class="wm-prot" id="wm-prot"></div>
       <div class="wm-acts"><a href="${esc(this.chain.explorer)}/address/${esc(this.account)}" target="_blank" rel="noopener">Explorer ↗</a><button id="wm-switch">Switch wallet</button><button class="danger" id="wm-dc">Disconnect</button></div></div>`;
+    this.renderProtection(body.querySelector("#wm-prot"));
     body.querySelector("#wm-copy").addEventListener("click", () => navigator.clipboard.writeText(this.account));
     body.querySelector("#wm-switch").addEventListener("click", () => this.openPicker());
     body.querySelector("#wm-dc").addEventListener("click", () => this.disconnect());
