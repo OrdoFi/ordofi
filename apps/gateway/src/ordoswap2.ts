@@ -96,12 +96,12 @@ const ETH_USDG_V4 = { poolId: "0x24107d152f14a76d292123265ae3f3c71f863fc2f4ef7ba
  * in parallel, and the result is cached with the pair for ten minutes — so a
  * token with twenty-five pools costs twenty-five calls once, then nothing.
  */
-async function liquidityOf(rpc: Rpc, poolIds: string[]): Promise<Map<string, bigint>> {
+async function liquidityOf(rpc: Rpc, poolIds: string[], bg = false): Promise<Map<string, bigint>> {
   const out = new Map<string, bigint>();
   await Promise.all(
     poolIds.map(async (id) => {
       try {
-        const r = (await limited(() => rpc("eth_call", [{ to: STATE_VIEW, data: encodeFunctionData({ abi: STATE_VIEW_ABI, functionName: "getLiquidity", args: [id as Hex] }) }, "latest"]))) as Hex;
+        const r = (await limited(() => rpc("eth_call", [{ to: STATE_VIEW, data: encodeFunctionData({ abi: STATE_VIEW_ABI, functionName: "getLiquidity", args: [id as Hex] }) }, "latest"]), bg)) as Hex;
         out.set(id.toLowerCase(), BigInt(r));
       } catch {
         out.set(id.toLowerCase(), 0n);
@@ -163,14 +163,14 @@ const isEther = (a: string) => low(a) === WETH || low(a) === NATIVE;
 // ----------------------------------------------------------------- pools
 
 const tierCache = new Map<string, { tiers: number[]; at: number }>();
-async function v3Tiers(rpc: Rpc, a: Hex, b: Hex): Promise<number[]> {
+async function v3Tiers(rpc: Rpc, a: Hex, b: Hex, bg = false): Promise<number[]> {
   const key = [low(a), low(b)].sort().join(":");
   const hit = tierCache.get(key);
   if (hit && Date.now() - hit.at < 600_000) return hit.tiers;
   const hits = await Promise.all(
     FEES.map(async (fee) => {
       try {
-        const out = (await rpc("eth_call", [{ to: V3_FACTORY, data: encodeFunctionData({ abi: FACTORY_ABI, functionName: "getPool", args: [a, b, fee] }) }, "latest"])) as Hex;
+        const out = (await limited(() => rpc("eth_call", [{ to: V3_FACTORY, data: encodeFunctionData({ abi: FACTORY_ABI, functionName: "getPool", args: [a, b, fee] }) }, "latest"]), bg)) as Hex;
         return (decodeFunctionResult({ abi: FACTORY_ABI, functionName: "getPool", data: out }) as string).toLowerCase() === ZERO_ADDRESS ? null : fee;
       } catch {
         return null;
@@ -191,7 +191,7 @@ const PAIR_TTL_MS = 10 * 60_000;
  * `MAX_DIRECT_POOLS`. Ether may be given as WETH. Cached ten minutes per pair,
  * so a keystroke never pays for discovery twice.
  */
-export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): Promise<Pool[]> {
+export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex, bg = false): Promise<Pool[]> {
   a = low(a); b = low(b);
   if (isEther(a)) a = WETH;
   if (isEther(b)) b = WETH;
@@ -200,7 +200,7 @@ export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): P
   const hit = pairCache.get(ck);
   if (hit && Date.now() - hit.at < PAIR_TTL_MS) return hit.pools.map((p) => (p.a === a ? p : { ...p, a, b }));
   const out: Pool[] = [];
-  for (const fee of await v3Tiers(rpc, a, b)) out.push({ venue: "v3", a, b, fee, id: `v3:${ck}:${fee}` });
+  for (const fee of await v3Tiers(rpc, a, b, bg)) out.push({ venue: "v3", a, b, fee, id: `v3:${ck}:${fee}` });
   if (v4) {
     // V4 spells ether as address zero.
     const isEthUsdg = (a === WETH && b === USDG) || (a === USDG && b === WETH);
@@ -208,7 +208,7 @@ export async function poolsFor(rpc: Rpc, v4: V4Source | null, a: Hex, b: Hex): P
     let liq = new Map<string, bigint>();
     if (rows.length > 1) {
       // Many pools can exist for one pair; a handful hold liquidity. Rank by it.
-      liq = await liquidityOf(rpc, rows.map((r) => r.poolId));
+      liq = await liquidityOf(rpc, rows.map((r) => r.poolId), bg);
       rows = [...rows].sort((x, y) => { const lx = liq.get(x.poolId.toLowerCase()) ?? 0n, ly = liq.get(y.poolId.toLowerCase()) ?? 0n; return ly > lx ? 1 : ly < lx ? -1 : 0; });
       const live = rows.filter((r) => (liq.get(r.poolId.toLowerCase()) ?? 0n) > 0n);
       rows = (live.length ? live : rows.slice(0, 1)).slice(0, MAX_DIRECT_POOLS);
@@ -249,7 +249,7 @@ export function prewarm(rpc: Rpc, v4: V4Source | null, tokens: () => Hex[], ever
     for (const t of tokens()) {
       if (stopped) return;
       if (t === WETH || t === USDG) continue;
-      await Promise.all([poolsFor(rpc, v4, WETH, t), poolsFor(rpc, v4, USDG, t)]).catch(() => {});
+      await Promise.all([poolsFor(rpc, v4, WETH, t, true), poolsFor(rpc, v4, USDG, t, true)]).catch(() => {});
     }
   };
   void pass();
@@ -345,19 +345,25 @@ function revertBytes(err: unknown): Hex | null {
  * the same millisecond trips its per-second limit, and the retries and the
  * fall-back to a public endpoint cost far more than queueing would have.
  */
-const MAX_INFLIGHT = 6;
-let inflight = 0;
-const waiters: (() => void)[] = [];
-async function limited<T>(fn: () => Promise<T>): Promise<T> {
-  if (inflight >= MAX_INFLIGHT) await new Promise<void>((r) => waiters.push(r));
-  inflight++;
-  try {
-    return await fn();
-  } finally {
-    inflight--;
-    waiters.shift()?.();
+class Lane {
+  private inflight = 0;
+  private waiters: (() => void)[] = [];
+  constructor(private readonly max: number) {}
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.inflight >= this.max) await new Promise<void>((r) => this.waiters.push(r));
+    this.inflight++;
+    try {
+      return await fn();
+    } finally {
+      this.inflight--;
+      this.waiters.shift()?.();
+    }
   }
 }
+/** Live quotes get six slots; background discovery two of its own, so warming never delays a person. */
+const live = new Lane(6);
+const background = new Lane(2);
+const limited = <T>(fn: () => Promise<T>, bg = false): Promise<T> => (bg ? background : live).run(fn);
 
 /** One `quote()` eth_call; the value stands in for an ether input. */
 async function quoteCall(rpc: Rpc, ordoSwap: Hex, legs: Leg[], amountIn: bigint, reclaim: typeof NO_RECLAIM, valueFrom: Hex | null) {
