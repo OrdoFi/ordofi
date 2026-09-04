@@ -128,12 +128,20 @@ export function viaHtml(opts: {
 
 <section><div class="wrap">
   <h2>Check it yourself</h2>
-  <p class="lede">The point of publishing bids is that someone can catch us. Three commands, no account, no trust:</p>
+  <p class="lede">The point of publishing bids is that someone can catch us. No account, no trust:</p>
   <pre><span class="c"># the whole history, and how much of it is already immutable on-chain</span>
 curl ${"https://auction.ordofi.network"}/receipts/root
 
 <span class="c"># one round, every bid in it</span>
 curl ${"https://auction.ordofi.network"}/receipts/&lt;opportunityId&gt;
+
+<span class="c"># the strong one: rebuild the anchored root from the published receipts and
+# compare it to what the contract holds. If we ever swapped a receipt out after
+# publishing it, these two stop matching and there is nothing we can do about it.
+# /receipts serves newest first; the tree is built oldest first, hence reverse().</span>
+const rs = (await (await fetch("${"https://auction.ordofi.network"}/receipts?n=1000")).json()).receipts.reverse();
+const { root, count } = await log.read.latest();          <span class="c">// ${"0x89926c06cad403fDDD481C599b2ce709EBC936B9"}</span>
+merkleRoot(rs.slice(0, Number(count)).map(receiptHash)) === root
 
 <span class="c"># what a searcher runs: the acknowledged bid must appear at the acknowledged
 # amount, every listed bid must carry that searcher's own signature, and the
