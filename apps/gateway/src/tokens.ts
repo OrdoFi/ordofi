@@ -112,6 +112,7 @@ export class TokenList {
     return this.json;
   }
 
+
   /** The busiest `n` routable tokens, for warming the router's pair cache. */
   top(n: number): string[] {
     return this.tokens.filter((t) => t.v3 || t.v4).slice(0, n).map((t) => t.address);
