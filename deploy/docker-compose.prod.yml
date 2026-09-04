@@ -40,6 +40,8 @@ x-gateway: &gateway
     # without rebates. It is the difference between earning and not.
     ORDO_AUCTION_URL: http://auction:8548
     ORDO_BUNDLER_ADDRESS: ${ORDO_BUNDLER_ADDRESS:-}
+    # OrdoSwap (contracts/src/OrdoSwap.sol): enables ordo_quoteSwap.
+    ORDO_SWAP_ADDRESS: ${ORDO_SWAP_ADDRESS:-}
   # Shared index: the portal writes hashed API keys, the gateway reads them.
   volumes: ["ordo-data:/app/data"]
   depends_on: [auction]
