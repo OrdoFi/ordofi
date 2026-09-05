@@ -5,9 +5,20 @@ import {
   type TransactionSerialized,
 } from "viem";
 import { proveDelivery, type DeliveryProof } from "@ordofi/core/guard";
+import { approvalRefusal, checkApproval } from "./approvals.js";
 import { RpcError } from "./errors.js";
 
 export type Upstream = (method: string, params: unknown[]) => Promise<any>;
+
+/** Checks a caller may waive, and why they would. */
+export interface SafetyOptions {
+  /**
+   * Send an unlimited approval to a codeless spender anyway. The honest reason
+   * is a contract addressed ahead of its deployment (CREATE2); there is no
+   * other.
+   */
+  allowUnlimitedApproval?: boolean;
+}
 
 interface SimResult {
   ok: boolean;
@@ -100,8 +111,8 @@ export async function burnCheck(upstream: Upstream, rawTx: string, parsed?: Pars
  * instead of three; eth_call remains as the fallback for an upstream that
  * cannot simulate, so revert protection never goes away.
  */
-export async function protectAndSend(upstream: Upstream, rawTx: string): Promise<string> {
-  await assertSafe(upstream, rawTx);
+export async function protectAndSend(upstream: Upstream, rawTx: string, opts: SafetyOptions = {}): Promise<string> {
+  await assertSafe(upstream, rawTx, opts);
   return upstream("eth_sendRawTransaction", [rawTx]);
 }
 
@@ -115,8 +126,17 @@ export async function protectAndSend(upstream: Upstream, rawTx: string): Promise
  * Throws the same RpcError `protectAndSend` throws; returns nothing when the
  * transaction is safe to broadcast.
  */
-export async function assertSafe(upstream: Upstream, rawTx: string): Promise<void> {
+export async function assertSafe(upstream: Upstream, rawTx: string, opts: SafetyOptions = {}): Promise<void> {
   const parsed = await parseRaw(rawTx);
+
+  // Before the simulation, because this one is not about whether the
+  // transaction succeeds — it is about what succeeding would cost later. An
+  // approval drain simulates perfectly.
+  if (!opts.allowUnlimitedApproval) {
+    const verdict = await checkApproval(upstream, { to: parsed.tx.to ?? null, data: parsed.tx.data }, parsed.from);
+    if (verdict) throw approvalRefusal(verdict, (parsed.tx.to ?? null) as Hex | null);
+  }
+
   const burn = await burnCheck(upstream, rawTx, parsed).catch(() => null);
   if (burn === null) {
     const sim = await simulateRaw(upstream, rawTx, parsed);

@@ -156,6 +156,12 @@ export const CONFIG = {
     "eth_protocolVersion",
     "net_listening",
     "eth_sendRawTransaction",
+    // The same send with a check waived. Open to anonymous callers on purpose:
+    // the approval guard is a net against signing something you did not
+    // understand, not a permission system, and a caller who has been told
+    // exactly what they are overriding must be able to override it. A wallet
+    // user with no key would otherwise have no way past a false positive.
+    "ordo_sendRawTransaction",
     "ordo_simulate",
     "ordo_quoteSwap",
   ]),

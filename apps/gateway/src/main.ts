@@ -187,17 +187,27 @@ async function recordRouted(txHash: string, rawTx: string, keyLabel: string, via
 
 async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Promise<any> {
   switch (method) {
+    // The standard method, and the same method with the checks a caller may
+    // waive. Keeping them apart matters: eth_sendRawTransaction has one
+    // argument everywhere in the world and a wallet must be able to call it
+    // without knowing anything about us.
+    case "ordo_sendRawTransaction":
     case "eth_sendRawTransaction": {
       metrics.inc("tx_submitted_total", { key: apiKey.label });
       const raw = params[0] as string;
+      const opts =
+        method === "ordo_sendRawTransaction"
+          ? { allowUnlimitedApproval: Boolean((params[1] as { allowUnlimitedApproval?: unknown } | undefined)?.allowUnlimitedApproval) }
+          : {};
+      if (opts.allowUnlimitedApproval) metrics.inc("approval_guard_waived_total", { key: apiKey.label });
       // Keys configured for order flow get the auction; everyone else gets a
       // revert-protected direct send.
       if (apiKey.mode !== "auction") {
-        const hash = await protectAndSend(upstream, raw);
+        const hash = await protectAndSend(upstream, raw, opts);
         void recordRouted(hash, raw, apiKey.label, "protect");
         return hash;
       }
-      const out = await routeOrderFlow(upstream, raw, apiKey);
+      const out = await routeOrderFlow(upstream, raw, apiKey, opts);
       metrics.inc(out.auctioned ? "orderflow_auctioned_total" : "orderflow_fallback_total", {
         key: apiKey.label,
       });
