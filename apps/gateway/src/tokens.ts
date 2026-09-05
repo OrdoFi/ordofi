@@ -148,6 +148,12 @@ export class TokenList {
     return this.tokens.slice(0, n);
   }
 
+  /** One token, by address, for anything that needs its price or its decimals. */
+  find(address: string): PickerToken | undefined {
+    const a = address.toLowerCase();
+    return this.tokens.find((t) => t.address === a);
+  }
+
   /** The dollar price of ether, which prices every pool quoted against it. */
   ethUsd(): number | null {
     return this.tokens.find((t) => t.address === "0x0bd7d308f8e1639fab988df18a8011f41eacad73")?.usd ?? null;

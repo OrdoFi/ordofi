@@ -219,9 +219,13 @@ client.watchBlocks({ onBlock: (b) =&gt; console.log(b.number) });</pre>
   // be missing.
   async function headline() {
     try {
-      const r = await fetch("${app}/api/stats", { signal: AbortSignal.timeout(2500) });
-      const h = (await r.json()).headline;
-      if (!h) return;
+      // Our own origin, from the gateway's own read of the shared index. This
+      // used to be a cross-origin call to the app; when the app was slow the
+      // numbers never arrived, and the timeout that stopped the page hanging
+      // guaranteed it.
+      const r = await fetch("/stats.json", { signal: AbortSignal.timeout(4000) });
+      const h = await r.json();
+      if (!h || h.unavailable) return;
       const usd = (n) => "$" + Number(n).toLocaleString(undefined, n >= 1000 ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const int = (n) => Number(n).toLocaleString();
       const pct = (f) => Math.round(Number(f) * 100) + "%";
@@ -230,9 +234,11 @@ client.watchBlocks({ onBlock: (b) =&gt; console.log(b.number) });</pre>
       // Observed is the market, not the revenue: arbitrage the watcher saw
       // land on-chain, priced in quote assets only. Settlement figures are on
       // the app's /dashboard.
-      $("st-mev").innerHTML = usd(h.mevObservedUsd24h) + "<small>" + int(h.mevObservedArbs24h) + " arbs on-chain in 24h · not yet captured</small>";
+      // Null, not zero, when the tokens the profit was taken in cannot be
+      // priced. The count is always real, so it is shown either way.
+      $("st-mev").innerHTML = (h.mevObservedUsd24h === null ? "—" : usd(h.mevObservedUsd24h)) + "<small>" + int(h.mevObservedArbs24h) + " arbs on-chain in 24h · not yet captured</small>";
       if (h.rebateSplit) $("st-reb").innerHTML = pct(h.rebateSplit.user) + "<small>to users · " + pct(h.rebateSplit.app) + " apps · " + pct(h.rebateSplit.protocol) + " protocol</small>";
-      $("st-srch").innerHTML = int(h.activeSearchers24h) + "<small>last 24h · " + int(h.searchersAllTime) + " all time</small>";
+      $("st-srch").innerHTML = int(h.activeSearchers24h) + "<small>last 24h on-chain</small>";
     } catch { /* cosmetic */ }
   }
   // The first probe pays the TLS handshake; the second, two seconds later, is

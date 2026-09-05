@@ -31,6 +31,7 @@ import {
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { callOrigin, forwardHeaders, type OriginReply } from "./edge.js";
 import { getLogsWide, type LogFilterParam } from "./getlogs.js";
+import { HeadlineStats } from "./headline.js";
 import { HeadWatcher, Hub } from "./subscribe.js";
 import { attachWs } from "./ws.js";
 
@@ -462,6 +463,33 @@ if (tokenList) {
   }
 }
 
+/**
+ * The figures on the front page. Read from the shared index on a timer and
+ * served from memory, because node:sqlite is synchronous and a query on the
+ * request path is one the whole gateway waits for.
+ *
+ * They used to be fetched from app.ordofi.network, so the RPC could only show
+ * how much volume the RPC had protected when a different service was up and
+ * fast. Same database, one less dependency.
+ */
+const headline = new HeadlineStats(
+  CONFIG.edgeOrigin ? null : store,
+  {
+    usd: (token) => tokenList?.find(token)?.usd ?? null,
+    decimals: (token) => tokenList?.find(token)?.decimals ?? null,
+  },
+  {
+    user: Number(process.env.ORDO_REBATE_USER ?? 0.9),
+    app: Number(process.env.ORDO_REBATE_APP ?? 0.05),
+    protocol: Number(process.env.ORDO_REBATE_PROTOCOL ?? 0.05),
+  },
+);
+if (!CONFIG.edgeOrigin) {
+  const tick = () => headline.refresh();
+  setTimeout(tick, 2_000).unref();
+  setInterval(tick, 60_000).unref();
+}
+
 let stopping = false;
 
 const server = createServer((req, res) => {
@@ -521,6 +549,13 @@ const server = createServer((req, res) => {
       etag: tag,
     });
     res.end(WC_BUNDLE.bytes);
+    return;
+  }
+  // What the front page reads. Same origin, from memory, so the numbers are
+  // there when the page paints instead of after a cross-origin round trip.
+  if (req.method === "GET" && url === "/stats.json") {
+    res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=30" });
+    res.end(headline.json());
     return;
   }
   if (req.method === "GET" && url === "/swap/tokens") {
