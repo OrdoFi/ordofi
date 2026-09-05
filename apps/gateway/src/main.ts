@@ -405,7 +405,12 @@ const tokenList = CONFIG.ordoSwapAddress
 if (tokenList) {
   const tick = () => tokenList.refresh().catch((e) => console.warn(`gateway | token list: ${(e as Error).message}`));
   tick();
-  setInterval(tick, 60_000).unref();
+  // Both replicas start within seconds of each other and would then do their
+  // background work in lockstep for as long as they run. Whatever a refresh
+  // costs, the two should never be paying it at the same instant: that is the
+  // difference between one replica being briefly slow and Caddy having no
+  // upstream at all. A few seconds of drift is enough to decorrelate them.
+  setTimeout(() => setInterval(tick, 60_000).unref(), Math.floor(Math.random() * 20_000)).unref();
   // Once the list is in, keep the markets of the 150 busiest tokens warm so
   // their first quote never pays for discovery. Origin only; edges do not quote.
   if (!CONFIG.edgeOrigin) {

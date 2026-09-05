@@ -888,6 +888,36 @@ export class OrdoStore {
     ).map(OrdoStore.v4Row);
   }
 
+  /**
+   * Which of `addresses` appear in any V4 pool — the swap picker's "has a V4
+   * market" flag for a whole token list.
+   *
+   * Asking pool-by-pool is what this replaces. v4_pools holds 620k rows, most
+   * of them launchpad dust, and `SELECT *` with an ORDER BY costs ~0.5 ms per
+   * token once the rows are marshalled into JS; over a ten thousand token list
+   * that is five seconds, and node:sqlite is synchronous, so those five seconds
+   * are five seconds in which the gateway answers nothing at all. Asking about
+   * the tokens we actually have, in chunks, against the covering indexes, is
+   * 81 ms for the same answer.
+   */
+  v4CurrenciesAmong(addresses: string[]): Set<string> {
+    const found = new Set<string>();
+    // Well under SQLITE_MAX_VARIABLE_NUMBER, and the query plan is a covering
+    // index scan either way.
+    for (let i = 0; i < addresses.length; i += 2_000) {
+      const chunk = addresses.slice(i, i + 2_000).map((a) => a.toLowerCase());
+      if (!chunk.length) continue;
+      const marks = chunk.map(() => "?").join(",");
+      for (const col of ["currency0", "currency1"] as const) {
+        const rows = this.db
+          .prepare(`SELECT DISTINCT ${col} AS c FROM v4_pools WHERE ${col} IN (${marks})`)
+          .all(...chunk) as { c: string }[];
+        for (const r of rows) found.add(r.c);
+      }
+    }
+    return found;
+  }
+
   /** Both currencies given, either order: the fee tiers that exist for the pair. */
   v4PoolsForPair(a: string, b: string): V4PoolRow[] {
     const x = a.toLowerCase(), y = b.toLowerCase();

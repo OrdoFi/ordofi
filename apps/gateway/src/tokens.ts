@@ -33,7 +33,8 @@ export interface PickerToken {
 
 /** Where V4 pools are known from: the shared store, when the gateway has one. */
 export interface V4Index {
-  v4PoolsFor(currency: string): unknown[];
+  /** Which of these addresses have any V4 pool. Asked once for the whole list, not once per token. */
+  v4CurrenciesAmong(addresses: string[]): Set<string>;
 }
 
 interface AppToken {
@@ -73,19 +74,25 @@ export interface CapSource {
 export function toPicker(list: AppToken[], v4?: V4Index | null, caps?: CapSource | null): PickerToken[] {
   const out: PickerToken[] = [];
   const seen = new Set<string>();
+  const usable = list
+    .map((t) => (t.address ?? "").toLowerCase())
+    .filter((a) => /^0x[0-9a-f]{40}$/.test(a));
+  // One question for the whole list. The store is synchronous: a query per
+  // token would hold the event loop for seconds and the gateway would go dark.
+  let withV4 = new Set<string>();
+  if (v4) {
+    try {
+      withV4 = v4.v4CurrenciesAmong(usable);
+    } catch {
+      withV4 = new Set();
+    }
+  }
   for (const t of list) {
     const address = (t.address ?? "").toLowerCase();
     if (!/^0x[0-9a-f]{40}$/.test(address) || seen.has(address)) continue;
     if (!t.symbol || typeof t.decimals !== "number") continue;
     seen.add(address);
-    let hasV4 = false;
-    if (v4) {
-      try {
-        hasV4 = v4.v4PoolsFor(address).length > 0;
-      } catch {
-        hasV4 = false;
-      }
-    }
+    const hasV4 = withV4.has(address);
     out.push({
       address,
       symbol: String(t.symbol).slice(0, 12),

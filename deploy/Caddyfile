@@ -71,6 +71,15 @@ rpc.ordofi.network {
 		health_uri /health
 		health_interval 2s
 		health_timeout 1s
+		# Two consecutive misses, not one. A replica busy enough to miss a 1s
+		# health check is usually still answering requests, and ejecting it on a
+		# single miss is how both ended up out of rotation at once — for three
+		# hours one morning, Caddy answered "no upstreams available" 24,000
+		# times while both gateways were up and serving. A deploy still drains
+		# cleanly: a retiring replica answers 503 immediately and deliberately,
+		# and health_status counts that as a miss the moment it appears.
+		health_passes 1
+		health_fails 2
 		fail_duration 5s
 		transport http {
 			# Warm connections into the replicas; a wallet's polling should

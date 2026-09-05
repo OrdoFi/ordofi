@@ -41,6 +41,32 @@ test("ORDO wears our own mark, which no list publishes, and caps come from the c
   assert.equal(toPicker([{ address: ordo, symbol: "ORDO", decimals: 18, swaps24h: 1 }])[0].mcap, null, "no cap source, no cap");
 });
 
+test("the V4 index is asked once for the whole list, not once per token", () => {
+  // The store is synchronous. A query per token held the event loop for five
+  // seconds every minute on the real list, both replicas at once, and Caddy
+  // answered "no upstreams available" while it did.
+  const asked: string[][] = [];
+  const v4 = {
+    v4CurrenciesAmong(addresses: string[]) {
+      asked.push(addresses);
+      return new Set(["0x385f4f8ae47651ce5f58f5265395a669f8281e18"]);
+    },
+  };
+  const p = toPicker(raw, v4);
+  assert.equal(asked.length, 1, "one question for the list");
+  assert.ok(!asked[0].includes("not-an-address"), "and only about things that could be tokens");
+  assert.equal(p.find((t) => t.symbol === "MEME")!.v4, true);
+  assert.equal(p.find((t) => t.symbol === "GME")!.v4, false);
+});
+
+test("a V4 index that throws costs the flag, not the list", () => {
+  const v4 = { v4CurrenciesAmong: () => { throw new Error("db is busy"); } };
+  const p = toPicker(raw, v4);
+  assert.equal(p.length, 3);
+  assert.equal(p.find((t) => t.symbol === "MEME")!.v4, false);
+  assert.equal(p.find((t) => t.symbol === "WETH")!.v4, true, "a base is routable whatever the index says");
+});
+
 test("a broken or empty source keeps the last good list", async () => {
   let body: unknown = raw;
   let status = 200;

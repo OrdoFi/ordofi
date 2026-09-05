@@ -379,3 +379,30 @@ test("routed flow: recorded at submit, counted only once confirmed and priced", 
   assert.equal(s.recentRouted(2)[0].txHash, "0xcc");
   s.close();
 });
+
+test("v4CurrenciesAmong answers for a whole token list in one pass, either side of the pool", () => {
+  const s = new OrdoStore(":memory:");
+  const pool = (id: string, c0: string, c1: string) => ({
+    poolId: "0x" + id.repeat(64).slice(0, 64), currency0: c0, currency1: c1,
+    fee: 3000, tickSpacing: 60, hooks: "0x" + "0".repeat(40), sqrtPrice: "1", tick: 0, block: 1,
+  });
+  const A = "0x" + "aa".repeat(20), B = "0x" + "bb".repeat(20), C = "0x" + "cc".repeat(20);
+  const NATIVE = "0x" + "0".repeat(40);
+  s.upsertV4Pools([pool("1", NATIVE, A), pool("2", B, NATIVE)]);
+
+  // A is currency1, B is currency0: both are markets, and the caller should not
+  // have to know which side the pool put them on.
+  const found = s.v4CurrenciesAmong([A, B, C]);
+  assert.equal(found.has(A), true);
+  assert.equal(found.has(B), true);
+  assert.equal(found.has(C), false, "no pool, no flag");
+
+  assert.equal(s.v4CurrenciesAmong([]).size, 0);
+  assert.equal(s.v4CurrenciesAmong([A.toUpperCase()]).has(A), true, "addresses arrive in any case");
+
+  // The chunking is the point: it must not lose anything at a boundary.
+  const many = Array.from({ length: 4_500 }, (_, i) => "0x" + i.toString(16).padStart(40, "0"));
+  const withReal = [...many, A];
+  assert.equal(s.v4CurrenciesAmong(withReal).has(A), true, "found past the chunk boundary");
+  s.close();
+});
