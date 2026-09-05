@@ -701,8 +701,22 @@ async function answer(
  * anyone is subscribed, eth_blockNumber and eth_getBlockByNumber("latest") are
  * already in memory when a wallet asks for them.
  */
+/**
+ * The watcher's own reads, which must not go through the cache.
+ *
+ * It writes the head into the cache for everyone else, and if it then read
+ * through the same cache it would keep being handed back its own last answer
+ * until the entry expired — so a poll every 100 ms would notice a new block
+ * every 200, and subscribers learned about the chain at half its speed. It
+ * showed up as newHeads delivering 5.4 blocks a second on a chain that makes
+ * ten. Fetch, then cache; never the other way round.
+ */
+function headRead(method: string, params: unknown[]): Promise<any> {
+  return fetchUpstream(method, params);
+}
+
 const hub = new Hub();
-const headWatcher = new HeadWatcher((m, p) => upstream(m, p), {
+const headWatcher = new HeadWatcher((m, p) => headRead(m, p), {
   intervalMs: CONFIG.headPollMs,
   maxCatchUp: CONFIG.headMaxCatchUp,
   onHead: (header) => hub.pushHead(header),
