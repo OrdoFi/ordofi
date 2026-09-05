@@ -692,6 +692,14 @@ const headWatcher = new HeadWatcher((m, p) => upstream(m, p), {
     // a wallet polling the head wants. ["latest", true] is a different key and
     // still goes upstream.
     cache.set(cacheKey("eth_getBlockByNumber", ["latest", false]), block, BLOCK_MS);
+    // And under its own number, which is what a subscriber asks for next.
+    // viem's watchBlocks answers every newHeads notification with a full
+    // eth_getBlockByNumber for the block it was just told about — ten a second
+    // per client, all of which we have already fetched. Served from here they
+    // cost nothing and cannot be refused; left to the upstream they turn one
+    // subscriber into the polling we built subscriptions to stop. A mined
+    // block by number never changes, so the entry can outlive the head.
+    cache.set(cacheKey("eth_getBlockByNumber", [n, false]), block, 60_000);
   },
 });
 const ws =
