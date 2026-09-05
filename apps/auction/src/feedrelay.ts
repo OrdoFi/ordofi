@@ -1,11 +1,27 @@
 /**
- * Sequencer feed relay — the ShredStream analogue.
+ * Sequencer feed relay.
  *
- * Robinhood Chain's sequencer publishes accepted messages on a public
- * WebSocket feed before they are queryable over RPC. On an FCFS chain with no
- * mempool, that feed is the earliest legitimate view of what just happened,
- * which makes it the entire latency game for a backrunner. Jito sells this
- * exact advantage on Solana as ShredStream.
+ * Robinhood Chain's sequencer publishes every message it accepts on a public
+ * WebSocket. It is worth being exact about what that buys, because it is less
+ * than it looks and this file used to claim more.
+ *
+ * Measured 2026-09-05: the feed is not ahead of the RPC. Its sequence number
+ * is the L2 block number, and by the time a frame reaches us that block is
+ * already queryable — ten out of ten sampled transactions were present in a
+ * block on the first eth_getTransactionByHash issued after the feed announced
+ * them. There is no pre-confirmation view here to trade on, because this chain
+ * has no mempool to have one.
+ *
+ * Two things will mislead anyone who measures this. A fresh connection replays
+ * a backlog, about a minute behind and catching up at roughly ten times real
+ * time, so every transaction looks "already mined" for the first few seconds
+ * for the wrong reason; wait for the sequence number to reach the head first.
+ * And comparing feed arrival against an RPC round trip measures the round
+ * trip, which is why the apparent "lead" is always about one RTT.
+ *
+ * What the feed does give is push instead of poll: a block's transactions
+ * arrive without waiting for the next poll to come round, which is worth up to
+ * one block interval and no more.
  *
  * The relay maintains one upstream connection, decodes each Nitro broadcast
  * message down to its raw signed transactions, and fans them out to every
