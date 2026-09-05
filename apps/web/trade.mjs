@@ -378,7 +378,28 @@ export async function tradeTokens(store) {
   const stale = !tokenCache || Date.now() - tokenCache.at >= 300_000;
   if (stale && !tokenRefreshing) {
     tokenRefreshing = buildTokenList(store)
-      .then((list) => { tokenCache = { at: Date.now(), list }; saveJson(TOKEN_LIST_FILE, list); })
+      .then((list) => {
+        // A rebuild that collapses the list is the pool index failing to
+        // answer, not nine thousand tokens ceasing to exist: step 1 reads the
+        // pools that traded today from the store, and when that returns nothing
+        // all that survives is WETH and USDG, which are described from the
+        // chain directly. Today that took the list from 9,168 tokens to 2 and
+        // emptied the swap page's picker — and because the result is written to
+        // disk, the collapse outlived every restart.
+        //
+        // Keeping what we have is always closer to the truth. Retry sooner than
+        // the usual five minutes, since the cause is transient by nature.
+        const had = tokenCache?.list?.length ?? 0;
+        if (had > 50 && list.length < had / 4) {
+          console.warn(
+            `web | trade: rebuild produced ${list.length} tokens against ${had} held — keeping the old list, the pool index is not answering`,
+          );
+          tokenCache.at = Date.now() - 240_000;
+          return;
+        }
+        tokenCache = { at: Date.now(), list };
+        saveJson(TOKEN_LIST_FILE, list);
+      })
       .catch(() => { /* keep the stale list */ })
       .finally(() => { tokenRefreshing = null; });
   }
