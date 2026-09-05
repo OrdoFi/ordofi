@@ -146,6 +146,30 @@ Locally answered reads do not count against the anonymous rate limit
 (3,000 upstream reads/min/IP); anonymous sends have their own 60/min budget.
 `/metrics` reports `rpc_local_total`, `hedge_fired_total`, `hedge_won_total`.
 
+### What the gateway pushes
+
+Blocks here are 100 ms apart, and a client without a subscription can only find
+that out by asking again. They do: `eth_getBlockByNumber` is the busiest method
+on the endpoint by a wide margin, and nearly all of it is polling a head that
+has not moved.
+
+`wss://rpc.ordofi.network` (also `/ws`) answers `eth_subscribe` for `newHeads`
+and `logs`, and carries ordinary JSON-RPC on the same socket, which is what
+ethers' `WebSocketProvider` and viem's `webSocket` transport actually do — the
+non-subscription calls go through the same keys, limits and protection as the
+HTTP path. `newPendingTransactions` is refused rather than accepted and left
+silent: this chain has no public mempool to watch.
+
+One poller serves every subscriber, and it runs only while somebody is
+subscribed. Its reads fill the same cache the HTTP path is served from, so
+having subscribers lowers upstream traffic rather than raising it. A late tick
+walks the blocks it stepped over (`ORDO_HEAD_MAX_CATCHUP`, default 24) so a
+subscriber is not quietly skipped past. Sockets are capped per address and
+subscriptions per socket (`ORDO_WS_MAX_CONNS_PER_IP`,
+`ORDO_WS_MAX_SUBS_PER_CONN`); `ORDO_WS=0` serves HTTP only. On a rolling
+deploy every socket is closed with 1001 "going away", which is what tells a
+client to reconnect instead of backing off.
+
 ## Verifiable auction outcomes
 
 A sealed-bid auction asks searchers to take the operator's word for the bids

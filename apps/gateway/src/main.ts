@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { landingHtml } from "./landing.ts";
@@ -29,6 +29,8 @@ import {
 } from "./fastpath.js";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { callOrigin, forwardHeaders, type OriginReply } from "./edge.js";
+import { HeadWatcher, Hub } from "./subscribe.js";
+import { attachWs } from "./ws.js";
 
 const UPSTREAM = ENDPOINTS.rpc;
 const apiKeys = loadApiKeys();
@@ -507,6 +509,7 @@ const server = createServer((req, res) => {
         sequencer: sequencerUrl(),
         uptimeSeconds: metrics.json().uptimeSeconds,
         cacheEntries: cache.size,
+        ...(ws ? { wsClients: ws.clients(), subscriptions: hub.size, headWatcher: headWatcher.running } : {}),
       }),
     );
     return;
@@ -541,114 +544,169 @@ const server = createServer((req, res) => {
     }
 
     const batch = Array.isArray(payload) ? payload : [payload];
-    const results = await Promise.all(
-      batch.map(async (msg) => {
-        const method = msg.method ?? "";
-        metrics.inc("rpc_requests_total", { method });
-
-        const params: unknown[] = Array.isArray(msg.params) ? msg.params : [];
-        if (CONFIG.edgeOrigin) return edgeAnswer(msg, method, params, req);
-
-        const auth = authenticate({ headers: req.headers }, method);
-        if (!auth) {
-          metrics.inc("rpc_unauthorized_total", { method });
-          // Two different situations share this branch and deserve different
-          // words: a key was presented and is wrong, or no key was presented
-          // and the method is one of the few not open to anonymous callers.
-          // The second must not read like "this RPC needs a key", because to
-          // a wallet user who found it on Chainlist it does not.
-          const presented = req.headers["x-api-key"] || req.headers.authorization;
-          return {
-            jsonrpc: "2.0",
-            id: msg.id,
-            error: presented
-              ? { code: -32001, message: "unauthorized: the x-api-key presented is not valid" }
-              : {
-                  code: -32601,
-                  message: `${method} is not available without an API key on this endpoint (standard eth_/net_ reads and eth_sendRawTransaction are open); keys at https://app.ordofi.network/docs`,
-                },
-          };
-        }
-
-        // Anything answered from memory is free: no upstream, no limiter.
-        // Only plain reads take this exit — the ordo_* methods and sends have
-        // their own handling in dispatch.
-        if (!method.startsWith("ordo_") && method !== "eth_sendRawTransaction") {
-          const local = localAnswer(method, params);
-          if (local !== undefined) return { jsonrpc: "2.0", id: msg.id, result: local };
-        }
-
-        // Keys are limited per key; anonymous callers per source IP (see
-        // clientIp for what counts as the source behind Caddy and Cloudflare).
-        // Anonymous sends have a second, stricter budget: each one costs a
-        // simulation and a sequencer submission.
-        const ip = clientIp(req);
-        const rl =
-          auth === "anon"
-            ? limiter.check(`anon:${ip}`, CONFIG.anonRateLimit)
-            : limiter.check(auth.key, auth.rateLimit);
-        const sendRl =
-          auth === "anon" && method === "eth_sendRawTransaction"
-            ? sendLimiter.check(`anon-send:${ip}`, CONFIG.anonSendRateLimit)
-            : { ok: true, retryAfterMs: 0 };
-        if (!rl.ok || !sendRl.ok) {
-          metrics.inc(sendRl.ok ? "rpc_rate_limited_total" : "rpc_send_rate_limited_total", {
-            key: auth === "anon" ? "anon" : auth.label,
-          });
-          const retryAfterMs = Math.max(rl.retryAfterMs, sendRl.retryAfterMs);
-          return {
-            jsonrpc: "2.0",
-            id: msg.id,
-            error: {
-              code: -32005,
-              message: `${sendRl.ok ? "rate" : "send rate"} limit exceeded, retry in ${Math.ceil(retryAfterMs / 1000)}s`,
-            },
-          };
-        }
-
-        // Concurrency, not just rate: an anonymous client may hold only so
-        // many upstream requests at once, so one script cannot occupy the
-        // upstream that every wallet here shares. Beyond the cap its requests
-        // queue behind its own for up to two seconds, then are refused.
-        const slot = auth === "anon" ? await inflight.acquire(`anon:${ip}`) : () => {};
-        if (!slot) {
-          metrics.inc("rpc_inflight_limited_total", { key: "anon" });
-          return {
-            jsonrpc: "2.0",
-            id: msg.id,
-            error: {
-              code: -32005,
-              message: `too many concurrent requests from this address (${CONFIG.anonMaxInflight} in flight for over 2s); slow down`,
-            },
-          };
-        }
-        try {
-          const result = await dispatch(
-            method,
-            params,
-            auth === "anon"
-              ? { key: "anon", label: "anon", rateLimit: 0, mode: CONFIG.anonAuction ? "auction" : "direct" }
-              : auth,
-          );
-          return { jsonrpc: "2.0", id: msg.id, result };
-        } catch (err) {
-          const e = err as RpcError;
-          metrics.inc("rpc_errors_total", { method });
-          return {
-            jsonrpc: "2.0",
-            id: msg.id,
-            error: { code: e.code ?? -32000, message: e.message, data: e.data },
-          };
-        } finally {
-          slot();
-        }
-      }),
-    );
+    const results = await Promise.all(batch.map((msg) => answer(msg, req)));
 
     metrics.observe("request_latency_ms", Date.now() - started);
     res.end(JSON.stringify(Array.isArray(payload) ? results : results[0]));
   });
 });
+
+/**
+ * One JSON-RPC message, from anywhere.
+ *
+ * Both transports come through here — a POST body and a WebSocket frame are
+ * the same request with different plumbing, and a caller must not be able to
+ * reach a weaker check by choosing the other one. `req` is the HTTP request,
+ * or for a socket the upgrade request that opened it: it carries the key and
+ * the address the limits are keyed on, both of which are fixed for the life of
+ * the connection.
+ */
+async function answer(
+  msg: any,
+  req: { headers: IncomingHttpHeaders; socket?: { remoteAddress?: string } },
+): Promise<any> {
+  const method = msg?.method ?? "";
+  metrics.inc("rpc_requests_total", { method });
+
+  const params: unknown[] = Array.isArray(msg?.params) ? msg.params : [];
+  if (CONFIG.edgeOrigin) return edgeAnswer(msg, method, params, req);
+
+  const auth = authenticate({ headers: req.headers }, method);
+  if (!auth) {
+    metrics.inc("rpc_unauthorized_total", { method });
+    // Two different situations share this branch and deserve different
+    // words: a key was presented and is wrong, or no key was presented
+    // and the method is one of the few not open to anonymous callers.
+    // The second must not read like "this RPC needs a key", because to
+    // a wallet user who found it on Chainlist it does not.
+    const presented = req.headers["x-api-key"] || req.headers.authorization;
+    return {
+      jsonrpc: "2.0",
+      id: msg.id,
+      error: presented
+        ? { code: -32001, message: "unauthorized: the x-api-key presented is not valid" }
+        : {
+            code: -32601,
+            message: `${method} is not available without an API key on this endpoint (standard eth_/net_ reads and eth_sendRawTransaction are open); keys at https://app.ordofi.network/docs`,
+          },
+    };
+  }
+
+  // Anything answered from memory is free: no upstream, no limiter.
+  // Only plain reads take this exit — the ordo_* methods and sends have
+  // their own handling in dispatch.
+  if (!method.startsWith("ordo_") && method !== "eth_sendRawTransaction") {
+    const local = localAnswer(method, params);
+    if (local !== undefined) return { jsonrpc: "2.0", id: msg.id, result: local };
+  }
+
+  // Keys are limited per key; anonymous callers per source IP (see
+  // clientIp for what counts as the source behind Caddy and Cloudflare).
+  // Anonymous sends have a second, stricter budget: each one costs a
+  // simulation and a sequencer submission.
+  const ip = clientIp(req);
+  const rl =
+    auth === "anon"
+      ? limiter.check(`anon:${ip}`, CONFIG.anonRateLimit)
+      : limiter.check(auth.key, auth.rateLimit);
+  const sendRl =
+    auth === "anon" && method === "eth_sendRawTransaction"
+      ? sendLimiter.check(`anon-send:${ip}`, CONFIG.anonSendRateLimit)
+      : { ok: true, retryAfterMs: 0 };
+  if (!rl.ok || !sendRl.ok) {
+    metrics.inc(sendRl.ok ? "rpc_rate_limited_total" : "rpc_send_rate_limited_total", {
+      key: auth === "anon" ? "anon" : auth.label,
+    });
+    const retryAfterMs = Math.max(rl.retryAfterMs, sendRl.retryAfterMs);
+    return {
+      jsonrpc: "2.0",
+      id: msg.id,
+      error: {
+        code: -32005,
+        message: `${sendRl.ok ? "rate" : "send rate"} limit exceeded, retry in ${Math.ceil(retryAfterMs / 1000)}s`,
+      },
+    };
+  }
+
+  // Concurrency, not just rate: an anonymous client may hold only so
+  // many upstream requests at once, so one script cannot occupy the
+  // upstream that every wallet here shares. Beyond the cap its requests
+  // queue behind its own for up to two seconds, then are refused.
+  const slot = auth === "anon" ? await inflight.acquire(`anon:${ip}`) : () => {};
+  if (!slot) {
+    metrics.inc("rpc_inflight_limited_total", { key: "anon" });
+    return {
+      jsonrpc: "2.0",
+      id: msg.id,
+      error: {
+        code: -32005,
+        message: `too many concurrent requests from this address (${CONFIG.anonMaxInflight} in flight for over 2s); slow down`,
+      },
+    };
+  }
+  try {
+    const result = await dispatch(
+      method,
+      params,
+      auth === "anon"
+        ? { key: "anon", label: "anon", rateLimit: 0, mode: CONFIG.anonAuction ? "auction" : "direct" }
+        : auth,
+    );
+    return { jsonrpc: "2.0", id: msg.id, result };
+  } catch (err) {
+    const e = err as RpcError;
+    metrics.inc("rpc_errors_total", { method });
+    return {
+      jsonrpc: "2.0",
+      id: msg.id,
+      error: { code: e.code ?? -32000, message: e.message, data: e.data },
+    };
+  } finally {
+    slot();
+  }
+}
+
+/**
+ * Subscriptions. An edge forwards everything that matters to the origin and
+ * has no business running a second poller against the upstream, so this is the
+ * origin's job only.
+ *
+ * Every block the watcher reads goes into the same cache the HTTP path reads
+ * from, which is what makes this cheaper rather than more expensive: while
+ * anyone is subscribed, eth_blockNumber and eth_getBlockByNumber("latest") are
+ * already in memory when a wallet asks for them.
+ */
+const hub = new Hub();
+const headWatcher = new HeadWatcher((m, p) => upstream(m, p), {
+  intervalMs: CONFIG.headPollMs,
+  maxCatchUp: CONFIG.headMaxCatchUp,
+  onHead: (header) => hub.pushHead(header),
+  onLogs: (logs) => hub.pushLogs(logs),
+  wantsLogs: () => hub.wantsLogs,
+  onError: (e) => metrics.inc("head_watch_errors_total", { reason: e.message.slice(0, 40) }),
+  onBlock: (block) => {
+    const n = block.number;
+    if (typeof n !== "string") return;
+    cache.set(cacheKey("eth_blockNumber", []), n, BLOCK_MS);
+    // Without transaction bodies, which is what the watcher asked for and what
+    // a wallet polling the head wants. ["latest", true] is a different key and
+    // still goes upstream.
+    cache.set(cacheKey("eth_getBlockByNumber", ["latest", false]), block, BLOCK_MS);
+  },
+});
+const ws =
+  CONFIG.ws && !CONFIG.edgeOrigin
+    ? attachWs(server, {
+        answer,
+        clientIp,
+        hub,
+        watcher: headWatcher,
+        metrics,
+        maxConnsPerIp: CONFIG.wsMaxConnsPerIp,
+        maxSubsPerConn: CONFIG.wsMaxSubsPerConn,
+        stopping: () => stopping,
+      })
+    : null;
 
 /**
  * A rolling restart only works if the instance being replaced finishes what it
@@ -667,6 +725,11 @@ function shutdown(signal: string): void {
   const grace = Number(process.env.ORDO_DRAIN_GRACE_MS ?? 5_000);
   const drain = Number(process.env.ORDO_DRAIN_MS ?? 10_000);
   console.log(`OrdoFi gateway | ${signal}: unhealthy for ${grace}ms, then draining`);
+  // Subscribers are told to go away at the start of the grace period, not the
+  // end: a WebSocket is not idle, so closeIdleConnections would leave every
+  // one of them open until the hard deadline, and their clients would sit
+  // there believing they were still following the chain.
+  ws?.drain();
   setTimeout(() => {
     const deadline = setTimeout(() => {
       console.warn("OrdoFi gateway | drain deadline reached, exiting with requests in flight");
@@ -690,6 +753,11 @@ server.listen(CONFIG.port, () => {
   }
   console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon}`);
   console.log(`OrdoFi gateway | GET /health /metrics /metrics.json`);
+  console.log(
+    ws
+      ? `OrdoFi gateway | websocket: eth_subscribe(newHeads, logs) and full JSON-RPC on wss://<host>/ and /ws; one ${CONFIG.headPollMs}ms head poll serves every subscriber and runs only while subscribed; ${CONFIG.wsMaxConnsPerIp} sockets/IP, ${CONFIG.wsMaxSubsPerConn} subscriptions/socket`
+      : `OrdoFi gateway | websocket: off`,
+  );
   console.log(
     `OrdoFi gateway | fast path: chainId/net_version local, head cached ${BLOCK_MS}ms, fees 1s, mined receipts 10m; hedged reads after ${CONFIG.hedgeAfterMs}ms across ${rpcUrls().length} upstream(s), at most ${Math.round(CONFIG.hedgeBudgetRatio * 100)}% of reads; anon ${CONFIG.anonRateLimit} upstream reads + ${CONFIG.anonSendRateLimit} sends /min/IP, ${CONFIG.anonMaxInflight} in flight/IP`,
   );

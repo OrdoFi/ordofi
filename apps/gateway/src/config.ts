@@ -183,6 +183,25 @@ export const CONFIG = {
    * before. Nothing else on the gateway depends on it.
    */
   wcProjectId: (process.env.ORDO_WC_PROJECT_ID ?? "").trim(),
+  /**
+   * eth_subscribe over WebSocket. Blocks here are 100 ms apart and
+   * eth_getBlockByNumber is our busiest method by a wide margin — almost all
+   * of it clients asking whether the head has moved. One poller behind a
+   * subscription answers that for everyone at once, and only runs while
+   * somebody is subscribed. Set ORDO_WS=0 to serve HTTP only.
+   */
+  ws: process.env.ORDO_WS !== "0",
+  /** How often the head is read while there are subscribers. One block. */
+  headPollMs: Number(process.env.ORDO_HEAD_POLL_MS ?? 100),
+  /**
+   * How far behind we will walk block by block before giving up and jumping to
+   * the head. A subscriber is owed every block, but at ten a second a long
+   * stall is better abandoned than replayed.
+   */
+  headMaxCatchUp: Number(process.env.ORDO_HEAD_MAX_CATCHUP ?? 24),
+  /** A socket is cheap; ten thousand from one address are not. */
+  wsMaxConnsPerIp: Number(process.env.ORDO_WS_MAX_CONNS_PER_IP ?? 16),
+  wsMaxSubsPerConn: Number(process.env.ORDO_WS_MAX_SUBS_PER_CONN ?? 32),
 };
 
 /** Simple fixed-window per-key rate limiter. */

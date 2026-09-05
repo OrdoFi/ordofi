@@ -7,7 +7,11 @@
   },
   "dependencies": {
     "@ordofi/core": "*",
+    "@ordofi/store": "*",
     "viem": "^2.21.0",
-    "@ordofi/store": "*"
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0"
   }
 }
