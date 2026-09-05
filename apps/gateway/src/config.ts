@@ -184,6 +184,15 @@ export const CONFIG = {
    */
   wcProjectId: (process.env.ORDO_WC_PROJECT_ID ?? "").trim(),
   /**
+   * Upstream queries one eth_getLogs may spend when its range is too wide for
+   * a single request (see getlogs.ts). Wide enough to answer a month of
+   * history on a filtered query; not so wide that one caller can turn a
+   * careless range into a hundred requests on a shared upstream.
+   */
+  logsMaxCalls: Number(process.env.ORDO_LOGS_MAX_CALLS ?? 40),
+  /** Logs one query may return, so a filter nobody thought about cannot exhaust memory. */
+  logsMaxResults: Number(process.env.ORDO_LOGS_MAX_RESULTS ?? 150_000),
+  /**
    * eth_subscribe over WebSocket. Blocks here are 100 ms apart and
    * eth_getBlockByNumber is our busiest method by a wide margin — almost all
    * of it clients asking whether the head has moved. One poller behind a

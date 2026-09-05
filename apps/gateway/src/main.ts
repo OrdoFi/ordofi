@@ -30,6 +30,7 @@ import {
 } from "./fastpath.js";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { callOrigin, forwardHeaders, type OriginReply } from "./edge.js";
+import { getLogsWide, type LogFilterParam } from "./getlogs.js";
 import { HeadWatcher, Hub } from "./subscribe.js";
 import { attachWs } from "./ws.js";
 
@@ -260,6 +261,17 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
         // (a bare dev box) the quote still covers every V3 market.
         { rpc: upstream, ordoSwap: CONFIG.ordoSwapAddress as `0x${string}`, v4: store },
       );
+    }
+    case "eth_getLogs": {
+      // The upstream refuses a wide range, in its own words and with its own
+      // brand — "Block range limit exceeded, see docs.chainstack.com" — which
+      // is not a fact about the chain and should not reach somebody else's
+      // dapp through us. A range too wide for one query is several queries.
+      const filter = (params[0] ?? {}) as LogFilterParam;
+      return getLogsWide((m, p) => upstream(m, p), filter, {
+        maxCalls: CONFIG.logsMaxCalls,
+        maxLogs: CONFIG.logsMaxResults,
+      });
     }
     default:
       return upstream(method, params);
