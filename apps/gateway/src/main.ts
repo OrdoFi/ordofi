@@ -353,6 +353,8 @@ const LANDING = landingHtml({
   docs: "https://app.ordofi.network/docs",
   portal: "https://app.ordofi.network/portal",
   app: "https://app.ordofi.network",
+  anonRateLimit: CONFIG.anonRateLimit,
+  ws: CONFIG.ws && !CONFIG.edgeOrigin,
 });
 
 // WalletConnect, for the phones. The bundle is built from a pinned version and

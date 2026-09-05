@@ -7,8 +7,16 @@
  * Self-contained on purpose: the gateway is its own origin and must not
  * depend on the app being up.
  */
-export function landingHtml(opts: { chainId: number; explorer: string; docs: string; portal: string; app: string }): string {
-  const { chainId, explorer, docs, portal, app } = opts;
+export function landingHtml(opts: {
+  chainId: number;
+  explorer: string;
+  docs: string;
+  portal: string;
+  app: string;
+  anonRateLimit: number;
+  ws: boolean;
+}): string {
+  const { chainId, explorer, docs, portal, app, anonRateLimit, ws } = opts;
   const chainIdHex = "0x" + chainId.toString(16);
   return `<!doctype html>
 <html lang="en">
@@ -128,11 +136,12 @@ export function landingHtml(opts: { chainId: number; explorer: string; docs: str
     <table>
       <tr><th>Network name</th><td>Robinhood Chain</td></tr>
       <tr><th>RPC URL</th><td>https://rpc.ordofi.network <span class="copy" data-c="https://rpc.ordofi.network">copy</span></td></tr>
+      ${ws ? `<tr><th>WebSocket</th><td>wss://rpc.ordofi.network <span class="copy" data-c="wss://rpc.ordofi.network">copy</span></td></tr>` : ""}
       <tr><th>Chain ID</th><td>${chainId} <span style="color:var(--muted)">(${chainIdHex})</span></td></tr>
       <tr><th>Currency</th><td>ETH</td></tr>
       <tr><th>Block explorer</th><td>${explorer.replace(/^https?:\/\//, "")}</td></tr>
       <tr><th>Auth</th><td>none for wallets · <code>x-api-key</code> for auction routing &amp; bundles</td></tr>
-      <tr><th>Rate limit</th><td>600 req/min per IP anonymous · per key otherwise</td></tr>
+      <tr><th>Rate limit</th><td>${anonRateLimit.toLocaleString("en-US")} upstream reads/min per IP anonymous · per key otherwise</td></tr>
     </table>
   </div>
   <div>
@@ -147,7 +156,19 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
 curl https://rpc.ordofi.network <span class="k">\\</span>
   -H <span class="s">'x-api-key: ordo_…'</span> -H <span class="s">'content-type: application/json'</span> <span class="k">\\</span>
   -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":["0x02f8…"]}'</span></pre>
-    <p class="lede" style="margin-top:18px">Keys are self-served at <a href="${portal}" style="color:var(--accent)">${portal.replace(/^https?:\/\//, "")}</a>; the full method reference, error codes and bundle semantics are in the <a href="${docs}#gateway" style="color:var(--accent)">docs</a>.</p>
+${
+      ws
+        ? `    <p class="lede" style="margin-top:18px">The chain's own RPC is HTTP only, so anything watching it has to poll — at one block every 100 ms that is a lot of asking for an answer that has not changed. <code>wss://rpc.ordofi.network</code> answers <code>eth_subscribe</code> for <code>newHeads</code> and <code>logs</code>, and carries ordinary calls on the same socket. No key.</p>
+<pre><span class="c"># every block, pushed, no key</span>
+wscat -c <span class="s">wss://rpc.ordofi.network</span>
+&gt; <span class="s">{"jsonrpc":"2.0","id":1,"method":"eth_subscribe","params":["newHeads"]}</span>
+
+<span class="c"># or from viem — watchBlocks and watchEvent just work</span>
+<span class="k">const</span> client = createPublicClient({ chain, transport: webSocket(<span class="s">"wss://rpc.ordofi.network"</span>) });
+client.watchBlocks({ onBlock: (b) =&gt; console.log(b.number) });</pre>
+`
+        : ""
+    }    <p class="lede" style="margin-top:18px">Keys are self-served at <a href="${portal}" style="color:var(--accent)">${portal.replace(/^https?:\/\//, "")}</a>; the full method reference, error codes and bundle semantics are in the <a href="${docs}#gateway" style="color:var(--accent)">docs</a>.</p>
   </div>
 </div></section>
 
