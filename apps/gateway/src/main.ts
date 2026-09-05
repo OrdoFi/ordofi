@@ -712,7 +712,11 @@ async function answer(
  * ten. Fetch, then cache; never the other way round.
  */
 function headRead(method: string, params: unknown[]): Promise<any> {
-  return fetchUpstream(method, params);
+  // Only the head poll. A numbered block or a log range is immutable and the
+  // cache is exactly right for it; it is the "latest" key the watcher writes
+  // itself, and only that one, which must never be read back.
+  const isHead = method === "eth_getBlockByNumber" && String(params[0]) === "latest";
+  return isHead ? fetchUpstream(method, params) : upstream(method, params);
 }
 
 const hub = new Hub();

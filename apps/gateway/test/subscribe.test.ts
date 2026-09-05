@@ -133,7 +133,14 @@ describe("the head watcher", () => {
         const tag = params[0] as string;
         return block(tag === "latest" ? head() : Number(tag));
       }
-      if (method === "eth_getLogs") return logsByHash[(params[0] as any).blockHash] ?? [];
+      if (method === "eth_getLogs") {
+        const q = params[0] as { blockHash?: string; fromBlock?: string; toBlock?: string };
+        if (q.blockHash) return logsByHash[q.blockHash] ?? [];
+        // A range covers every block in it.
+        const out: RawLog[] = [];
+        for (let b = Number(q.fromBlock); b <= Number(q.toBlock); b++) out.push(...(logsByHash[block(b).hash] ?? []));
+        return out;
+      }
       throw new Error(`unexpected ${method}`);
     };
     return { rpc, calls };
@@ -203,22 +210,54 @@ describe("the head watcher", () => {
     assert.equal(heads[0].parentHash, "0x0");
   });
 
-  it("fetches logs only when somebody is subscribed to them, and by hash", async () => {
-    const h = block(5).hash;
-    const { rpc, calls } = rpcAt(() => 5, { [h]: [log(A, [T0])] });
-    const { w, logs, setWantsLogs } = watcher(rpc);
+  it("does not touch eth_getLogs when nobody is subscribed to them", async () => {
+    const { rpc, calls } = rpcAt(() => 5);
+    const { w } = watcher(rpc);
     await w.tick();
-    assert.equal(calls.filter((c) => c.startsWith("eth_getLogs")).length, 0, "nobody wants logs, nobody pays for them");
+    await w.settled;
+    assert.equal(calls.filter((c) => c.startsWith("eth_getLogs")).length, 0);
+  });
 
+  it("asks for the whole advanced range at once, not once per block", async () => {
+    // Per-block requests cost a round trip each, and eth_getLogs is the
+    // slowest call we make; three blocks of catch-up used to mean three of them.
+    let head = 100;
+    const { rpc, calls } = rpcAt(() => head, {
+      [block(102).hash]: [log(A, [T0])],
+      [block(104).hash]: [log(B, [T1])],
+    });
+    const { w, logs, setWantsLogs } = watcher(rpc);
     setWantsLogs(true);
-    await w.tick(); // head has not moved, so still nothing
-    const { rpc: rpc2, calls: calls2 } = rpcAt(() => 6, { [block(6).hash]: [log(A, [T0])] });
-    const w2 = watcher(rpc2);
-    w2.setWantsLogs(true);
-    await w2.w.tick();
-    assert.equal(w2.logs.length, 1);
-    assert.ok(calls2.some((c) => c.includes(`"blockHash":"${block(6).hash}"`)), "by hash, so they match the block announced");
-    void logs;
+    await w.tick();
+    await w.settled;
+    head = 104;
+    await w.tick();
+    await w.settled;
+    const asks = calls.filter((c) => c.startsWith("eth_getLogs"));
+    assert.equal(asks.length, 2, "one per tick, however many blocks it covered");
+    assert.ok(asks[1].includes('"fromBlock":"0x65"') && asks[1].includes('"toBlock":"0x68"'), asks[1]);
+    assert.ok(logs.length > 0);
+  });
+
+  it("does not make the head wait for the logs", async () => {
+    // The heads must be on the wire before the log request has even resolved.
+    let releaseLogs: () => void = () => {};
+    const gate = new Promise<void>((r) => (releaseLogs = r));
+    const rpc = async (method: string, params: unknown[]) => {
+      if (method === "eth_getLogs") {
+        await gate;
+        return [log(A, [T0])];
+      }
+      return block(parseInt(String((params as any[])[0]) === "latest" ? "7" : String((params as any[])[0]), 16) || 7);
+    };
+    const { w, heads, logs, setWantsLogs } = watcher(rpc);
+    setWantsLogs(true);
+    await w.tick();
+    assert.equal(heads.length, 1, "the head went out");
+    assert.equal(logs.length, 0, "while the logs are still in flight");
+    releaseLogs();
+    await w.settled;
+    assert.equal(logs.length, 1, "and arrive after");
   });
 
   it("does not let a slow tick queue behind itself", async () => {

@@ -216,6 +216,8 @@ export class HeadWatcher {
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
   private last = 0;
+  /** Log deliveries, chained so they stay in block order without blocking the head. */
+  private logs: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly rpc: Rpc,
@@ -264,9 +266,10 @@ export class HeadWatcher {
         > | null;
         if (!block) continue;
         this.opts.onBlock?.(block);
-        await this.emit(block);
+        this.opts.onHead(toHeader(block));
       }
-      await this.emit(head);
+      this.opts.onHead(toHeader(head));
+      this.fetchLogs(from, n);
       this.last = n;
     } catch (e) {
       this.opts.onError(e as Error);
@@ -275,12 +278,34 @@ export class HeadWatcher {
     }
   }
 
-  private async emit(block: Record<string, unknown>): Promise<void> {
-    this.opts.onHead(toHeader(block));
+  /**
+   * The logs for everything this tick advanced over, in one request and off
+   * the critical path.
+   *
+   * Both of those matter. Asking per block cost a round trip each, and
+   * eth_getLogs on this chain takes about 270 ms, so a tick that had advanced
+   * three blocks spent the better part of a second before it could poll again
+   * — which throttled the head itself to four blocks a second on a chain that
+   * makes ten, and only when somebody happened to be watching logs. Awaiting
+   * them here would do the same thing with fewer requests. So the heads go out
+   * first and the logs follow, chained so they still arrive in block order.
+   */
+  private fetchLogs(from: number, to: number): void {
     if (!this.opts.wantsLogs()) return;
-    // By hash, not by number: the logs then belong to the block we just
-    // announced even if the head moved while we were asking.
-    const logs = (await this.rpc("eth_getLogs", [{ blockHash: block.hash }])) as RawLog[] | null;
-    if (Array.isArray(logs) && logs.length) this.opts.onLogs(logs);
+    const range = [{ fromBlock: `0x${from.toString(16)}`, toBlock: `0x${to.toString(16)}` }];
+    const pending = this.rpc("eth_getLogs", range);
+    this.logs = this.logs.then(async () => {
+      try {
+        const logs = (await pending) as RawLog[] | null;
+        if (Array.isArray(logs) && logs.length) this.opts.onLogs(logs);
+      } catch (e) {
+        this.opts.onError(e as Error);
+      }
+    });
+  }
+
+  /** Resolves once the logs for every tick so far have been delivered. For tests. */
+  get settled(): Promise<void> {
+    return this.logs;
   }
 }
