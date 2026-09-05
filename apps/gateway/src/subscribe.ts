@@ -259,14 +259,23 @@ export class HeadWatcher {
 
       // First tick: this block, and no history.
       const from = this.last === 0 ? n : Math.max(this.last + 1, n - this.opts.maxCatchUp + 1);
-      for (let b = from; b < n; b++) {
-        const block = (await this.rpc("eth_getBlockByNumber", [`0x${b.toString(16)}`, false])) as Record<
-          string,
-          unknown
-        > | null;
-        if (!block) continue;
-        this.opts.onBlock?.(block);
-        this.opts.onHead(toHeader(block));
+      // The blocks stepped over, fetched together rather than in sequence. One
+      // after another cost a round trip each, so a tick that had fallen three
+      // blocks behind took three times as long, fell further behind while it
+      // ran, and never caught up: the chain makes thirteen blocks a second and
+      // subscribers were getting five. Concurrently it is one round trip for
+      // the whole gap. They are still announced in order.
+      const missed: number[] = [];
+      for (let b = from; b < n; b++) missed.push(b);
+      if (missed.length) {
+        const blocks = await Promise.all(
+          missed.map((b) => this.rpc("eth_getBlockByNumber", [`0x${b.toString(16)}`, false])),
+        );
+        for (const block of blocks as (Record<string, unknown> | null)[]) {
+          if (!block) continue;
+          this.opts.onBlock?.(block);
+          this.opts.onHead(toHeader(block));
+        }
       }
       this.opts.onHead(toHeader(head));
       this.fetchLogs(from, n);
