@@ -209,9 +209,18 @@ client.watchBlocks({ onBlock: (b) =&gt; console.log(b.number) });</pre>
   }
   // The protocol row comes from the app, which reads the settlement contract
   // for it; once a minute is plenty for numbers that move by the settlement.
+  //
+  // On a timeout, and a short one. This page is served by the gateway and is
+  // meant to stand on its own, but it was awaiting a cross-origin fetch with
+  // no deadline — so when the app stopped answering, rpc.ordofi.network looked
+  // broken to anyone arriving from a link, with five headline figures stuck on
+  // "…" for as long as the browser was willing to wait. The endpoint is what
+  // this page is about; the protocol numbers are decoration and are allowed to
+  // be missing.
   async function headline() {
     try {
-      const h = (await (await fetch("${app}/api/stats")).json()).headline;
+      const r = await fetch("${app}/api/stats", { signal: AbortSignal.timeout(2500) });
+      const h = (await r.json()).headline;
       if (!h) return;
       const usd = (n) => "$" + Number(n).toLocaleString(undefined, n >= 1000 ? { maximumFractionDigits: 0 } : { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       const int = (n) => Number(n).toLocaleString();
