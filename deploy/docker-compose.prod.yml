@@ -180,6 +180,12 @@ services:
       ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
       ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
       SEARCHER_KEY: ${ORDO_HOUSE_SEARCHER_KEY:-}
+      # OrdoSwapV2: the only way to price a V4 pool here (no V4 quoter exists on
+      # this chain, so `quote` runs the route and reverts with the answer) and
+      # the only contract that walks a mixed V3/V4 route in one transaction.
+      # 89% of this chain's arbitrage touches V4 and 99% of the profit does;
+      # without this the bot can only see the other 1%.
+      ORDO_SWAP_ADDRESS: ${ORDO_SWAP_ADDRESS:-}
       ORDO_MAX_BID_ETH: ${ORDO_HOUSE_MAX_BID_ETH:-0.0001}
       # What it may put into one round trip, and what it keeps back for gas.
       # It bids a share of a quoted edge or it does not bid, so an empty

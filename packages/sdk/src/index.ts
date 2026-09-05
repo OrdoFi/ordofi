@@ -18,10 +18,25 @@ import { robinhoodChain } from "@ordofi/core";
  * route user transactions through the auction and earn rebates.
  */
 
+import type { SwapHint } from "@ordofi/core/simulate";
+
+export type { SwapHint };
+
 export interface OpportunityHint {
   id: string;
   hint: {
+    /**
+     * Addresses of the pools that moved — but every Uniswap V4 swap on this
+     * chain reports the PoolManager, so for V4 this is one shared address and
+     * `swaps` is what identifies the market.
+     */
     poolsTouched: string[];
+    /**
+     * Per-pool detail, including for V4 the pool's key: which two currencies,
+     * which fee tier, which hook. Without it a V4 hint cannot be acted on, and
+     * V4 is where nearly all of this chain's arbitrage is.
+     */
+    swaps: SwapHint[];
     to: string | null;
     selector: string | null;
     value: string;

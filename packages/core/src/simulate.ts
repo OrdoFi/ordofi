@@ -49,11 +49,47 @@ export interface SwapHint {
   pool: string;
   /** v4 identifies pools by PoolId rather than address. */
   poolId?: string;
+  /**
+   * Which market a v4 pool actually is, filled in by whoever has the pool
+   * index (the auction does; see `withV4Keys`).
+   *
+   * Without this a v4 hint is unusable. `pool` is the PoolManager for every v4
+   * swap on the chain, so a searcher reading addresses sees one shared pool and
+   * cannot tell GME/WETH from anything else, and `poolId` is a hash it cannot
+   * invert without having indexed every Initialize event itself. Since v4 is
+   * where nearly all of this chain's arbitrage lives, a hint without the key is
+   * a hint nobody can bid on.
+   */
+  key?: { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string };
   /** Undefined when the log was malformed and the direction can't be trusted. */
   direction?: "0for1" | "1for0";
   /** Signed pool-side deltas, only present at hint level `full`. */
   amount0?: string;
   amount1?: string;
+}
+
+/** Somewhere that can turn v4 PoolIds into their keys — the shared store, in practice. */
+export interface V4Keys {
+  v4PoolsByIds(ids: string[]): Map<string, { currency0: string; currency1: string; fee: number; tickSpacing: number; hooks: string }>;
+}
+
+/**
+ * Name the v4 pools in a set of hints. Unknown ids are left alone rather than
+ * dropped: a searcher that has its own index can still use the poolId.
+ */
+export function withV4Keys(hints: SwapHint[], index: V4Keys | null): SwapHint[] {
+  const ids = hints.filter((h) => h.kind === "univ4" && h.poolId).map((h) => h.poolId!);
+  if (!index || !ids.length) return hints;
+  let keys: Map<string, SwapHint["key"]>;
+  try {
+    keys = index.v4PoolsByIds(ids) as Map<string, SwapHint["key"]>;
+  } catch {
+    return hints;
+  }
+  return hints.map((h) => {
+    const k = h.poolId ? keys.get(h.poolId) : undefined;
+    return k ? { ...h, key: k } : h;
+  });
 }
 
 export function hintLevelFromEnv(): HintLevel {

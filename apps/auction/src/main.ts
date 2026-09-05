@@ -5,7 +5,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { parseTransaction, recoverTransactionAddress, type TransactionSerialized } from "viem";
 import { ENDPOINTS, SWAP_TOPICS, rpcFetch, sendRawTransaction } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
-import { extractSwapHints, hintLevelFromEnv, simulateTx } from "@ordofi/core/simulate";
+import { extractSwapHints, hintLevelFromEnv, simulateTx, withV4Keys } from "@ordofi/core/simulate";
 import { appendFileSync } from "node:fs";
 import { Auction, toResult } from "./auctioneer.js";
 import { bondingEnabled, checkBond } from "./bonds.js";
@@ -112,7 +112,11 @@ async function buildHint(rawTx: string, opts: { simulate: boolean }): Promise<Op
         simulated: false,
       };
     }
-    const swaps = extractSwapHints(sim.logs, HINT_LEVEL);
+    // Name the v4 pools before broadcasting. We hold the pool index; a searcher
+    // does not, and without the key every v4 swap on the chain looks like the
+    // same PoolManager address. That is 89% of this chain's arbitrage nobody
+    // could bid on.
+    const swaps = withV4Keys(extractSwapHints(sim.logs, HINT_LEVEL), settlementIndex);
     return {
       ...base,
       poolsTouched: [...new Set(swaps.map((s) => s.pool))],

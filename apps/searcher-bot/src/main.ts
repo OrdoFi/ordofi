@@ -4,7 +4,10 @@ import { WETH, normalizePrivateKey, rpcFetch } from "@ordofi/core";
 import { buildCycleSwap } from "@ordofi/core/arb";
 import { ROUTER } from "@ordofi/core/router";
 import { OrdoSearcher } from "@ordofi/sdk";
-import { CycleCache, evaluate, type Sized, type StrategyConfig } from "./strategy.js";
+import type { SwapHint } from "@ordofi/core/simulate";
+import { NATIVE, cycleCalldata, otherSide, type PoolKey } from "@ordofi/core/ordoswap";
+import { CycleCache, bidFor, evaluate, type Sized, type StrategyConfig } from "./strategy.js";
+import { cyclesForV4, priceCycles, v3TiersFor, type CrossCycle, type Priced } from "./venues.js";
 
 /**
  * Reference OrdoFi searcher bot — also the house bot that keeps the auction
@@ -45,6 +48,13 @@ const MIN_PROFIT = parseEther(process.env.ORDO_SEARCHER_MIN_PROFIT_ETH ?? "0.000
 const BID_SHARE_PCT = BigInt(process.env.ORDO_SEARCHER_BID_SHARE_PCT ?? "70");
 /** Quoting stops here, well inside the 200 ms window, so the bid still arrives. */
 const EVAL_BUDGET_MS = Number(process.env.ORDO_SEARCHER_EVAL_MS ?? 120);
+/**
+ * OrdoSwapV2, which is both the only way to price a V4 pool on this chain
+ * (there is no V4 quoter, so `quote` runs the route and reverts with the
+ * answer) and the only contract that will walk a mixed V3/V4 route in one
+ * transaction. Unset means V3 cross-tier cycles only, as before.
+ */
+const ORDO_SWAP = ((process.env.ORDO_SWAP_ADDRESS ?? "").trim().toLowerCase() || null) as Hex | null;
 
 const account = privateKeyToAccount(KEY);
 
@@ -65,6 +75,8 @@ let maxFeePerGas = 2_000_000_000n;
 let gasLimit = 60_000n;
 /** A two-hop V3 round trip, not a transfer; measured rather than guessed would be better, but not inside the window. */
 let swapGasLimit = 400_000n;
+/** A mixed V3/V4 route through OrdoSwapV2 does more work than two V3 hops. */
+const crossGasLimit = 650_000n;
 let tradeBudget = 0n;
 
 async function refreshChainState(): Promise<void> {
@@ -100,12 +112,27 @@ function gasCostWei(): bigint {
  */
 async function signedBackrun(best: Sized, bidWei: bigint): Promise<Hex> {
   const minReturn = best.amountIn + (best.grossWei - bidWei) / 2n;
+  return sign(ROUTER, best.amountIn, buildCycleSwap(best.cycle, best.amountIn, minReturn), swapGasLimit);
+}
+
+/**
+ * The same trade across two venues, executed by OrdoSwapV2 rather than the V3
+ * router — it is the only contract here that can take a V4 leg. A mixed route
+ * costs more gas than a V3 pair of hops, so the limit is raised accordingly.
+ */
+async function signedCrossBackrun(best: Priced, bidWei: bigint): Promise<Hex> {
+  const minReturn = best.amountIn + (best.grossWei - bidWei) / 2n;
+  const data = cycleCalldata(best.cycle.legs, best.amountIn, minReturn, account.address);
+  return sign(ORDO_SWAP!, best.amountIn, data, crossGasLimit);
+}
+
+function sign(to: Hex, value: bigint, data: Hex, gas: bigint): Promise<Hex> {
   return account.signTransaction({
     chainId: CHAIN_ID,
-    to: ROUTER,
-    value: best.amountIn,
-    data: buildCycleSwap(best.cycle, best.amountIn, minReturn),
-    gas: swapGasLimit,
+    to,
+    value,
+    data,
+    gas,
     maxFeePerGas,
     maxPriorityFeePerGas: 0n,
     nonce: nonce++,
@@ -204,10 +231,50 @@ async function ensureBond(): Promise<void> {
 
 // --- strategy ------------------------------------------------------------------
 
-const rpcCall = async (to: string, data: Hex): Promise<Hex> =>
-  (await rpcFetch("eth_call", [{ to, data }, "latest"])) as Hex;
+const rpcCall = async (to: string, data: Hex, opts?: { value?: bigint; from?: Hex }): Promise<Hex> =>
+  (await rpcFetch("eth_call", [
+    { to, data, ...(opts?.value ? { value: `0x${opts.value.toString(16)}` } : {}), ...(opts?.from ? { from: opts.from } : {}) },
+    "latest",
+  ])) as Hex;
 
 const cycleCache = new CycleCache(rpcCall, WETH as Hex);
+
+/**
+ * Which V3 tiers quote a token against WETH. Looked up once per token and kept:
+ * the factory's answer only changes when somebody deploys a new pool, and the
+ * lookup is four calls we cannot afford inside a 200 ms window.
+ */
+const tierCache = new Map<string, Promise<number[]>>();
+function tiersFor(token: Hex): Promise<number[]> {
+  const k = token.toLowerCase();
+  let hit = tierCache.get(k);
+  if (!hit) tierCache.set(k, (hit = v3TiersFor(rpcCall, token)));
+  return hit;
+}
+
+/**
+ * The V4 side of an opportunity.
+ *
+ * 89% of this chain's arbitrage touches a V4 pool and 99% of the profit does,
+ * and until the auction started naming V4 pools in its hints there was nothing
+ * here to act on: every V4 swap reports the PoolManager as its address, so a
+ * searcher saw one shared pool and no pair. With the key in hand the trade is
+ * the ordinary one — buy where the swap made it cheap, sell where it did not.
+ */
+async function priceV4(opp: { hint: { swaps: SwapHint[] } }, deadlineMs: number): Promise<Priced | null> {
+  const keys = opp.hint.swaps.filter((s) => s.kind === "univ4" && s.key).map((s) => s.key!) as PoolKey[];
+  if (!keys.length) return null;
+  const cycles: CrossCycle[] = [];
+  for (const key of keys) {
+    const holdsEther = key.currency0 === NATIVE || key.currency1 === NATIVE;
+    const token = otherSide(key, (holdsEther ? WETH : key.currency0) as Hex, WETH as Hex);
+    if (token.toLowerCase() === WETH.toLowerCase()) continue;
+    cycles.push(...cyclesForV4(key, await tiersFor(token)));
+  }
+  if (!cycles.length || !ORDO_SWAP) return null;
+  const sizes = tradeBudget > 0n ? [tradeBudget / 3n, tradeBudget].filter((s) => s > 0n) : [];
+  return priceCycles(rpcCall, ORDO_SWAP, cycles, sizes, { deadlineMs, from: account.address });
+}
 
 /** Rebuilt per opportunity: gas price and the tradable balance both move. */
 const strategy = (): StrategyConfig => ({
@@ -281,22 +348,34 @@ const searcher = new OrdoSearcher({
     if (opp.hint.poolsTouched.length === 0) return null;
     const started = Date.now();
 
+    // Both shapes, priced against the same clock: V3 cross-tier out of the
+    // pools the hint names, and cross-venue out of the V4 keys it now carries.
+    // The V4 side is where the profit is, so it gets the budget first.
+    const cross = await priceV4(opp, EVAL_BUDGET_MS);
+    const left = EVAL_BUDGET_MS - (Date.now() - started);
+    const cfg = strategy();
     const cycles = (await Promise.all(opp.hint.poolsTouched.map((p) => cycleCache.cyclesFor(p)))).flat();
-    const decision = await evaluate(rpcCall, cycles, strategy(), { deadlineMs: EVAL_BUDGET_MS });
+    const decision = await evaluate(rpcCall, cycles, cfg, { deadlineMs: Math.max(left, 20) });
 
-    if (!decision.best || decision.bidWei === 0n) {
+    const crossBid = cross ? bidFor(cross.grossWei, cfg) : 0n;
+    const useCross = cross && crossBid > 0n && crossBid >= decision.bidWei;
+
+    if (!useCross && (!decision.best || decision.bidWei === 0n)) {
       // The honest outcome most of the time, and the one the old fixed bid hid:
       // there was nothing here worth paying for.
       console.log(`[bot] no bid on ${opp.id.slice(0, 8)} — ${decision.reason}`);
       return null;
     }
 
-    const backrunRawTx = await signedBackrun(decision.best, decision.bidWei);
-    chargeGas(gasCostWei());
+    const bidWei = useCross ? crossBid : decision.bidWei;
+    const backrunRawTx = useCross ? await signedCrossBackrun(cross!, bidWei) : await signedBackrun(decision.best!, bidWei);
+    chargeGas(useCross ? crossGasLimit * maxFeePerGas : gasCostWei());
     console.log(
-      `[bot] bidding ${formatEther(decision.bidWei)} ETH on ${opp.id.slice(0, 8)} — ${decision.reason} (${Date.now() - started}ms)`,
+      `[bot] bidding ${formatEther(bidWei)} ETH on ${opp.id.slice(0, 8)} — ${
+        useCross ? `${cross!.cycle.label} gross ${formatEther(cross!.grossWei)}` : decision.reason
+      } (${Date.now() - started}ms)`,
     );
-    return { maxBidWei: decision.bidWei, backrunRawTx };
+    return { maxBidWei: bidWei, backrunRawTx };
   },
 });
 

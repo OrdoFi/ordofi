@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractSwapHints, type SimLog } from "@ordofi/core/simulate";
+import { extractSwapHints, type SimLog, withV4Keys } from "@ordofi/core/simulate";
 
 /**
  * The three pool shapes sign their amounts differently — v2 reports gross
@@ -90,4 +90,27 @@ test("a malformed swap log degrades to the pool without a direction", () => {
   const [hint] = extractSwapHints([truncated]);
   assert.equal(hint.pool, "0xpool3");
   assert.equal(hint.direction, undefined);
+});
+
+test("v4 hints are given the pool's key, without which no searcher can act on them", () => {
+  // Every v4 swap on this chain reports the PoolManager as its address, so
+  // `pool` is the same value for all of them and `poolId` is a hash a searcher
+  // cannot invert. The auction holds the pool index; the searchers do not.
+  const POOL_ID = "0x" + "ab".repeat(32);
+  const key = { currency0: "0x" + "00".repeat(20), currency1: "0x" + "11".repeat(20), fee: 3000, tickSpacing: 60, hooks: "0x" + "00".repeat(20) };
+  const index = { v4PoolsByIds: (ids: string[]) => new Map(ids.includes(POOL_ID) ? [[POOL_ID, key]] : []) };
+
+  const hints = [
+    { kind: "univ4" as const, pool: "0x8366a39cc670b4001a1121b8f6a443a643e40951", poolId: POOL_ID },
+    { kind: "univ3" as const, pool: "0x" + "cc".repeat(20) },
+    { kind: "univ4" as const, pool: "0x8366a39cc670b4001a1121b8f6a443a643e40951", poolId: "0x" + "ee".repeat(32) },
+  ];
+  const named = withV4Keys(hints, index);
+  assert.deepEqual(named[0].key, key, "the one we know is named");
+  assert.equal(named[1].key, undefined, "a v3 pool is already identified by its address");
+  assert.equal(named[2].key, undefined, "an unknown id is left alone, not dropped");
+
+  assert.deepEqual(withV4Keys(hints, null), hints, "no index, no change");
+  const broken = { v4PoolsByIds: () => { throw new Error("db locked"); } };
+  assert.deepEqual(withV4Keys(hints, broken), hints, "an index that fails costs the key, not the hint");
 });

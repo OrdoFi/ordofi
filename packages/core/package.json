@@ -14,7 +14,8 @@
     "./router": "./src/router.ts",
     "./arb": "./src/arb.ts",
     "./guard": "./src/guard.ts",
-    "./blackhole-watch": "./src/blackhole-watch.ts"
+    "./blackhole-watch": "./src/blackhole-watch.ts",
+    "./ordoswap": "./src/ordoswap.ts"
   },
   "dependencies": {
     "viem": "^2.21.0",
