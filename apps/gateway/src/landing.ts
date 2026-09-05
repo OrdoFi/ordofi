@@ -158,7 +158,7 @@ curl https://rpc.ordofi.network <span class="k">\\</span>
   -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":["0x02f8…"]}'</span></pre>
 ${
       ws
-        ? `    <p class="lede" style="margin-top:18px">The chain's own RPC is HTTP only, so anything watching it has to poll — at one block every 100 ms that is a lot of asking for an answer that has not changed. <code>wss://rpc.ordofi.network</code> answers <code>eth_subscribe</code> for <code>newHeads</code> and <code>logs</code>, and carries ordinary calls on the same socket. No key.</p>
+        ? `    <p class="lede" style="margin-top:18px">The chain's own RPC is HTTP only, so anything watching it has to poll — at one block every 100 ms that is a lot of asking for an answer that has not changed. <code>wss://rpc.ordofi.network</code> answers <code>eth_subscribe</code> for <code>newHeads</code> and <code>logs</code>, and carries ordinary calls on the same socket. No key. <a href="/live" style="color:var(--accent)">Watch it →</a></p>
 <pre><span class="c"># every block, pushed, no key</span>
 wscat -c <span class="s">wss://rpc.ordofi.network</span>
 &gt; <span class="s">{"jsonrpc":"2.0","id":1,"method":"eth_subscribe","params":["newHeads"]}</span>

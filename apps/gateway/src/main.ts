@@ -12,6 +12,7 @@ import { bundlerInfo, protectAndSend, sendBundle, simulateRaw } from "./protect.
 import { DEFAULT_TRACKED, MarketCaps } from "./mcap.js";
 import { routeOrderFlow } from "./orderflow.js";
 import { prewarm as prewarmSwapRoutes, quoteSwap } from "./ordoswap2.js";
+import { liveHtml } from "./live-page.js";
 import { swapHtml } from "./swap-page.js";
 import { SwapStats } from "./swapstats.js";
 import { TokenList } from "./tokens.js";
@@ -357,6 +358,18 @@ const LANDING = landingHtml({
   ws: CONFIG.ws && !CONFIG.edgeOrigin,
 });
 
+// The demonstration of the WebSocket, which is otherwise invisible: a page
+// that is itself a subscriber. Only where there is a socket to subscribe to.
+const LIVE_PAGE =
+  CONFIG.ws && !CONFIG.edgeOrigin
+    ? liveHtml({
+        chainId: CONFIG.chainId,
+        explorer: "https://robinhoodchain.blockscout.com",
+        docs: "https://app.ordofi.network/docs",
+        app: "https://app.ordofi.network",
+      })
+    : null;
+
 // WalletConnect, for the phones. The bundle is built from a pinned version and
 // committed (npm run build:wc); if it is missing, or no project id is set, the
 // page simply does not offer it. Served under a hash of its own contents so it
@@ -456,6 +469,16 @@ const server = createServer((req, res) => {
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=120" });
     res.end(SWAP_PAGE);
+    return;
+  }
+  if (req.method === "GET" && (url === "/live" || url === "/live/")) {
+    if (!LIVE_PAGE) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("the live page needs the websocket, which is off on this gateway");
+      return;
+    }
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" });
+    res.end(LIVE_PAGE);
     return;
   }
   if (req.method === "GET" && url === "/swap/wc.js") {
@@ -768,6 +791,7 @@ server.listen(CONFIG.port, () => {
       ? `OrdoFi gateway | websocket: eth_subscribe(newHeads, logs) and full JSON-RPC on wss://<host>/ and /ws; one ${CONFIG.headPollMs}ms head poll serves every subscriber and runs only while subscribed; ${CONFIG.wsMaxConnsPerIp} sockets/IP, ${CONFIG.wsMaxSubsPerConn} subscriptions/socket`
       : `OrdoFi gateway | websocket: off`,
   );
+  if (LIVE_PAGE) console.log(`OrdoFi gateway | GET /live — the chain streaming into a browser, as the demonstration`);
   console.log(
     `OrdoFi gateway | fast path: chainId/net_version local, head cached ${BLOCK_MS}ms, fees 1s, mined receipts 10m; hedged reads after ${CONFIG.hedgeAfterMs}ms across ${rpcUrls().length} upstream(s), at most ${Math.round(CONFIG.hedgeBudgetRatio * 100)}% of reads; anon ${CONFIG.anonRateLimit} upstream reads + ${CONFIG.anonSendRateLimit} sends /min/IP, ${CONFIG.anonMaxInflight} in flight/IP`,
   );
