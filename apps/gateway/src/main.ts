@@ -32,6 +32,7 @@ import { parseTransaction, recoverTransactionAddress, type TransactionSerialized
 import { callOrigin, forwardHeaders, type OriginReply } from "./edge.js";
 import { getLogsWide, type LogFilterParam } from "./getlogs.js";
 import { HeadlineStats } from "./headline.js";
+import { TokenInfo, explain } from "./explain.js";
 import { HeadWatcher, Hub } from "./subscribe.js";
 import { attachWs } from "./ws.js";
 
@@ -272,6 +273,12 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
         // (a bare dev box) the quote still covers every V3 market.
         { rpc: upstream, ordoSwap: CONFIG.ordoSwapAddress as `0x${string}`, v4: store },
       );
+    }
+    case "ordo_explain": {
+      // What a transaction actually did, in a sentence. A receipt is a list of
+      // logs; the question anyone has is what left their wallet and what
+      // arrived, and that is the one thing a receipt does not say.
+      return explain((m, p) => upstream(m, p), tokenInfo, String(params[0] ?? ""));
     }
     case "eth_getLogs": {
       // The upstream refuses a wide range, in its own words and with its own
@@ -775,6 +782,8 @@ function headRead(method: string, params: unknown[]): Promise<any> {
   const isHead = method === "eth_getBlockByNumber" && String(params[0]) === "latest";
   return isHead ? fetchUpstream(method, params) : upstream(method, params);
 }
+
+const tokenInfo = new TokenInfo((m, p) => upstream(m, p));
 
 const hub = new Hub();
 const headWatcher = new HeadWatcher((m, p) => headRead(m, p), {

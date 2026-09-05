@@ -164,6 +164,7 @@ export const CONFIG = {
     "ordo_sendRawTransaction",
     "ordo_simulate",
     "ordo_quoteSwap",
+    "ordo_explain",
   ]),
   /**
    * OrdoSwap (contracts/src/OrdoSwap.sol): the swap that runs its own
