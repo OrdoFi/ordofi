@@ -57,6 +57,7 @@ x-gateway: &gateway
   # Shared index: the portal writes hashed API keys, the gateway reads them.
   volumes: ["ordo-data:/app/data"]
   depends_on: [auction]
+  networks: [default, nitro]
   restart: unless-stopped
 
 # The web app's environment, shared with the liquidity host below so the two
@@ -135,6 +136,7 @@ services:
       ORDO_REBATE_APP: ${ORDO_REBATE_APP:-0.05}
       ORDO_REBATE_PROTOCOL: ${ORDO_REBATE_PROTOCOL:-0.05}
     volumes: ["ordo-data:/app/data"]
+    networks: [default, nitro]
     restart: unless-stopped
 
   web:
@@ -147,6 +149,7 @@ services:
     environment: *web-env
     depends_on: [auction]
     volumes: ["ordo-data:/app/data"]
+    networks: [default, nitro]
     restart: unless-stopped
 
   # The liquidity product on its own host, ordoliquidity.app: the same image,
@@ -166,6 +169,7 @@ services:
       ORDO_POOLS_ENABLED: "1"
     depends_on: [auction]
     volumes: ["ordo-data:/app/data"]
+    networks: [default, nitro]
     restart: unless-stopped
 
   # The house searcher: keeps the auction non-empty so the first app to route
@@ -196,6 +200,7 @@ services:
       ORDO_SEARCHER_BID_SHARE_PCT: ${ORDO_SEARCHER_BID_SHARE_PCT:-70}
       ORDO_SEARCHER_DAILY_GAS_CAP_ETH: ${ORDO_SEARCHER_DAILY_GAS_CAP_ETH:-0.01}
     depends_on: [auction]
+    networks: [default, nitro]
     restart: unless-stopped
 
   # The house arbitrage bot: trades its own capital on cross-fee-tier cycles,
@@ -239,6 +244,7 @@ services:
       # on the shared volume so totals survive restarts.
       ORDO_ARB_PORT: 8549
     volumes: ["ordo-data:/app/data"]
+    networks: [default, nitro]
     restart: unless-stopped
 
   watcher:
@@ -259,6 +265,7 @@ services:
       ORDO_MAX_BATCH: ${ORDO_MAX_BATCH:-400}
       ORDO_LOG_ARBS: ${ORDO_LOG_ARBS:-}
     volumes: ["ordo-data:/app/data"]
+    networks: [default, nitro]
     restart: unless-stopped
 
   # Chart history. Walks every active pool's Swap events back to genesis into
@@ -282,6 +289,17 @@ services:
       ORDO_DB: /app/data/ordo.db
     volumes: ["ordo-data:/app/data"]
     restart: on-failure
+
+networks:
+  # The Nitro node's own compose project (deploy/nitro-node) owns this network.
+  # Joining it is how these services reach the node as `nitro:8547` — on the
+  # same machine, over the container bridge, with nothing published to the host
+  # and no third-party upstream in the path. Absent on a box without the node,
+  # which is why every service still keeps a public fallback in ORDO_RPC_URLS.
+  nitro:
+    external: true
+    name: ordofi-node_default
+  default:
 
 volumes:
   ordo-data:
