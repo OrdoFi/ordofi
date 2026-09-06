@@ -126,9 +126,44 @@ async function fetchUpstream(method: string, params: unknown[]): Promise<unknown
   );
 }
 
+/**
+ * Log reads have their own upstream list. Our Nitro node's log indexer renders
+ * the head continuously on this chain — ten blocks a second is about what it
+ * can index — and every eth_getLogs waits behind it: a 25-block filtered query
+ * took 30 s and timed out while eth_getBlockReceipts for the same block took
+ * 11 ms. An indexer partner saw 0 of 30 succeed and moved off us. So logs go
+ * to providers that answer them in well under a second, in order, and our
+ * node is the last resort rather than the first hop. Each hop gets a short
+ * deadline: a slow answer here is a wrong answer.
+ */
+const LOGS_UPSTREAMS = (process.env.ORDO_LOGS_UPSTREAMS ?? "https://rpc-robinhood.blockmachine.io,https://rpc.mainnet.chain.robinhood.com")
+  .split(",")
+  .map((u) => u.trim())
+  .filter(Boolean);
+const LOGS_HOP_TIMEOUT_MS = Number(process.env.ORDO_LOGS_HOP_TIMEOUT_MS ?? 6_000);
+
+async function fetchLogs(params: unknown[]): Promise<unknown> {
+  const hops = [...LOGS_UPSTREAMS, ...rpcUrls().filter((u) => !LOGS_UPSTREAMS.includes(u))];
+  let last: unknown;
+  for (const url of hops) {
+    try {
+      return await rpcOnce(url, "eth_getLogs", params, LOGS_HOP_TIMEOUT_MS);
+    } catch (e) {
+      // A definitive answer (bad filter, range refused) is the caller's to
+      // handle — getLogsWide splits refused ranges. Only transport failures,
+      // timeouts and throttles move to the next hop.
+      if ((e as { isRpcLevel?: boolean }).isRpcLevel && !isRetryableRpcError(e)) throw e;
+      last = e;
+      metrics.inc("logs_hop_failed_total");
+    }
+  }
+  throw last instanceof Error ? last : new Error("every logs upstream failed");
+}
+
 async function upstream(method: string, params: unknown[]): Promise<any> {
   const started = Date.now();
   try {
+    if (method === "eth_getLogs") return await fetchLogs(params);
     // Signed transactions go to the sequencer operator's endpoint and nowhere
     // else unless it is down; a third-party provider must not see them first.
     if (method === "eth_sendRawTransaction") {
