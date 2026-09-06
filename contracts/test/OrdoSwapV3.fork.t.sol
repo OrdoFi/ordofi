@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../src/OrdoSwapV2.sol";
+import "../src/OrdoSwapV3.sol";
 import {PoolKey} from "../src/V4Common.sol";
 
 interface IStateViewT {
@@ -10,12 +10,12 @@ interface IStateViewT {
     function getSlot0(bytes32 poolId) external view returns (uint160, int24, uint24, uint24);
 }
 
-/// @notice OrdoSwapV2 against ORDO's real Uniswap V4 pools on Robinhood Chain:
+/// @notice OrdoSwapV3 against ORDO's real Uniswap V4 pools on Robinhood Chain:
 ///         the launchpad's hooked ETH pool, the hookless 20% ETH pool, and the
 ///         USDG pool. If the hook lets us through, every launchpad token does.
 ///
-///   forge test --match-contract OrdoSwapV2Fork --fork-url http://127.0.0.1:8545 -vv
-contract OrdoSwapV2ForkTest is Test {
+///   forge test --match-contract OrdoSwapV3Fork --fork-url http://127.0.0.1:8545 -vv
+contract OrdoSwapV3ForkTest is Test {
     address constant WETH = 0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73;
     address constant USDG = 0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168;
     address constant ORDO = 0xFE2f0fB0C00d19786A8ABf98d4B1f1AC8763b167;
@@ -25,7 +25,7 @@ contract OrdoSwapV2ForkTest is Test {
     address constant HOOK = 0xcf8f482e998d18793414d10c9Fc48fC8277Ab8CC;
     address constant NATIVE = address(0);
 
-    OrdoSwapV2 ordo;
+    OrdoSwapV3 ordo;
     address owner = makeAddr("owner");
     address treasury = makeAddr("treasury");
     address user = makeAddr("user");
@@ -41,7 +41,7 @@ contract OrdoSwapV2ForkTest is Test {
         }
         if (block.chainid != 4663) return;
         forked = true;
-        ordo = new OrdoSwapV2(WETH, ROUTER, POOL_MANAGER, owner, treasury, 1000);
+        ordo = new OrdoSwapV3(WETH, ROUTER, POOL_MANAGER, owner, treasury, 1000);
         vm.deal(owner, 100 ether);
         vm.prank(owner);
         ordo.fund{value: 2 ether}();
@@ -54,38 +54,38 @@ contract OrdoSwapV2ForkTest is Test {
 
     // ------------------------------------------------------------ helpers
 
-    function _v4(PoolKey memory key, bool zeroForOne) internal pure returns (OrdoSwapV2.Leg memory) {
-        return OrdoSwapV2.Leg({venue: 1, path: "", key: key, zeroForOne: zeroForOne});
+    function _v4(PoolKey memory key, bool zeroForOne) internal pure returns (OrdoSwapV3.Leg memory) {
+        return OrdoSwapV3.Leg({venue: 1, path: "", key: key, zeroForOne: zeroForOne});
     }
 
-    function _v3(bytes memory path) internal pure returns (OrdoSwapV2.Leg memory) {
-        return OrdoSwapV2.Leg({venue: 0, path: path, key: PoolKey(address(0), address(0), 0, 0, address(0)), zeroForOne: false});
+    function _v3(bytes memory path) internal pure returns (OrdoSwapV3.Leg memory) {
+        return OrdoSwapV3.Leg({venue: 0, path: path, key: PoolKey(address(0), address(0), 0, 0, address(0)), zeroForOne: false});
     }
 
-    function _none() internal pure returns (OrdoSwapV2.Reclaim memory r) {
-        r.legs = new OrdoSwapV2.Leg[](0);
+    function _none() internal pure returns (OrdoSwapV3.Reclaim memory r) {
+        r.legs = new OrdoSwapV3.Leg[](0);
     }
 
-    function _one(OrdoSwapV2.Leg memory l) internal pure returns (OrdoSwapV2.Leg[] memory a) {
-        a = new OrdoSwapV2.Leg[](1);
+    function _one(OrdoSwapV3.Leg memory l) internal pure returns (OrdoSwapV3.Leg[] memory a) {
+        a = new OrdoSwapV3.Leg[](1);
         a[0] = l;
     }
 
-    function _two(OrdoSwapV2.Leg memory a1, OrdoSwapV2.Leg memory a2) internal pure returns (OrdoSwapV2.Leg[] memory a) {
-        a = new OrdoSwapV2.Leg[](2);
+    function _two(OrdoSwapV3.Leg memory a1, OrdoSwapV3.Leg memory a2) internal pure returns (OrdoSwapV3.Leg[] memory a) {
+        a = new OrdoSwapV3.Leg[](2);
         a[0] = a1;
         a[1] = a2;
     }
 
     /// @dev quote() reverts with its answer; decode it.
-    function _quote(OrdoSwapV2.Leg[] memory legs, uint256 amountIn, OrdoSwapV2.Reclaim memory r, uint256 value)
+    function _quote(OrdoSwapV3.Leg[] memory legs, uint256 amountIn, OrdoSwapV3.Reclaim memory r, uint256 value)
         internal
         returns (uint256 out, uint256 profit, bytes memory failure)
     {
         vm.deal(address(this), value);
-        (bool ok, bytes memory ret) = address(ordo).call{value: value}(abi.encodeCall(OrdoSwapV2.quote, (legs, amountIn, r)));
+        (bool ok, bytes memory ret) = address(ordo).call{value: value}(abi.encodeCall(OrdoSwapV3.quote, (legs, amountIn, r)));
         require(!ok, "quote must revert");
-        require(bytes4(ret) == OrdoSwapV2.QuoteResult.selector, string(ret));
+        require(bytes4(ret) == OrdoSwapV3.QuoteResult.selector, string(ret));
         bytes memory payload = new bytes(ret.length - 4);
         for (uint256 i = 0; i < payload.length; i++) payload[i] = ret[i + 4];
         (out, profit, failure) = abi.decode(payload, (uint256, uint256, bytes));
@@ -129,7 +129,7 @@ contract OrdoSwapV2ForkTest is Test {
         vm.skip(!forked);
         PoolKey memory v4EthUsdg = PoolKey({currency0: NATIVE, currency1: USDG, fee: 100, tickSpacing: 1, hooks: NATIVE});
         vm.skip(IStateViewT(STATE_VIEW).getLiquidity(keccak256(abi.encode(v4EthUsdg))) == 0);
-        OrdoSwapV2.Leg[] memory legs = _two(_v3(abi.encodePacked(WETH, uint24(500), USDG)), _v4(v4EthUsdg, false));
+        OrdoSwapV3.Leg[] memory legs = _two(_v3(abi.encodePacked(WETH, uint24(500), USDG)), _v4(v4EthUsdg, false));
         uint256 ethBefore = user.balance;
         vm.prank(user);
         (uint256 out,) = ordo.swap{value: 0.05 ether}(legs, 0.05 ether, 0, user, true, _none());
@@ -145,14 +145,14 @@ contract OrdoSwapV2ForkTest is Test {
         // A buy on the hooked pool makes ORDO dear there. The reclaim buys ORDO on
         // the hookless pool and sells it into the hooked one, all in ether.
         uint256 buy = 1 ether;
-        OrdoSwapV2.Leg[] memory userLegs = _one(_v4(hooked, true));
-        OrdoSwapV2.Leg[] memory cycle = _two(_v4(plain20, true), _v4(hooked, false));
+        OrdoSwapV3.Leg[] memory userLegs = _one(_v4(hooked, true));
+        OrdoSwapV3.Leg[] memory cycle = _two(_v4(plain20, true), _v4(hooked, false));
 
         uint256 bestSize;
         uint256 bestProfit;
         uint256[5] memory ladder = [uint256(0.02 ether), 0.05 ether, 0.1 ether, 0.25 ether, 0.5 ether];
         for (uint256 i = 0; i < ladder.length; i++) {
-            OrdoSwapV2.Reclaim memory r = OrdoSwapV2.Reclaim({legs: cycle, amountIn: ladder[i], minProfit: 0, gas: 0});
+            OrdoSwapV3.Reclaim memory r = OrdoSwapV3.Reclaim({legs: cycle, amountIn: ladder[i], minProfit: 0, gas: 0});
             (, uint256 profit, bytes memory failure) = _quote(userLegs, buy, r, buy);
             if (failure.length == 0 && profit > bestProfit) {
                 bestProfit = profit;
@@ -167,7 +167,7 @@ contract OrdoSwapV2ForkTest is Test {
         }
 
         uint256 floatBefore = ordo.float();
-        OrdoSwapV2.Reclaim memory chosen = OrdoSwapV2.Reclaim({legs: cycle, amountIn: bestSize, minProfit: bestProfit / 2, gas: 400_000});
+        OrdoSwapV3.Reclaim memory chosen = OrdoSwapV3.Reclaim({legs: cycle, amountIn: bestSize, minProfit: bestProfit / 2, gas: 400_000});
         vm.prank(user);
         (uint256 out, uint256 surplus) = ordo.swap{value: buy}(userLegs, buy, 0, user, false, chosen);
         assertGt(out, 0);
@@ -179,7 +179,7 @@ contract OrdoSwapV2ForkTest is Test {
 
     function test_Fork_UnderGassedReclaimRevertsBeforeTheSwap() public {
         vm.skip(!forked);
-        OrdoSwapV2.Reclaim memory r = OrdoSwapV2.Reclaim({legs: _two(_v4(plain20, true), _v4(hooked, false)), amountIn: 0.05 ether, minProfit: 0, gas: 30_000_000});
+        OrdoSwapV3.Reclaim memory r = OrdoSwapV3.Reclaim({legs: _two(_v4(plain20, true), _v4(hooked, false)), amountIn: 0.05 ether, minProfit: 0, gas: 30_000_000});
         vm.prank(user);
         vm.expectRevert();
         ordo.swap{value: 0.05 ether, gas: 1_000_000}(_one(_v4(hooked, true)), 0.05 ether, 0, user, false, r);
@@ -190,12 +190,61 @@ contract OrdoSwapV2ForkTest is Test {
         vm.skip(!forked);
         uint256 floatBefore = ordo.float();
         // ETH -> ORDO only: ends in ORDO, not ether.
-        OrdoSwapV2.Reclaim memory r = OrdoSwapV2.Reclaim({legs: _one(_v4(plain20, true)), amountIn: 0.05 ether, minProfit: 0, gas: 300_000});
+        OrdoSwapV3.Reclaim memory r = OrdoSwapV3.Reclaim({legs: _one(_v4(plain20, true)), amountIn: 0.05 ether, minProfit: 0, gas: 300_000});
         vm.prank(user);
         (uint256 out, uint256 surplus) = ordo.swap{value: 0.05 ether}(_one(_v4(hooked, true)), 0.05 ether, 0, user, false, r);
         assertGt(out, 0, "the swap stands");
         assertEq(surplus, 0);
         assertEq(ordo.float(), floatBefore, "a reclaim that does not come back to ether cannot touch the float");
+    }
+
+    /// The drain a researcher reported against v2: leg 1 turns dust into a lot
+    /// of some token, leg 2 declares WETH as its input, and the runner spends
+    /// that amount of WETH from the float. The declared input does not match
+    /// what leg 1 produced, so v3 refuses before anything moves.
+    function test_Fork_MismatchedLegsCannotSpendTheFloat() public {
+        vm.skip(!forked);
+        uint256 floatBefore = ordo.float();
+        assertGt(floatBefore, 0, "there is a float to protect");
+        // Leg 1: ether -> ORDO on the launchpad pool (produces ORDO).
+        // Leg 2: declares WETH -> USDG on V3 (consumes WETH it was never given).
+        OrdoSwapV3.Leg[] memory legs = _two(_v4(hooked, true), _v3(abi.encodePacked(WETH, uint24(500), USDG)));
+        address attacker = makeAddr("attacker");
+        vm.deal(attacker, 1 ether);
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(OrdoSwapV3.LegMismatch.selector, 1, ORDO, WETH));
+        ordo.swap{value: 0.0001 ether}(legs, 0.0001 ether, 0, attacker, false, _none());
+        assertEq(ordo.float(), floatBefore, "float untouched");
+        assertEq(IERC20(USDG).balanceOf(attacker), 0, "attacker got nothing");
+    }
+
+    /// The same idea through V4 only: a declared input the previous leg did not produce.
+    function test_Fork_MismatchedV4LegsRevert() public {
+        vm.skip(!forked);
+        // Leg 1: ether -> ORDO. Leg 2 declares ether -> ORDO again (needs ether, holds ORDO).
+        OrdoSwapV3.Leg[] memory legs = _two(_v4(hooked, true), _v4(plain20, true));
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OrdoSwapV3.LegMismatch.selector, 1, ORDO, WETH));
+        ordo.swap{value: 0.01 ether}(legs, 0.01 ether, 0, user, false, _none());
+    }
+
+    /// Ether legs are one asset whether spelled WETH or native: a V3 leg
+    /// producing WETH feeds a V4 leg wanting ether, and the other way round.
+    function test_Fork_EtherContinuityAcrossSpellings() public {
+        vm.skip(!forked);
+        PoolKey memory v4EthUsdg = PoolKey({currency0: NATIVE, currency1: USDG, fee: 100, tickSpacing: 1, hooks: NATIVE});
+        vm.skip(IStateViewT(STATE_VIEW).getLiquidity(keccak256(abi.encode(v4EthUsdg))) == 0);
+        // ORDO -> ether (V4, native out) -> USDG (V3, WETH in): continuity holds through the spelling change.
+        vm.prank(user);
+        (uint256 got,) = ordo.swap{value: 0.02 ether}(_one(_v4(plain20, true)), 0.02 ether, 0, user, false, _none());
+        vm.prank(user);
+        IERC20(ORDO).approve(address(ordo), got);
+        OrdoSwapV3.Leg[] memory legs = _two(_v4(plain20, false), _v3(abi.encodePacked(WETH, uint24(500), USDG)));
+        uint256 floatBefore = ordo.float();
+        vm.prank(user);
+        (uint256 usdg,) = ordo.swap(legs, got, 0, user, false, _none());
+        assertGt(usdg, 0, "route ran");
+        assertEq(ordo.float(), floatBefore, "float untouched");
     }
 
     function test_Fork_V3StillWorks() public {
@@ -221,9 +270,9 @@ contract OrdoSwapV2ForkTest is Test {
 
     function test_Fork_NobodyElseCanDriveTheFloat() public {
         vm.skip(!forked);
-        OrdoSwapV2.Reclaim memory r = OrdoSwapV2.Reclaim({legs: _two(_v4(plain20, true), _v4(hooked, false)), amountIn: 1 ether, minProfit: 0, gas: 0});
+        OrdoSwapV3.Reclaim memory r = OrdoSwapV3.Reclaim({legs: _two(_v4(plain20, true), _v4(hooked, false)), amountIn: 1 ether, minProfit: 0, gas: 0});
         vm.prank(user);
-        vm.expectRevert(OrdoSwapV2.NotSelf.selector);
+        vm.expectRevert(OrdoSwapV3.NotSelf.selector);
         ordo.reclaimFor(user, r, false);
     }
 }

@@ -34,7 +34,7 @@ contract OrdoSettlementForkTest is Test {
         }
         forked = true;
         searcher = vm.addr(searcherPk);
-        settlement = new OrdoSettlement(auctioneer, treasury, 500, 500);
+        settlement = new OrdoSettlement(auctioneer, treasury, 500, 500, 120);
     }
 
     function test_Fork_FullLifecycleOnMainnetState() public {

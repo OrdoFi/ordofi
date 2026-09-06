@@ -24,7 +24,7 @@ contract Deploy is Script {
         returns (OrdoSettlement settlement, OrdoBundler bundler)
     {
         vm.startBroadcast();
-        settlement = new OrdoSettlement(auctioneer, treasury, appBps, protocolBps);
+        settlement = new OrdoSettlement(auctioneer, treasury, appBps, protocolBps, 120);
         bundler = new OrdoBundler();
         vm.stopBroadcast();
 

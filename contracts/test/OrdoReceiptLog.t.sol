@@ -19,7 +19,7 @@ contract OrdoReceiptLogTest is Test {
     bytes32 constant ROOT = 0x3856185f708a95a4cef51f6538ed3ea849702a46e020430070ac99c94a831c58;
 
     function setUp() public {
-        settlement = new OrdoSettlement(auctioneer, treasury, 500, 500);
+        settlement = new OrdoSettlement(auctioneer, treasury, 500, 500, 120);
         receiptLog = new OrdoReceiptLog(address(settlement));
     }
 

@@ -13,6 +13,15 @@ pragma solidity ^0.8.24;
 ///         searcher's own EIP-712 signature over (opportunityId, amount), so
 ///         the contract only debits amounts the searcher provably authorized
 ///         as a bid. Replay is prevented per opportunityId.
+///
+///         Withdrawals take time. A researcher showed that with an instant
+///         `withdrawBond`, a searcher could win, have the back-run land, and
+///         pull the bond before the auctioneer's `settle` arrived — the user's
+///         rebate then had nothing to collect from. So leaving is two steps:
+///         `requestWithdraw` starts a clock, `withdrawBond` pays out once
+///         WITHDRAW_DELAY has passed, and any settlement that lands in between
+///         is debited first. `collateral()` is what the auctioneer may lend
+///         against: the bond less anything on its way out.
 contract OrdoSettlement {
     // ---------------------------------------------------------------------
     // Types
@@ -35,6 +44,15 @@ contract OrdoSettlement {
     mapping(address => uint256) public claimable; // beneficiary claimable balance
     mapping(bytes32 => bool) public settled; // opportunityId => used
 
+    struct Withdrawal {
+        uint256 amount;
+        uint64 readyAt;
+    }
+    /// @notice A searcher's pending withdrawal, if any.
+    mapping(address => Withdrawal) public withdrawal;
+    /// @notice How long a requested withdrawal waits. Longer than any settlement takes to land.
+    uint64 public immutable WITHDRAW_DELAY;
+
     address public owner;
     address public auctioneer; // authorized settlement submitter (OrdoFi backend)
     address public protocolTreasury;
@@ -55,6 +73,8 @@ contract OrdoSettlement {
     // ---------------------------------------------------------------------
 
     event Deposited(address indexed searcher, uint256 amount, uint256 newBond);
+    event WithdrawRequested(address indexed searcher, uint256 amount, uint64 readyAt);
+    event WithdrawCancelled(address indexed searcher);
     event BondWithdrawn(address indexed searcher, uint256 amount, uint256 newBond);
     event Settled(
         bytes32 indexed opportunityId,
@@ -83,6 +103,8 @@ contract OrdoSettlement {
     error ChargeExceedsBid();
     error InsufficientBond();
     error NothingToClaim();
+    error NoWithdrawalPending();
+    error WithdrawalNotReady(uint64 readyAt);
     error InvalidSplit();
     error ZeroAddress();
     error TransferFailed();
@@ -108,11 +130,12 @@ contract OrdoSettlement {
     // Constructor
     // ---------------------------------------------------------------------
 
-    constructor(address _auctioneer, address _protocolTreasury, uint16 _appBps, uint16 _protocolBps) {
+    constructor(address _auctioneer, address _protocolTreasury, uint16 _appBps, uint16 _protocolBps, uint64 _withdrawDelay) {
         if (_auctioneer == address(0) || _protocolTreasury == address(0)) revert ZeroAddress();
         if (uint256(_appBps) + uint256(_protocolBps) > 10_000) revert InvalidSplit();
 
         owner = msg.sender;
+        WITHDRAW_DELAY = _withdrawDelay;
         auctioneer = _auctioneer;
         protocolTreasury = _protocolTreasury;
         appBps = _appBps;
@@ -143,12 +166,43 @@ contract OrdoSettlement {
         emit Deposited(msg.sender, msg.value, bond[msg.sender]);
     }
 
-    function withdrawBond(uint256 amount) external nonReentrant {
+    /// @notice Start taking `amount` out. It leaves after WITHDRAW_DELAY; until
+    ///         then it still backs bids already won, and it no longer counts as
+    ///         collateral for new ones. A new request replaces the old.
+    function requestWithdraw(uint256 amount) external {
+        if (amount == 0 || amount > bond[msg.sender]) revert InsufficientBond();
+        uint64 readyAt = uint64(block.timestamp) + WITHDRAW_DELAY;
+        withdrawal[msg.sender] = Withdrawal(amount, readyAt);
+        emit WithdrawRequested(msg.sender, amount, readyAt);
+    }
+
+    function cancelWithdraw() external {
+        if (withdrawal[msg.sender].readyAt == 0) revert NoWithdrawalPending();
+        delete withdrawal[msg.sender];
+        emit WithdrawCancelled(msg.sender);
+    }
+
+    /// @notice Pay out a matured request. Settlements that landed in the
+    ///         meantime came out of the bond first, so what leaves is the
+    ///         request or what is left, whichever is less.
+    function withdrawBond() external nonReentrant {
+        Withdrawal memory w = withdrawal[msg.sender];
+        if (w.readyAt == 0) revert NoWithdrawalPending();
+        if (block.timestamp < w.readyAt) revert WithdrawalNotReady(w.readyAt);
         uint256 bal = bond[msg.sender];
-        if (amount > bal) revert InsufficientBond();
+        uint256 amount = w.amount < bal ? w.amount : bal;
+        delete withdrawal[msg.sender];
         bond[msg.sender] = bal - amount;
         _send(msg.sender, amount);
         emit BondWithdrawn(msg.sender, amount, bond[msg.sender]);
+    }
+
+    /// @notice What the auctioneer may accept bids against: the bond less
+    ///         anything requested out. Zero if the request exceeds the bond.
+    function collateral(address searcher) external view returns (uint256) {
+        uint256 bal = bond[searcher];
+        uint256 leaving = withdrawal[searcher].amount;
+        return leaving >= bal ? 0 : bal - leaving;
     }
 
     // ---------------------------------------------------------------------

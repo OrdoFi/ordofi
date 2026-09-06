@@ -188,12 +188,23 @@ export async function submitOrderFlow(
 
 export const SETTLEMENT_ABI = [
   { type: "function", name: "deposit", stateMutability: "payable", inputs: [], outputs: [] },
+  // Leaving is two steps: request, wait WITHDRAW_DELAY, withdraw. The delay is
+  // what lets the auctioneer settle a win before the bond behind it can move.
   {
     type: "function",
-    name: "withdrawBond",
+    name: "requestWithdraw",
     stateMutability: "nonpayable",
     inputs: [{ name: "amount", type: "uint256" }],
     outputs: [],
+  },
+  { type: "function", name: "cancelWithdraw", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  { type: "function", name: "withdrawBond", stateMutability: "nonpayable", inputs: [], outputs: [] },
+  {
+    type: "function",
+    name: "collateral",
+    stateMutability: "view",
+    inputs: [{ name: "searcher", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
   },
   { type: "function", name: "claim", stateMutability: "nonpayable", inputs: [], outputs: [] },
   {

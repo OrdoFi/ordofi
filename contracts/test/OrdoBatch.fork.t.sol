@@ -439,6 +439,58 @@ contract OrdoBatchForkTest is Test {
         assertGt(IERC20(ORDO).balanceOf(alice) - aOrdo, 0, "filled on her ECDSA signature");
     }
 
+    /// A leg that declares an input the previous leg did not produce would spend
+    /// that much of it from the contract — here, other people's escrowed ether.
+    /// Refused before anything moves, even from the solver.
+    function test_Fork_MismatchedInteractionLegsRevert() public {
+        vm.skip(!forked);
+        // Carol's ether sits in escrow.
+        OrdoBatch.Order memory c = _order(carol, WETH, ORDO, 0.5 ether, 0, 30);
+        vm.prank(carol);
+        batch.depositOrder{value: 0.5 ether}(c);
+        assertEq(batch.escrowTotal(), 0.5 ether);
+
+        // Alice's small ORDO buy, with an interaction whose second leg declares
+        // WETH (would drain escrow) after a first leg that produced ORDO.
+        OrdoBatch.Order memory a = _order(alice, WETH, ORDO, 0.01 ether, 0, 31);
+        (OrdoBatch.Order[] memory os, bytes[] memory sigs) = _one(a, _sign(aliceKey, a));
+        OrdoBatch.Interaction[] memory xs = new OrdoBatch.Interaction[](1);
+        OrdoBatch.Leg[] memory legs = new OrdoBatch.Leg[](2);
+        legs[0] = _v4(plain20, true); // ether -> ORDO
+        legs[1] = _v4(plain20, true); // declares ether again; holds ORDO
+        xs[0] = OrdoBatch.Interaction({legs: legs, amountIn: 0.01 ether});
+        vm.prank(solver);
+        vm.expectRevert(abi.encodeWithSelector(OrdoBatch.LegMismatch.selector, 1, ORDO, WETH));
+        batch.settle(os, sigs, _prices(1, 1), xs);
+        assertEq(IERC20(WETH).balanceOf(address(batch)), 0.5 ether, "escrow intact");
+    }
+
+    /// Escrowed ether is watched even in a batch whose pair has no ether: an
+    /// interaction funded from escrow trips the balance check on WETH although
+    /// no order in the batch priced it.
+    function test_Fork_EscrowWatchedOnNonEtherPair() public {
+        vm.skip(!forked);
+        OrdoBatch.Order memory c = _order(carol, WETH, ORDO, 0.5 ether, 0, 32);
+        vm.prank(carol);
+        batch.depositOrder{value: 0.5 ether}(c);
+
+        // A batch on ORDO/USDG with no orders at all, whose one interaction
+        // turns escrowed ether into ORDO. Well-formed leg, wrong money.
+        OrdoBatch.Order[] memory none = new OrdoBatch.Order[](0);
+        bytes[] memory noSigs = new bytes[](0);
+        OrdoBatch.Price[] memory p = new OrdoBatch.Price[](2);
+        p[0] = OrdoBatch.Price(ORDO, 1);
+        p[1] = OrdoBatch.Price(USDG, 1);
+        OrdoBatch.Interaction[] memory xs = new OrdoBatch.Interaction[](1);
+        OrdoBatch.Leg[] memory steal = new OrdoBatch.Leg[](1);
+        steal[0] = _v4(plain20, true); // ether -> ORDO, funded from escrow
+        xs[0] = OrdoBatch.Interaction({legs: steal, amountIn: 0.1 ether});
+        vm.prank(solver);
+        vm.expectRevert(abi.encodeWithSelector(OrdoBatch.ContractLostFunds.selector, WETH, 0.5 ether, 0.4 ether));
+        batch.settle(none, noSigs, p, xs);
+        assertEq(IERC20(WETH).balanceOf(address(batch)), 0.5 ether, "escrow intact");
+    }
+
     /// `simulate` tells the solver exactly what the AMM gives and what is owed, without signatures.
     function test_Fork_SimulateReportsDeltaAndOwed() public {
         vm.skip(!forked);

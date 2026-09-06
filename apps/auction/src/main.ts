@@ -8,7 +8,7 @@ import { OrdoStore } from "@ordofi/store";
 import { extractSwapHints, hintLevelFromEnv, simulateTx, withV4Keys } from "@ordofi/core/simulate";
 import { appendFileSync } from "node:fs";
 import { Auction, toResult } from "./auctioneer.js";
-import { bondingEnabled, checkBond } from "./bonds.js";
+import { bondingEnabled, checkBond, hold, release } from "./bonds.js";
 import { RebateLedger, REBATE_SPLIT } from "./ledger.js";
 import { settlementEnabled, submitSettlement } from "./settle.js";
 import { createFeedRelay, feedStats } from "./feedrelay.js";
@@ -164,6 +164,13 @@ async function handleSubmit(body: any): Promise<any> {
   const outcome = await auction.settled;
   activeAuctions.delete(opp.id);
 
+  // Losers' holds are released; the winner's is narrowed to what they will
+  // actually be charged and kept until that charge has been attempted.
+  for (const b of auction.allBids) {
+    if (outcome.winner && b.searcher === outcome.winner.searcher) hold(b.searcher, opp.id, outcome.clearingPriceWei);
+    else release(b.searcher, opp.id);
+  }
+
   // Published before dispatch so the record of what was decided does not
   // depend on whether the transactions that follow succeed.
   const receipt = await publishReceipt(
@@ -176,6 +183,60 @@ async function handleSubmit(body: any): Promise<any> {
   let userTxHash: string | undefined;
   let backrunTxHash: string | undefined;
   let userError: string | undefined;
+
+  // The settlement is prepared now and sent in the same tick as the two
+  // transactions below, not after them. Charging after dispatch is the window
+  // a researcher showed a searcher could leave through; with the contract's
+  // withdrawal delay behind it, sending settle alongside closes it entirely.
+  let settlementRecord: SettlementRecord | null = null;
+  let settlementTxHash: string | undefined;
+  let settlementSend: Promise<void> = Promise.resolve();
+  if (outcome.winner && outcome.clearingPriceWei > 0n) {
+    let userAddress = "0x0000000000000000000000000000000000000000";
+    try {
+      userAddress = await recoverTransactionAddress({ serializedTransaction: rawTx as TransactionSerialized });
+    } catch {
+      /* fall back to the zero address; the app/protocol split still settles */
+    }
+    settlementRecord = {
+      opportunityId: opp.id,
+      searcher: outcome.winner.searcher,
+      maxAmountWei: outcome.winner.bidWei,
+      chargeWei: outcome.clearingPriceWei.toString(),
+      user: userAddress,
+      app: originRebateAddress ?? "0x0000000000000000000000000000000000000000",
+      searcherSig: outcome.winner.bidSig,
+      createdAt: Date.now(),
+    };
+    appendFileSync(settlementsFile, JSON.stringify(settlementRecord) + "\n");
+    if (settlementEnabled()) {
+      const rec = settlementRecord;
+      settlementSend = submitSettlement(rec)
+        .then((txHash) => {
+          if (!txHash) return;
+          settlementTxHash = txHash;
+          stats.settled++;
+          console.log(`[settle] ${opp.id.slice(0, 8)} charged ${outcome.clearingPriceWei} wei — ${txHash}`);
+          try {
+            settlementIndex?.insertSettlement({
+              opportunityId: opp.id,
+              searcher: rec.searcher,
+              chargeWei: rec.chargeWei,
+              userAddress: rec.user,
+              appAddress: rec.app,
+              txHash,
+              createdAt: Date.now(),
+            });
+          } catch (e) {
+            console.error(`[settle] indexed write failed: ${(e as Error).message}`);
+          }
+        })
+        .catch((e) => console.error(`[settle] failed for ${opp.id.slice(0, 8)}: ${(e as Error).message}`))
+        .finally(() => release(outcome.winner!.searcher, opp.id));
+    } else {
+      release(outcome.winner.searcher, opp.id);
+    }
+  }
 
   // Dispatch user tx and (if any) winning backrun back-to-back in the same tick.
   // On an FCFS chain adjacency is probabilistic; sequencer integration (Phase 3)
@@ -209,68 +270,14 @@ async function handleSubmit(body: any): Promise<any> {
         }),
     );
   }
-  await Promise.all(sends);
+  await Promise.all([...sends, settlementSend]);
   stats.dispatched++;
 
   const result = toResult(opp, outcome, auction.bidCount, { userTxHash, backrunTxHash });
 
   let ledgerEntry;
-  let settlementRecord: SettlementRecord | null = null;
-  let settlementTxHash: string | undefined;
   if (outcome.winner && outcome.clearingPriceWei > 0n) {
     ledgerEntry = ledger.record(result, outcome.winner, originRebateAddress);
-
-    // Produce a settlement-ready record. Once ORDO_SETTLEMENT_ADDRESS points at
-    // a deployed OrdoSettlement contract and an auctioneer key is configured,
-    // these records are what get submitted on-chain (settle()) to debit the
-    // searcher's bond and credit the user/app/protocol rebate splits.
-    // The rebate belongs to the trader who signed the order, so credit the
-    // recovered sender of the user transaction rather than an app label.
-    let userAddress = "0x0000000000000000000000000000000000000000";
-    try {
-      userAddress = await recoverTransactionAddress({ serializedTransaction: rawTx as TransactionSerialized });
-    } catch {
-      /* fall back to the zero address; the app/protocol split still settles */
-    }
-
-    settlementRecord = {
-      opportunityId: opp.id,
-      searcher: outcome.winner.searcher,
-      maxAmountWei: outcome.winner.bidWei,
-      chargeWei: outcome.clearingPriceWei.toString(),
-      user: userAddress,
-      app: originRebateAddress ?? "0x0000000000000000000000000000000000000000",
-      searcherSig: outcome.winner.bidSig,
-      createdAt: Date.now(),
-    };
-    appendFileSync(settlementsFile, JSON.stringify(settlementRecord) + "\n");
-
-    // Close the loop on-chain when a deployed contract + auctioneer key exist.
-    if (settlementEnabled()) {
-      try {
-        const txHash = await submitSettlement(settlementRecord);
-        if (txHash) {
-          settlementTxHash = txHash;
-          stats.settled++;
-          console.log(`[settle] ${opp.id.slice(0, 8)} charged ${outcome.clearingPriceWei} wei — ${txHash}`);
-          try {
-            settlementIndex?.insertSettlement({
-              opportunityId: opp.id,
-              searcher: settlementRecord.searcher,
-              chargeWei: settlementRecord.chargeWei,
-              userAddress: settlementRecord.user,
-              appAddress: settlementRecord.app,
-              txHash,
-              createdAt: Date.now(),
-            });
-          } catch (e) {
-            console.error(`[settle] indexed write failed: ${(e as Error).message}`);
-          }
-        }
-      } catch (e) {
-        console.error(`[settle] failed for ${opp.id.slice(0, 8)}: ${(e as Error).message}`);
-      }
-    }
   }
 
   return {
@@ -415,15 +422,20 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      // Only accept bids the searcher can actually pay for on-chain.
-      void checkBond(bid.searcher, bid.bidWei).then((reason) => {
+      // Only accept bids the searcher can actually pay for on-chain — and
+      // once accepted, the amount is held against them until the auction
+      // resolves, so one bond cannot back two concurrent wins.
+      void checkBond(bid.searcher, bid.bidWei, bid.opportunityId).then((reason) => {
         if (reason) {
           stats.rejectedBids++;
           ws.send(JSON.stringify({ type: "bid_ack", opportunityId: bid.opportunityId, accepted: false, reason }));
           return;
         }
         const r = auction.submitBid(bid);
-        if (r.accepted) stats.bids++;
+        if (r.accepted) {
+          stats.bids++;
+          if (bondingEnabled()) hold(bid.searcher, bid.opportunityId, BigInt(bid.bidWei));
+        }
         // The acknowledgement is the searcher's evidence that this bid, at
         // this amount, was received — worthless to them after the fact if we
         // only sent it on request.

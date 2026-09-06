@@ -22,7 +22,7 @@ contract OrdoSettlementTest is Test {
 
     function setUp() public {
         searcher = vm.addr(searcherPk);
-        settlement = new OrdoSettlement(auctioneer, treasury, APP_BPS, PROTOCOL_BPS);
+        settlement = new OrdoSettlement(auctioneer, treasury, APP_BPS, PROTOCOL_BPS, 120);
         vm.deal(searcher, 100 ether);
     }
 
@@ -203,20 +203,78 @@ contract OrdoSettlementTest is Test {
         settlement.settle(s, sig);
     }
 
-    function test_WithdrawBond() public {
+    function test_WithdrawBond_TwoStepsWithDelay() public {
         _deposit(10 ether);
+        vm.prank(searcher);
+        settlement.requestWithdraw(4 ether);
+        assertEq(settlement.collateral(searcher), 6 ether, "what is leaving no longer backs new bids");
+        assertEq(settlement.bond(searcher), 10 ether, "but it is still bonded until it leaves");
+
+        vm.prank(searcher);
+        vm.expectRevert(abi.encodeWithSelector(OrdoSettlement.WithdrawalNotReady.selector, uint64(block.timestamp + 120)));
+        settlement.withdrawBond();
+
+        vm.warp(block.timestamp + 120);
         uint256 before = searcher.balance;
         vm.prank(searcher);
-        settlement.withdrawBond(4 ether);
+        settlement.withdrawBond();
         assertEq(searcher.balance - before, 4 ether);
         assertEq(settlement.bond(searcher), 6 ether);
+        assertEq(settlement.collateral(searcher), 6 ether);
     }
 
     function test_RevertWhen_WithdrawTooMuch() public {
         _deposit(1 ether);
         vm.prank(searcher);
         vm.expectRevert(OrdoSettlement.InsufficientBond.selector);
-        settlement.withdrawBond(2 ether);
+        settlement.requestWithdraw(2 ether);
+    }
+
+    function test_RevertWhen_WithdrawWithoutRequest() public {
+        _deposit(1 ether);
+        vm.prank(searcher);
+        vm.expectRevert(OrdoSettlement.NoWithdrawalPending.selector);
+        settlement.withdrawBond();
+    }
+
+    function test_CancelWithdrawRestoresCollateral() public {
+        _deposit(3 ether);
+        vm.prank(searcher);
+        settlement.requestWithdraw(3 ether);
+        assertEq(settlement.collateral(searcher), 0);
+        vm.prank(searcher);
+        settlement.cancelWithdraw();
+        assertEq(settlement.collateral(searcher), 3 ether);
+    }
+
+    /// The reported escape: win, let the back-run land, pull the bond before
+    /// settle. The request starts a clock instead; settle lands first and is
+    /// paid from the bond, and what eventually leaves is what is left.
+    function test_WinThenWithdrawInWindow_SettleStillCollects() public {
+        _deposit(1 ether);
+        bytes32 oppId = keccak256("won");
+        bytes memory sig = _sign(oppId, 1 ether);
+
+        // Searcher tries to leave with everything the moment the back-run lands.
+        vm.prank(searcher);
+        settlement.requestWithdraw(1 ether);
+        vm.prank(searcher);
+        vm.expectRevert(abi.encodeWithSelector(OrdoSettlement.WithdrawalNotReady.selector, uint64(block.timestamp + 120)));
+        settlement.withdrawBond();
+
+        // The auctioneer's settlement arrives seconds later and is paid in full.
+        OrdoSettlement.Settlement memory s = OrdoSettlement.Settlement(searcher, oppId, 1 ether, 1 ether, user, app);
+        vm.prank(auctioneer);
+        settlement.settle(s, sig);
+        assertEq(settlement.bond(searcher), 0);
+        assertEq(settlement.claimable(user), 0.9 ether, "the user's rebate exists");
+
+        // When the clock runs out there is nothing left to take.
+        vm.warp(block.timestamp + 120);
+        uint256 before = searcher.balance;
+        vm.prank(searcher);
+        settlement.withdrawBond();
+        assertEq(searcher.balance, before, "nothing left to withdraw");
     }
 
     function test_RevertWhen_ClaimNothing() public {

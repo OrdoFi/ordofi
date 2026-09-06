@@ -177,6 +177,8 @@ contract OrdoBatch is V4Swap {
     error NotYetExpired(bytes32 orderHash);
     error DepositMismatch();
     error TransferFailed();
+    /// @notice Leg `index` declares an input the previous leg did not produce.
+    error LegMismatch(uint256 index, address produced, address declared);
     /// @notice The answer `simulate` reverts with: per token, how the contract's
     ///         balance moved after pulling every sell and running the
     ///         interactions, and how much it would owe the buyers at the
@@ -344,15 +346,31 @@ contract OrdoBatch is V4Swap {
     }
 
     function _prepareInner(Order[] calldata orders, bytes[] memory signatures, Price[] calldata prices, bool strict) private returns (Batch memory b) {
-        b.tokens = new address[](prices.length);
-        b.px = new uint256[](prices.length);
-        b.before = new uint256[](prices.length);
-        b.volume = new uint256[](prices.length);
+        // WETH is always watched, priced or not: the escrow lives in it, and an
+        // interaction on a pair without ether must still be unable to spend it.
+        bool hasWeth;
+        for (uint256 i = 0; i < prices.length; i++) {
+            address t = prices[i].token == address(0) ? address(WETH) : prices[i].token;
+            if (t == address(WETH)) hasWeth = true;
+        }
+        // Watched-only WETH goes first: no price, so no order may name it
+        // (NoPrice), zero volume so any WETH kept is above the cap, and it is
+        // the first balance checked, so a raid on the escrow is what the revert names.
+        uint256 off = hasWeth ? 0 : 1;
+        uint256 n = prices.length + off;
+        b.tokens = new address[](n);
+        b.px = new uint256[](n);
+        b.before = new uint256[](n);
+        b.volume = new uint256[](n);
+        if (!hasWeth) {
+            b.tokens[0] = address(WETH);
+            b.before[0] = WETH.balanceOf(address(this));
+        }
         for (uint256 i = 0; i < prices.length; i++) {
             if (prices[i].price == 0) revert NoPrice(prices[i].token);
-            b.tokens[i] = prices[i].token == address(0) ? address(WETH) : prices[i].token;
-            b.px[i] = prices[i].price;
-            b.before[i] = IERC20(b.tokens[i]).balanceOf(address(this));
+            b.tokens[i + off] = prices[i].token == address(0) ? address(WETH) : prices[i].token;
+            b.px[i + off] = prices[i].price;
+            b.before[i + off] = IERC20(b.tokens[i + off]).balanceOf(address(this));
         }
 
         b.buyAmounts = new uint256[](orders.length);
@@ -434,11 +452,19 @@ contract OrdoBatch is V4Swap {
     // ------------------------------------------------------------------ legs
 
     /// @dev Run legs in order, funded from this contract's balance. Same
-    ///      semantics as OrdoSwapV2: `haveNative` says whether the running
-    ///      amount is native ether.
+    ///      semantics as OrdoSwapV3: `haveNative` says whether the running
+    ///      amount is native ether, and each leg must consume exactly what the
+    ///      previous one produced — a leg that declared some other input would
+    ///      otherwise spend that much of it from the contract's own balance,
+    ///      which here is other people's escrowed ether.
     function _run(Leg[] calldata legs, uint256 amount, bool haveNative) private returns (uint256, bool) {
+        (address t0, bool n0) = _legInput(legs[0]);
+        address holding = n0 || t0 == V4Actions.NATIVE ? address(WETH) : t0;
         for (uint256 i = 0; i < legs.length; i++) {
             Leg calldata l = legs[i];
+            (address td, bool nd) = _legInput(l);
+            address declared = nd || td == V4Actions.NATIVE ? address(WETH) : td;
+            if (declared != holding) revert LegMismatch(i, holding, declared);
             if (l.venue == 0) {
                 address tokenIn = _first(l.path);
                 if (haveNative) {
@@ -464,8 +490,32 @@ contract OrdoBatch is V4Swap {
             } else {
                 revert BadLegs();
             }
+            address produced = _legOutput(l);
+            holding = produced == V4Actions.NATIVE ? address(WETH) : produced;
         }
         return (amount, haveNative);
+    }
+
+    /// @dev The asset a leg consumes: (token, isNativeEther).
+    function _legInput(Leg calldata l) private pure returns (address, bool) {
+        if (l.venue == 0) return (_first(l.path), false);
+        if (l.venue == 1) {
+            address c = l.zeroForOne ? l.key.currency0 : l.key.currency1;
+            return (c, c == V4Actions.NATIVE);
+        }
+        revert BadLegs();
+    }
+
+    /// @dev The asset a leg produces; address(0) for native ether.
+    function _legOutput(Leg calldata l) private pure returns (address) {
+        if (l.venue == 0) return _last(l.path);
+        if (l.venue == 1) return l.zeroForOne ? l.key.currency1 : l.key.currency0;
+        revert BadLegs();
+    }
+
+    function _last(bytes calldata path) private pure returns (address) {
+        if (path.length < 43 || (path.length - 20) % 23 != 0) revert BadPath();
+        return address(bytes20(path[path.length - 20:]));
     }
 
     // ----------------------------------------------------------------- admin
@@ -506,7 +556,8 @@ contract OrdoBatch is V4Swap {
 
     function _priceOf(address[] memory tokens, uint256[] memory px, address token) private pure returns (uint256) {
         for (uint256 i = 0; i < tokens.length; i++) {
-            if (tokens[i] == token) return px[i];
+            // A watched-only token (WETH with no price in this batch) is not tradable.
+            if (tokens[i] == token && px[i] != 0) return px[i];
         }
         revert NoPrice(token);
     }
