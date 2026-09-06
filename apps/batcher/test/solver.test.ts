@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import type { Hex } from "viem";
 import {
   WETH,
+  compositions,
+  single,
+  spread,
   acceptable,
   buyAmount,
   discoveryClearing,
@@ -145,4 +148,19 @@ test("discovery takes the a-side rate when there is one, the b-side otherwise", 
   const [bb] = groupByPair([b]);
   assert.deepEqual(discoveryClearing(bb, 0n, 3n * 10n ** 18n), { pA: 3000n * 10n ** 18n, pB: 3n * 10n ** 18n });
   assert.equal(discoveryClearing(bb, 0n, 0n), null, "a pool that returns nothing is not a price");
+});
+
+test("compositions enumerate every split of the grid across the routes", () => {
+
+  assert.deepEqual(compositions(1, 4n), [[4n]]);
+  assert.equal(compositions(2, 4n).length, 5, "0/4 … 4/0");
+  assert.equal(compositions(3, 4n).length, 15);
+  for (const c of compositions(3, 8n)) assert.equal(c.reduce((a, b) => a + b, 0n), 8n, "each split uses the whole amount");
+  const legs = (i: number) => [{ venue: 1, path: "0x" as const, key: { currency0: ZERO, currency1: ORDO, fee: i, tickSpacing: 1, hooks: ZERO }, zeroForOne: true }];
+  const alloc = { parts: [{ legs: legs(1), num: 3n }, { legs: legs(2), num: 0n }, { legs: legs(3), num: 1n }], den: 4n };
+  const xs = spread(1001n, alloc);
+  assert.equal(xs.length, 2, "a zero part sends nothing");
+  assert.equal(xs[0].amountIn + xs[1].amountIn, 1001n, "dust lands in the last part, nothing is lost");
+  assert.equal(xs[0].amountIn, 750n);
+  assert.deepEqual(spread(10n, single(legs(1))), [{ legs: legs(1), amountIn: 10n }]);
 });

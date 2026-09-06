@@ -181,6 +181,10 @@ export function swapHtml(opts: {
   .rows { margin-top:12px; }
   .row { display:flex; justify-content:space-between; align-items:center; padding:6px 0; font-size:12.5px; color:var(--muted); }
   .row .v { font-family:var(--mono); font-size:12px; color:var(--dim); }
+  .row .v.ok { color:var(--ok); } .row .v.warn { color:#c77700; font-weight:600; } .row .v.bad { color:var(--bad); font-weight:600; }
+  .impact-note { display:none; font-family:var(--mono); font-size:10.5px; line-height:1.55; padding:8px 10px; margin-top:6px; border:1px solid #c77700; color:#7a4a00; background:#fff3e2; }
+  .impact-note.bad { border-color:var(--bad); color:#7a1f16; background:#fde9e6; }
+  .impact-note.show { display:block; }
 
   .go { width:100%; margin-top:18px; padding:15px; font-family:var(--sans); font-size:15px; font-weight:600; background:var(--text); color:#fff; border:1px solid var(--text); cursor:pointer; position:relative; overflow:hidden; transition:background .15s, transform .08s; }
   .go:hover:not(:disabled) { background:#000; }
@@ -350,7 +354,9 @@ export function swapHtml(opts: {
     <div class="rows">
       <div class="row"><span>Rate</span><span class="v" id="rate">—</span></div>
       <div class="row"><span>Minimum received</span><span class="v" id="minout">—</span></div>
+      <div class="row"><span>Price impact</span><span class="v" id="impact">—</span></div>
       <div class="row"><span>Route</span><span class="v" id="route">—</span></div>
+      <div class="impact-note" id="impact-note"></div>
     </div>
     <div class="bnote" id="bnote" style="display:none"></div>
 
@@ -659,6 +665,7 @@ export function swapHtml(opts: {
     const recv = $("recv"); recv.textContent = "0.0"; recv.classList.add("dim"); recv.classList.remove("busy"); recv.dataset.v = "0";
     $("usd-in").textContent = ""; $("usd-out").textContent = "";
     $("rate").textContent = "—"; $("minout").textContent = "—"; $("route").textContent = "—";
+    $("impact").textContent = "—"; $("impact").className = "v"; $("impact-note").className = "impact-note";
     const m = $("mev"); m.classList.remove("yes"); $("mev-v").textContent = "—"; $("mev-note").textContent = note || "type an amount";
     paintButton();
   }
@@ -673,6 +680,21 @@ export function swapHtml(opts: {
     const minOut = (BigInt(q.amountOut) * (10000n - slippageBps)) / 10000n;
     $("minout").textContent = fmt(units(minOut, tokOut.decimals)) + " " + tokOut.symbol;
     $("route").textContent = routeLabel(q.route) + (q.reclaim ? " + back-run" : "") + (q.routeFeeBps ? " · " + q.routeFeeBps / 100 + "% routing fee" : "");
+    // The number a buyer should see before pressing buy. Green under 1%, plain
+    // to 5%, orange to 15%, red beyond — with words, because "38%" alone did
+    // not stop the trade that started all this.
+    const imp = $("impact"), impNote = $("impact-note");
+    if (q.priceImpactBps == null) { imp.textContent = "—"; imp.className = "v"; impNote.className = "impact-note"; }
+    else {
+      const pct = q.priceImpactBps / 100;
+      imp.textContent = (pct < 0.01 ? "<0.01" : pct.toFixed(pct < 1 ? 2 : 1)) + "%";
+      imp.className = "v " + (pct < 1 ? "ok" : pct < 5 ? "" : pct < 15 ? "warn" : "bad");
+      if (pct >= 5) {
+        impNote.className = "impact-note show" + (pct >= 15 ? " bad" : "");
+        impNote.innerHTML = "This size moves the pool <b>" + pct.toFixed(1) + "%</b>. That is not a fee anyone takes — it is what you lose to the pool's thinness, and someone selling right after you gets it. " +
+          (mode === "batch" ? "In Batch mode, any part of your order that meets a seller in the same window pays none of it." : "A smaller amount, or Batch mode if others are trading this token, pays less of it.");
+      } else impNote.className = "impact-note";
+    }
     const m = $("mev");
     if (q.reclaim) {
       const eth = units(q.reclaim.surplusToUser, 18);

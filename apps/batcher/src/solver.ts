@@ -177,12 +177,52 @@ export function nettedA(batch: PairBatch, c: Clearing): bigint {
   return SA < owedA ? SA : owedA;
 }
 
-/** Interactions that turn the residual into the token in demand. */
-export function interactionsFor(res: { a: bigint; b: bigint }, routeAtoB: Leg[] | null, routeBtoA: Leg[] | null): Interaction[] {
+/**
+ * How one side's residual is spread across routes: `num[i]/den` of it goes
+ * down route i. One route is `{ parts: [{legs, num: 1}], den: 1 }`. Splitting
+ * across pools is the second of the only two things that lower impact on a
+ * one-sided order (the first is a counterparty): each pool takes a smaller
+ * bite, and the marginal prices equalise instead of one pool eating it all.
+ */
+export interface Allocation {
+  parts: { legs: Leg[]; num: bigint }[];
+  den: bigint;
+}
+
+export function single(legs: Leg[]): Allocation {
+  return { parts: [{ legs, num: 1n }], den: 1n };
+}
+
+/** `amount` spread as the allocation says; rounding dust goes to the last part. */
+export function spread(amount: bigint, alloc: Allocation): Interaction[] {
+  const parts = alloc.parts.filter((p) => p.num > 0n);
   const xs: Interaction[] = [];
-  if (res.a > 0n && routeAtoB) xs.push({ legs: routeAtoB, amountIn: res.a });
-  if (res.b > 0n && routeBtoA) xs.push({ legs: routeBtoA, amountIn: res.b });
+  let used = 0n;
+  parts.forEach((p, i) => {
+    const amt = i === parts.length - 1 ? amount - used : (amount * p.num) / alloc.den;
+    used += amt;
+    if (amt > 0n) xs.push({ legs: p.legs, amountIn: amt });
+  });
   return xs;
+}
+
+/** Interactions that turn the residual into the token in demand. */
+export function interactionsFor(res: { a: bigint; b: bigint }, routeAtoB: Allocation | null, routeBtoA: Allocation | null): Interaction[] {
+  const xs: Interaction[] = [];
+  if (res.a > 0n && routeAtoB) xs.push(...spread(res.a, routeAtoB));
+  if (res.b > 0n && routeBtoA) xs.push(...spread(res.b, routeBtoA));
+  return xs;
+}
+
+/**
+ * Every way to split `den` units across `n` routes (compositions with zeros),
+ * so a grid of candidate allocations can be simulated in one parallel round.
+ */
+export function compositions(n: number, den: bigint): bigint[][] {
+  if (n === 1) return [[den]];
+  const out: bigint[][] = [];
+  for (let first = 0n; first <= den; first++) for (const rest of compositions(n - 1, den - first)) out.push([first, ...rest]);
+  return out;
 }
 
 /**

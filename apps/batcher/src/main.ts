@@ -25,6 +25,7 @@ import {
   acceptable,
   asToken,
   buyAmount,
+  compositions,
   discoveryClearing,
   groupByPair,
   interactionsFor,
@@ -34,8 +35,10 @@ import {
   nextClearing,
   prices,
   residual,
+  spread,
   sum,
   without,
+  type Allocation,
   type Clearing,
   type PairBatch,
 } from "./solver.js";
@@ -222,21 +225,65 @@ async function routesFor(a: Hex, b: Hex): Promise<Route[]> {
 
 const allOrders = (b: PairBatch): Order[] => [...b.sellA, ...b.sellB];
 
-/** Send one whole side to the AMM on each route; keep the route that gives most. */
-async function bestRoute(batch: PairBatch, routes: Route[], sideA: boolean): Promise<{ legs: Leg[]; out: bigint } | null> {
+/**
+ * How to send one whole side to the AMM: the split across the top routes that
+ * returns the most. Every candidate split is one `simulate`, all fired
+ * together; a first pass on quarters, a second on eighths around the winner.
+ * A single route is just the split that puts everything on it.
+ */
+async function bestRoute(batch: PairBatch, routes: Route[], sideA: boolean): Promise<{ alloc: Allocation; out: bigint; singleOut: bigint } | null> {
   const amount = sum((sideA ? batch.sellA : batch.sellB).map((o) => o.sellAmount));
   if (amount === 0n || routes.length === 0) return null;
   const dummy = prices(batch, { pA: 1n, pB: 1n });
   const want = sideA ? batch.b : batch.a;
-  const tries = await Promise.all(
-    routes.slice(0, 3).map(async (r) => {
-      const sim = await chain.simulate(allOrders(batch), dummy, [{ legs: r.legs as Leg[], amountIn: amount }]);
-      if ("error" in sim) return null;
-      const i = sim.tokens.findIndex((t) => t === want);
-      return i < 0 ? null : { legs: r.legs as Leg[], out: sim.delta[i] };
-    }),
-  );
-  return tries.filter((t): t is { legs: Leg[]; out: bigint } => !!t && t.out > 0n).sort((x, y) => (y.out > x.out ? 1 : y.out < x.out ? -1 : 0))[0] ?? null;
+  const top = routes.slice(0, 3).map((r) => r.legs as Leg[]);
+
+  const outOf = async (alloc: Allocation): Promise<bigint> => {
+    const xs = spread(amount, alloc);
+    if (xs.length === 0) return 0n;
+    const sim = await chain.simulate(allOrders(batch), dummy, xs);
+    if ("error" in sim) return 0n;
+    const i = sim.tokens.findIndex((t) => t === want);
+    return i < 0 ? 0n : sim.delta[i];
+  };
+  const evaluate = async (den: bigint, grid: bigint[][]): Promise<{ alloc: Allocation; out: bigint } | null> => {
+    const cands = grid.map((nums) => ({ parts: top.map((legs, i) => ({ legs, num: nums[i] ?? 0n })), den }));
+    const outs = await Promise.all(cands.map(outOf));
+    let best: { alloc: Allocation; out: bigint } | null = null;
+    outs.forEach((out, i) => {
+      if (out > 0n && (!best || out > best.out)) best = { alloc: cands[i], out };
+    });
+    return best;
+  };
+
+  // Pass 1: quarters. With three routes that is 15 simulations; with one, 1.
+  const grid = compositions(top.length, 4n);
+  const first = await evaluate(4n, grid);
+  if (!first) return null;
+  // What a plain swap would get: the best single route. The page shows the
+  // fill against this, so a split that helped shows up as the gain it is.
+  let singleOut = 0n;
+  for (const nums of grid) {
+    if (nums.filter((n) => n > 0n).length !== 1) continue;
+    const out = await outOf({ parts: top.map((legs, i) => ({ legs, num: nums[i] })), den: 4n });
+    if (out > singleOut) singleOut = out;
+  }
+  if (top.length === 1) return { ...first, singleOut };
+  // Pass 2: eighths, only the neighbours of the winner (each part ±1/8).
+  const centre = first.alloc.parts.map((p) => p.num * 2n);
+  const seen = new Set<string>();
+  const near: bigint[][] = [];
+  for (const nums of compositions(top.length, 8n)) {
+    if (nums.every((n, i) => (n > centre[i] ? n - centre[i] : centre[i] - n) <= 1n)) {
+      const k = nums.join(",");
+      if (!seen.has(k)) {
+        seen.add(k);
+        near.push(nums);
+      }
+    }
+  }
+  const second = await evaluate(8n, near);
+  return { ...(second && second.out > first.out ? second : first), singleOut };
 }
 
 async function solve(initial: PairBatch): Promise<Solved | { error: string; dropped: { order: Order; reason: string }[] }> {
@@ -259,7 +306,7 @@ async function solve(initial: PairBatch): Promise<Solved | { error: string; drop
       // The sides changed; the AMM guess for what is left is still the same rate.
     }
     const res = residual(batch, c);
-    interactions = interactionsFor(res, ab?.legs ?? null, ba?.legs ?? null);
+    interactions = interactionsFor(res, ab?.alloc ?? null, ba?.alloc ?? null);
     if ((res.a > 0n && !ab) || (res.b > 0n && !ba)) return { error: "residual has no route", dropped };
     const s = await chain.simulate(allOrders(batch), prices(batch, c), interactions);
     if ("error" in s) return { error: `simulate: ${s.error}`, dropped };
@@ -284,7 +331,7 @@ async function solve(initial: PairBatch): Promise<Solved | { error: string; drop
   if (!finalCheck.ok) return { error: `did not converge: ${finalCheck.why}`, dropped };
   const fails = limitFailures(batch, c);
   if (fails.length) return { error: "limits moved after convergence", dropped: [...dropped, ...fails.map((o) => ({ order: o, reason: "limit not met" }))] };
-  return { batch, clearing: c, interactions, sim, dropped, aloneB: ab?.out ?? 0n, aloneA: ba?.out ?? 0n };
+  return { batch, clearing: c, interactions, sim, dropped, aloneB: ab?.singleOut ?? 0n, aloneA: ba?.singleOut ?? 0n };
 }
 
 // --------------------------------------------------------------- settlement

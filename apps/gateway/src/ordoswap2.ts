@@ -134,6 +134,13 @@ export interface SwapQuote {
   route: Hop[];
   /** Routing fee in bps of output, 0 on the live contract until set. */
   routeFeeBps?: number;
+  /**
+   * How far below the route's marginal (spot) rate this size fills, in bps —
+   * the price the order itself moves, plus the pool fee. Null when the probe
+   * could not be priced. This is the number a buyer should see before pressing
+   * buy; a 38% here is what a "$500 buy that came back as $468" looks like.
+   */
+  priceImpactBps: number | null;
   reclaim: null | {
     route: Hop[];
     amountIn: Hex;
@@ -493,7 +500,8 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
     }
   }
   if (!best) throw new RpcError(-32000, "ordo_quoteSwap: no route returns anything for this amount");
-  const chosen: { route: Route; out: bigint } = best;
+  const chosen: { route: Route; out: bigint; impactBps: number | null } = { ...best, impactBps: null };
+  chosen.impactBps = await priceImpact(rpc, ordoSwap, chosen.route, req.amountIn, chosen.out, etherIn ? (deps.valueSource ?? WETH) : null, routeFeeBps);
 
   // ---- the back-run: only for a single hop against ether ----
   const single = chosen.route.pools.length === 1;
@@ -548,6 +556,7 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
     gas: hex(SWAP_GAS_BASE + SWAP_GAS_PER_LEG * BigInt(chosen.route.legs.length) + reclaim.gasUnits + 60_000n),
     amountOut: hex(chosen.out),
     route: chosen.route.hops,
+    priceImpactBps: chosen.impactBps,
     reclaim: {
       route: reclaim.route.hops,
       amountIn: hex(reclaim.amountIn),
@@ -560,7 +569,7 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   };
 }
 
-function plain(req: SwapRequest, ordoSwap: Hex, chosen: { route: Route; out: bigint }, note: string, routeFeeBps = 0n): SwapQuote {
+function plain(req: SwapRequest, ordoSwap: Hex, chosen: { route: Route; out: bigint; impactBps?: number | null }, note: string, routeFeeBps = 0n): SwapQuote {
   const etherIn = isEther(req.tokenIn);
   return {
     to: ordoSwap,
@@ -569,10 +578,33 @@ function plain(req: SwapRequest, ordoSwap: Hex, chosen: { route: Route; out: big
     gas: hex(SWAP_GAS_BASE + SWAP_GAS_PER_LEG * BigInt(chosen.route.legs.length) + 40_000n),
     amountOut: hex(chosen.out),
     route: chosen.route.hops,
+    priceImpactBps: chosen.impactBps ?? null,
     reclaim: null,
     routeFeeBps: Number(routeFeeBps),
     note,
   };
+}
+
+/**
+ * Price impact of `amountIn` on `route`: the route is quoted again at a probe
+ * a thousandth of the size, which is as close to the marginal rate as a real
+ * quote gets, and the fill's rate is compared with it. Includes the pool fee,
+ * because that is also money the buyer does not get back; excludes our route
+ * fee, which is reported separately. Null when the probe cannot be priced.
+ */
+export async function priceImpact(rpc: Rpc, ordoSwap: Hex, route: Route, amountIn: bigint, out: bigint, valueFrom: Hex | null, routeFeeBps: bigint): Promise<number | null> {
+  if (out <= 0n || amountIn <= 0n) return null;
+  const probe = amountIn / 1000n > 0n ? amountIn / 1000n : 1n;
+  const q = await quoteCall(rpc, ordoSwap, route.legs, probe, NO_RECLAIM, valueFrom).catch(() => null);
+  if (!q || q.amountOut <= 0n) return null;
+  // Compare gross to gross: `out` may already be net of the route fee.
+  const gross = routeFeeBps > 0n ? (out * 10_000n) / (10_000n - routeFeeBps) : out;
+  // rate = out / in; impact = 1 - fillRate / spotRate, in bps.
+  const fill = gross * probe; // scaled by probe*amountIn below
+  const spot = q.amountOut * amountIn;
+  if (spot === 0n) return null;
+  const bps = 10_000n - (fill * 10_000n) / spot;
+  return Number(bps < 0n ? 0n : bps);
 }
 
 // --------------------------------------------------------------- helpers
