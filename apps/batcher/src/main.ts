@@ -19,6 +19,7 @@ import { rpcFetch } from "@ordofi/core";
 import { OrdoStore } from "@ordofi/store";
 import { candidateRoutes, type Route, type V4Source } from "../../gateway/src/ordoswap2.js";
 import { Chain } from "./chain.js";
+import { batchHtml } from "./page.js";
 import {
   ZERO,
   acceptable,
@@ -438,6 +439,9 @@ async function tick(): Promise<void> {
 
 // ------------------------------------------------------------------- http
 
+// Rendered once; the numbers on it come from this host's own endpoints.
+let PAGE = "";
+
 const server = createServer((req, res) => {
   const url = (req.url ?? "/").split("?")[0];
   const send = (code: number, body: unknown) => {
@@ -445,6 +449,11 @@ const server = createServer((req, res) => {
     res.end(json(body));
   };
   if (req.method === "OPTIONS") return send(204, {});
+  if (req.method === "GET" && url === "/") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" });
+    res.end(PAGE);
+    return;
+  }
   if (req.method === "GET" && url === "/health") return send(200, { status: "ok", batch: BATCH, solver: chain.account.address, windowMs: WINDOW_MS, feeBps: FEE_BPS, pending: [...orders.values()].filter((p) => p.status.state === "pending").length, sendPausedMs: Math.max(0, sendPausedUntil - Date.now()), stats });
   if (req.method === "GET" && url === "/stats") return send(200, { stats, windowMs: WINDOW_MS, feeBps: FEE_BPS, maxFeeBps, batch: BATCH, solver: chain.account.address });
   if (req.method === "GET" && url === "/batches") return send(200, { batches: recentBatches.slice(0, 50) });
@@ -477,6 +486,16 @@ const server = createServer((req, res) => {
     console.warn(`batcher | could not read maxFeeBps (${(e as Error).message}); assuming ${maxFeeBps}`);
   }
   const bal = await chain.balance().catch(() => 0n);
+  PAGE = batchHtml({
+    contract: BATCH,
+    explorer: "https://robinhoodchain.blockscout.com",
+    rpc: "https://rpc.ordofi.network",
+    app: "https://app.ordofi.network",
+    docs: "https://app.ordofi.network/docs",
+    windowMs: WINDOW_MS,
+    feeBps: Number(FEE_BPS),
+    maxFeeBps: Number(maxFeeBps),
+  });
   server.listen(PORT, () => {
     console.log(`Ordo Batch | listening on :${PORT} | contract ${BATCH} | solver ${chain.account.address} (${Number(bal) / 1e18} ETH for gas)`);
     console.log(`Ordo Batch | window ${WINDOW_MS}ms · fee ${FEE_BPS} bps of the clearing amount (cap ${maxFeeBps} bps on-chain) · V4 routes ${v4 ? "on" : "off"}`);
