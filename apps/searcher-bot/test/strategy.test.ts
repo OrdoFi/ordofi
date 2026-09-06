@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseEther, type Hex } from "viem";
-import { CycleCache, bidFor, evaluate, pickBest, sizeLadder, type StrategyConfig } from "../src/strategy.ts";
+import { CycleCache, bidFor, evaluate, isBiddableHint, pickBest, sizeLadder, type StrategyConfig } from "../src/strategy.ts";
 
 const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73" as Hex;
 const TOKEN = "0x1111111111111111111111111111111111111111" as Hex;
@@ -22,6 +22,18 @@ const cfg = (over: Partial<StrategyConfig> = {}): StrategyConfig => ({
 });
 
 const cycle = { label: "t 500/3000", tokens: [WETH, TOKEN, WETH] as Hex[], fees: [500, 3000] };
+
+test("a V4-only hint is still biddable — the PoolManager address is not a V3 pool", () => {
+  assert.equal(isBiddableHint({ poolsTouched: [], swaps: [] }), false);
+  assert.equal(isBiddableHint({ poolsTouched: ["0xpool"], swaps: [] }), true);
+  assert.equal(
+    isBiddableHint({
+      poolsTouched: [],
+      swaps: [{ kind: "univ4", key: { currency0: WETH, currency1: TOKEN, fee: 3000, tickSpacing: 60, hooks: WETH } }],
+    }),
+    true,
+  );
+});
 
 test("a round trip that does not clear gas is not bid on", () => {
   // 0.00015 ETH of edge against 0.0002 ETH of gas is a loss, however tempting.

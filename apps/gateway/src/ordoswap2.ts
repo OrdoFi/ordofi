@@ -33,6 +33,7 @@ export const ORDO_SWAP2_ABI = parseAbi([
   "function quoteReclaim(Reclaim reclaim)",
   "function float() view returns (uint256)",
   "function protocolBps() view returns (uint16)",
+  "function routeFeeBps() view returns (uint16)",
   "error QuoteResult(uint256 amountOut, uint256 reclaimProfit, bytes reclaimFailure)",
 ]);
 const FACTORY_ABI = parseAbi(["function getPool(address, address, uint24) view returns (address)"]);
@@ -131,6 +132,8 @@ export interface SwapQuote {
   gas: Hex;
   amountOut: Hex;
   route: Hop[];
+  /** Routing fee in bps of output, 0 on the live contract until set. */
+  routeFeeBps?: number;
   reclaim: null | {
     route: Hop[];
     amountIn: Hex;
@@ -440,23 +443,31 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   const etherIn = tokenIn === WETH;
   if (!etherIn && !req.from) throw new RpcError(-32602, "ordo_quoteSwap: token-in swaps need `from` (the sender) to simulate");
 
-  const [routes, floatHex, bpsHex, gasPriceHex] = await Promise.all([
+  const [routes, floatHex, bpsHex, routeFeeHex, gasPriceHex] = await Promise.all([
     candidateRoutes(rpc, v4, tokenIn, tokenOut),
     brief(`float:${ordoSwap}`, () => rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP2_ABI, functionName: "float" }) }, "latest"])),
     brief(`bps:${ordoSwap}`, () => rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP2_ABI, functionName: "protocolBps" }) }, "latest"])),
+    brief(`rf:${ordoSwap}`, () =>
+      rpc("eth_call", [{ to: ordoSwap, data: encodeFunctionData({ abi: ORDO_SWAP2_ABI, functionName: "routeFeeBps" }) }, "latest"]).catch(() => "0x0"),
+    ),
     brief("gasPrice", () => rpc("eth_gasPrice", [])),
   ]);
   if (routes.length === 0) throw new RpcError(-32000, "ordo_quoteSwap: no route — this pair has no Uniswap V3 or V4 pool, directly or through ETH or USDG");
   const float = BigInt(floatHex as string);
   const protocolBps = BigInt(bpsHex as string);
+  const routeFeeBps = BigInt((routeFeeHex as string) || "0x0");
   const gasPrice = BigInt(gasPriceHex as string);
   const sym = (a: Hex) => (a === WETH ? "ETH" : a === USDG ? "USDG" : a === tokenIn ? "in" : a === tokenOut ? "out" : a.slice(0, 6));
 
   // ---- the route: price every candidate, keep the best ----
+  // quote() is the gross output; swap() already returns net of routeFeeBps.
+  // Only net a number that came from quote(), or the fee is taken twice.
+  const net = (out: bigint, fromQuote: boolean) =>
+    fromQuote && routeFeeBps > 0n ? out - (out * routeFeeBps) / 10_000n : out;
   let best: { route: Route; out: bigint } | null = null;
   if (etherIn) {
     const priced = await Promise.all(routes.map(async (route) => ({ route, q: await quoteCall(rpc, ordoSwap, route.legs, req.amountIn, NO_RECLAIM, deps.valueSource ?? WETH) })));
-    for (const p of priced) if (p.q && p.q.amountOut > 0n && (!best || p.q.amountOut > best.out)) best = { route: p.route, out: p.q.amountOut };
+    for (const p of priced) if (p.q && p.q.amountOut > 0n && (!best || p.q.amountOut > best.out)) best = { route: p.route, out: net(p.q.amountOut, true) };
   } else {
     // Token in: the contract holds none of it, so each route is simulated from
     // the sender — one simulation per route, because blocks inside one
@@ -474,7 +485,10 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
       // The sender cannot make this swap right now (no balance or approval yet). Price it from the contract's side for display.
       const priced = await Promise.all(routes.map(async (route) => ({ route, q: await quoteCall(rpc, ordoSwap, route.legs, req.amountIn, NO_RECLAIM, null) })));
       for (const p of priced) if (p.q && p.q.amountOut > 0n && (!best || p.q.amountOut > best.out)) best = { route: p.route, out: p.q.amountOut };
-      if (best) return plain(req, ordoSwap, best, "connect a wallet that holds the token and has approved the contract to see what would come back");
+      if (best) {
+        best.out = net(best.out, true);
+        return plain(req, ordoSwap, best, "connect a wallet that holds the token and has approved the contract to see what would come back", routeFeeBps);
+      }
       throw new RpcError(-32000, "ordo_quoteSwap: the swap cannot be priced — no route returns anything for this amount");
     }
   }
@@ -484,9 +498,9 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   // ---- the back-run: only for a single hop against ether ----
   const single = chosen.route.pools.length === 1;
   const etherOut = tokenOut === WETH;
-  if (req.skipReclaim) return plain(req, ordoSwap, chosen, "price only; the back-run search was not run");
+  if (req.skipReclaim) return plain(req, ordoSwap, chosen, "price only; the back-run search was not run", routeFeeBps);
   if (!single || (!etherIn && !etherOut)) {
-    return plain(req, ordoSwap, chosen, single ? "back-run search covers single-hop swaps against ETH (v1)" : `back-run search covers single-hop swaps; this one routes through ${chosen.route.hops[0].tokenOut === USDG ? "USDG" : "ETH"}`);
+    return plain(req, ordoSwap, chosen, single ? "back-run search covers single-hop swaps against ETH (v1)" : `back-run search covers single-hop swaps; this one routes through ${chosen.route.hops[0].tokenOut === USDG ? "USDG" : "ETH"}`, routeFeeBps);
   }
   const token = etherIn ? tokenOut : tokenIn;
   const [etherPools, usdgPools, etherUsdgPools] = await Promise.all([poolsFor(rpc, v4, WETH, token), token === USDG ? [] : poolsFor(rpc, v4, USDG, token), poolsFor(rpc, v4, WETH, USDG)]);
@@ -494,7 +508,7 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   const candidates = reclaimCandidates(chosen.route.pools[0], token, etherIn, etherPools, usdgPools, etherUsdg).slice(0, MAX_RECLAIM_CANDIDATES);
   const sizes = sizeLadder(float, req.amountIn);
   if (candidates.length === 0 || sizes.length === 0) {
-    return plain(req, ordoSwap, chosen, candidates.length === 0 ? "this token has one market; a swap on it opens no cross-market gap" : "reclaim float is empty");
+    return plain(req, ordoSwap, chosen, candidates.length === 0 ? "this token has one market; a swap on it opens no cross-market gap" : "reclaim float is empty", routeFeeBps);
   }
   const tries = candidates.flatMap((route) => sizes.map((size) => ({ route, size })));
   const results: { route: Route; size: bigint; profit: bigint }[] = [];
@@ -523,7 +537,7 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
   const reclaim = chooseReclaim(results, gasPrice, protocolBps);
   if (!reclaim) {
     const bestP = results.reduce((m, r) => (r.profit > m ? r.profit : m), 0n);
-    return plain(req, ordoSwap, chosen, bestP > 0n ? "the gap this swap opens does not cover the gas of closing it" : "this swap opens no cross-market gap");
+    return plain(req, ordoSwap, chosen, bestP > 0n ? "the gap this swap opens does not cover the gas of closing it" : "this swap opens no cross-market gap", routeFeeBps);
   }
   const surplusToUser = (reclaim.profit * (10_000n - protocolBps)) / 10_000n;
   const r = { legs: reclaim.route.legs, amountIn: reclaim.amountIn, minProfit: reclaim.minProfit, gas: reclaim.gasUnits };
@@ -542,10 +556,11 @@ export async function quoteSwap(req: SwapRequest, deps: QuoteDeps): Promise<Swap
       surplusToUser: hex(surplusToUser),
       label: label(reclaim.route.hops, sym),
     },
+    routeFeeBps: Number(routeFeeBps),
   };
 }
 
-function plain(req: SwapRequest, ordoSwap: Hex, chosen: { route: Route; out: bigint }, note: string): SwapQuote {
+function plain(req: SwapRequest, ordoSwap: Hex, chosen: { route: Route; out: bigint }, note: string, routeFeeBps = 0n): SwapQuote {
   const etherIn = isEther(req.tokenIn);
   return {
     to: ordoSwap,
@@ -555,6 +570,7 @@ function plain(req: SwapRequest, ordoSwap: Hex, chosen: { route: Route; out: big
     amountOut: hex(chosen.out),
     route: chosen.route.hops,
     reclaim: null,
+    routeFeeBps: Number(routeFeeBps),
     note,
   };
 }

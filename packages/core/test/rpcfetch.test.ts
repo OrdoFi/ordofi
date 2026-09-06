@@ -115,35 +115,46 @@ test("a host without the history fails over to one that keeps it", async () => {
   assert.deepEqual(calls, [A, B], "a retention policy is not an answer about the chain");
 });
 
-test("sendRawTransaction: the sequencer's own answer is final, transport failure falls back visibly", async () => {
-  const { sendRawTransaction } = await import("../src/index.ts");
+test("sendRawTransaction: stays on the private path — never a public relay", async () => {
+  const { sendRawTransaction, isPublicRelay, privateSendUrls } = await import("../src/index.ts");
+  assert.equal(isPublicRelay("https://robinhood-rpc.publicnode.com"), true);
+  assert.equal(isPublicRelay("http://nitro:8547"), false);
+  assert.equal(isPublicRelay("https://rpc.mainnet.chain.robinhood.com"), false);
+
   const realFetch = globalThis.fetch;
   const calls: string[] = [];
+  process.env.ORDO_RPC_URL = "http://nitro.test:8547";
   process.env.ORDO_SEQUENCER_URL = "https://sequencer.test";
-  process.env.ORDO_RPC_URLS = "https://provider-a.test,https://provider-b.test";
+  process.env.ORDO_RPC_URLS = "https://robinhood-rpc.publicnode.com,https://provider-b.test";
   try {
-    // 1. sequencer answers with a real RPC error → thrown as-is, no fallback
+    assert.deepEqual(privateSendUrls(), [
+      "http://nitro.test:8547",
+      "https://sequencer.test",
+      "https://rpc.mainnet.chain.robinhood.com",
+    ]);
+
     globalThis.fetch = (async (url: any) => {
       calls.push(String(url));
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "nonce too low" } }));
     }) as any;
     await assert.rejects(sendRawTransaction("0x01"), /nonce too low/);
-    assert.deepEqual(calls, ["https://sequencer.test"], "a definitive answer never reaches a third party");
+    assert.deepEqual(calls, ["http://nitro.test:8547"], "a definitive answer never reaches anyone else");
 
-    // 2. sequencer unreachable → fallback to the provider list, and the caller is told
     calls.length = 0;
     let fallbackReason = "";
     globalThis.fetch = (async (url: any) => {
       calls.push(String(url));
-      if (String(url).includes("sequencer")) return new Response("<html>cloudflare</html>", { status: 403 });
+      if (String(url).includes("nitro")) return new Response("<html>cloudflare</html>", { status: 403 });
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0xhash" }));
     }) as any;
     const hash = await sendRawTransaction("0x01", { onFallback: (r) => (fallbackReason = r) });
     assert.equal(hash, "0xhash");
     assert.match(fallbackReason, /403/);
-    assert.equal(calls[0], "https://sequencer.test");
+    assert.deepEqual(calls, ["http://nitro.test:8547", "https://sequencer.test"]);
+    assert.ok(!calls.some((u) => u.includes("publicnode")), "public relays are not a send fallback");
   } finally {
     globalThis.fetch = realFetch;
+    delete process.env.ORDO_RPC_URL;
     delete process.env.ORDO_SEQUENCER_URL;
     delete process.env.ORDO_RPC_URLS;
   }

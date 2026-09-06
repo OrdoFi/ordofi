@@ -24,7 +24,7 @@ export function landingHtml(opts: {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>rpc.ordofi.network — OrdoFi protected RPC for Robinhood Chain</title>
-<meta name="description" content="A drop-in, MEV-protected JSON-RPC endpoint for Robinhood Chain (chain id ${chainId}). Every transaction is simulated before it ships and delivered privately to the sequencer." />
+<meta name="description" content="Private Send is default on Ordo RPC. Every signed transaction is routed through our private execution path before reaching the Robinhood Chain sequencer. No toggle. Same URL." />
 <link rel="icon" type="image/png" sizes="32x32" href="${app}/favicon-32.png" />
 <link rel="apple-touch-icon" href="${app}/apple-touch-icon.png" />
 <link href="https://fonts.googleapis.com/css2?family=Funnel+Display:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
@@ -96,8 +96,8 @@ export function landingHtml(opts: {
 
 <header><div class="wrap">
   <div class="eyebrow">rpc.ordofi.network · chain ${chainId}</div>
-  <h1>The <em>protected</em> RPC for Robinhood Chain.</h1>
-  <p class="sub">A drop-in JSON-RPC endpoint. Point any wallet at it and every transaction is simulated before it ships, delivered privately to the sequencer, and, with a rebate key, run through OrdoFi's backrun auction so the value it creates flows back to you.</p>
+  <h1>Private Send is now <em>default</em>.</h1>
+  <p class="sub">Every signed transaction is routed through our private execution path before reaching the sequencer. No toggle. No separate API. Just use rpc.ordofi.network.</p>
   <div class="cta">
     <button class="btn" id="add">Add to wallet</button>
     <a class="btn ghost" href="${docs}#gateway">Read the gateway docs</a>
@@ -124,7 +124,7 @@ export function landingHtml(opts: {
   <h2>What happens to a transaction here</h2>
   <div class="grid3">
     <div><div class="n">01</div><h4>Simulated first</h4><p>Every <code>eth_sendRawTransaction</code> is executed from the recovered sender against the current state before it is forwarded. If it would revert, it is rejected with code <code>-32000</code> and never reaches the sequencer, so you do not pay gas for a guaranteed failure. If it would succeed but pay ETH or tokens to an address nobody controls — a precompile, the zero or dead address, the classic <code>unwrapWETH9(…, address(1))</code> mistake — it is rejected the same way, whichever app built the calldata. And if it would hand an <em>unlimited token allowance to a plain wallet rather than a contract</em> — the signature every approval drain has, and the one a warning screen never stops, because nothing moves at the time — it is rejected too. Resend through <code>ordo_sendRawTransaction</code> with <code>{ "allowUnlimitedApproval": true }</code> if you meant it.</p></div>
-    <div><div class="n">02</div><h4>Delivered privately</h4><p>Robinhood Chain has no public mempool, but a public RPC still sees your intent before the sequencer does. Through OrdoFi it is held and handed straight to the sequencer, with nothing broadcast on the way.</p></div>
+    <div><div class="n">02</div><h4>Private Send</h4><p>Transactions never touch a public mempool before execution. No toggle. No separate endpoint. No wallet extension. If your wallet uses Ordo RPC, private delivery is the default — <code>eth_sendRawTransaction</code> is automatically private.</p></div>
     <div><div class="n">03</div><h4>Backrun pays you</h4><p>With a key that carries a rebate address, transactions that move a pool go through a sealed-bid, second-price auction for the right to rebalance it. The clearing price is charged on-chain and 90% comes back as rebates.</p></div>
   </div>
 </div></section>
@@ -140,22 +140,23 @@ export function landingHtml(opts: {
       <tr><th>Chain ID</th><td>${chainId} <span style="color:var(--muted)">(${chainIdHex})</span></td></tr>
       <tr><th>Currency</th><td>ETH</td></tr>
       <tr><th>Block explorer</th><td>${explorer.replace(/^https?:\/\//, "")}</td></tr>
+      <tr><th>Send path</th><td>Private Send · our node → sequencer · never a public relay</td></tr>
       <tr><th>Auth</th><td>none for wallets · <code>x-api-key</code> for auction routing &amp; bundles</td></tr>
       <tr><th>Rate limit</th><td>${anonRateLimit.toLocaleString("en-US")} upstream reads/min per IP anonymous · per key otherwise</td></tr>
     </table>
   </div>
   <div>
     <h2>From code</h2>
-    <p class="lede">Standard <code>eth_*</code> methods pass through. OrdoFi adds <code>ordo_simulate</code>, <code>ordo_sendPrivateTransaction</code>, <code>ordo_sendBundle</code>, <code>ordo_bundlerInfo</code> and <code>ordo_quoteSwap</code> — a swap whose back-run runs inside the same transaction and pays the surplus to the user.</p>
-<pre><span class="c"># dry-run a signed transaction, no key needed</span>
+    <p class="lede"><code>eth_sendRawTransaction</code> → automatically private. Standard <code>eth_*</code> methods pass through. OrdoFi adds <code>ordo_simulate</code>, <code>ordo_sendPrivateTransaction</code>, <code>ordo_sendBundle</code>, <code>ordo_bundlerInfo</code> and <code>ordo_quoteSwap</code>.</p>
+<pre><span class="c"># Private Send — same method every wallet already calls</span>
 curl https://rpc.ordofi.network <span class="k">\\</span>
   -H <span class="s">'content-type: application/json'</span> <span class="k">\\</span>
-  -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"ordo_simulate","params":["0x02f8…"]}'</span>
+  -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":["0x02f8…"]}'</span>
 
-<span class="c"># route order flow through the auction with your key</span>
+<span class="c"># dry-run first, no key needed</span>
 curl https://rpc.ordofi.network <span class="k">\\</span>
-  -H <span class="s">'x-api-key: ordo_…'</span> -H <span class="s">'content-type: application/json'</span> <span class="k">\\</span>
-  -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":["0x02f8…"]}'</span></pre>
+  -H <span class="s">'content-type: application/json'</span> <span class="k">\\</span>
+  -d <span class="s">'{"jsonrpc":"2.0","id":1,"method":"ordo_simulate","params":["0x02f8…"]}'</span></pre>
 ${
       ws
         ? `    <p class="lede" style="margin-top:18px">The chain's own RPC is HTTP only, so anything watching it has to poll — at one block every 100 ms that is a lot of asking for an answer that has not changed. <code>wss://rpc.ordofi.network</code> answers <code>eth_subscribe</code> for <code>newHeads</code> and <code>logs</code>, and carries ordinary calls on the same socket. No key. <a href="/live" style="color:var(--accent)">Watch it →</a></p>

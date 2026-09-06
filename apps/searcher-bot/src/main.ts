@@ -6,7 +6,7 @@ import { ROUTER } from "@ordofi/core/router";
 import { OrdoSearcher } from "@ordofi/sdk";
 import type { SwapHint } from "@ordofi/core/simulate";
 import { NATIVE, cycleCalldata, otherSide, type PoolKey } from "@ordofi/core/ordoswap";
-import { CycleCache, bidFor, evaluate, type Sized, type StrategyConfig } from "./strategy.js";
+import { CycleCache, bidFor, evaluate, isBiddableHint, type Sized, type StrategyConfig } from "./strategy.js";
 import { cyclesForV4, priceCycles, v3TiersFor, type CrossCycle, type Priced } from "./venues.js";
 
 /**
@@ -345,7 +345,7 @@ const searcher = new OrdoSearcher({
     // Everything here happens inside the bid window, so the only network calls
     // are quotes; the pool's pair and its fee tiers were looked up the first
     // time this pool appeared and are remembered.
-    if (opp.hint.poolsTouched.length === 0) return null;
+    if (!isBiddableHint(opp.hint)) return null;
     const started = Date.now();
 
     // Both shapes, priced against the same clock: V3 cross-tier out of the

@@ -14,6 +14,7 @@
   <style>
     .portal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
     @media (max-width: 860px) { .portal-grid { grid-template-columns: 1fr; } }
+    @media (min-width: 1100px) { .portal-grid { grid-template-columns: 1fr 1fr 1fr; } }
     .panel { border: 1px solid rgba(255,255,255,.09); border-radius: 0; padding: 22px; }
     .panel h2 { margin-top: 0; }
     .field { margin: 12px 0; }
@@ -50,7 +51,7 @@
     <div class="portal-grid">
       <div class="panel">
         <h2>Get an API key</h2>
-        <p>The key authenticates you at <code>rpc.ordofi.network</code>. Add a rebate address and your order flow is routed through the auction — 5% of every backrun your users generate accrues to that address.</p>
+        <p>The key authenticates you at <code>rpc.ordofi.network</code>. Each send is $0.01 on that key (anonymous wallet traffic is free). Add a rebate address and your order flow is routed through the auction — 5% of every backrun your users generate accrues to that address.</p>
         <div class="field">
           <label for="k-label">Project name</label>
           <input id="k-label" placeholder="my-wallet" maxlength="40" />
@@ -61,6 +62,22 @@
         </div>
         <div class="btn-row"><button class="btn" id="k-go">Mint key</button></div>
         <div class="result" id="k-out"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Key invoice</h2>
+        <p>Look up what a key owes and credit it. Send ETH on Robinhood Chain to the treasury, then paste the transaction hash. $0.01 is deducted per keyed send; prepaid is spent first.</p>
+        <div class="field">
+          <label for="b-key">API key or project label</label>
+          <input id="b-key" placeholder="ordo_… or v4fun" />
+        </div>
+        <div class="btn-row"><button class="btn" id="b-go">Show invoice</button></div>
+        <div class="result" id="b-out"></div>
+        <div class="field" id="b-top-wrap" style="display:none;margin-top:16px">
+          <label for="b-tx">Top-up transaction hash</label>
+          <input id="b-tx" placeholder="0x…" />
+          <div class="btn-row"><button class="btn" id="b-top">Credit this payment</button></div>
+        </div>
       </div>
 
       <div class="panel">
@@ -108,6 +125,54 @@ $("k-go").onclick = async () => {
       '<div class="warn">Copy it now — it is shown exactly once. Use it as the <code>x-api-key</code> header.</div>';
   } catch (e) {
     out.innerHTML = '<div class="err">' + esc(e.message) + "</div>";
+  }
+};
+
+const usd = (n) => "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const showBill = (d) => {
+  $("b-top-wrap").style.display = d.treasury ? "" : "none";
+  $("b-out").innerHTML =
+    '<dl class="kv">' +
+    "<dt>project</dt><dd>" + esc(d.label) + "</dd>" +
+    "<dt>sends</dt><dd>" + esc(d.sends) + " × " + usd(d.priceUsd) + "</dd>" +
+    "<dt>billed</dt><dd>" + usd(d.billedUsd) + "</dd>" +
+    "<dt>paid</dt><dd>" + usd(d.paidUsd) + "</dd>" +
+    "<dt>prepaid</dt><dd>" + usd(d.prepaidUsd) + "</dd>" +
+    "<dt>owed</dt><dd>" + usd(d.owedUsd) + "</dd>" +
+    (d.treasury ? "<dt>pay to</dt><dd>" + esc(d.treasury) + "</dd>" : "<dt>pay to</dt><dd>treasury not configured yet</dd>") +
+    "</dl>";
+};
+$("b-go").onclick = async () => {
+  const out = $("b-out");
+  out.innerHTML = "reading ledger…";
+  try {
+    const q = $("b-key").value.trim();
+    const res = await fetch("/api/keys/billing?" + (q.startsWith("ordo_") ? "key=" : "label=") + encodeURIComponent(q));
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.status);
+    showBill(d);
+  } catch (e) {
+    out.innerHTML = '<div class="err">' + esc(e.message) + "</div>";
+  }
+};
+$("b-top").onclick = async () => {
+  const out = $("b-out");
+  try {
+    const q = $("b-key").value.trim();
+    const res = await fetch("/api/keys/topup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...(q.startsWith("ordo_") ? { key: q } : { label: q }),
+        txHash: $("b-tx").value.trim(),
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || res.status);
+    showBill(d);
+    out.insertAdjacentHTML("beforeend", '<div class="warn">credited ' + usd(d.creditedUsd) + "</div>");
+  } catch (e) {
+    out.insertAdjacentHTML("beforeend", '<div class="err">' + esc(e.message) + "</div>");
   }
 };
 

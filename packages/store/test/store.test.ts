@@ -147,6 +147,47 @@ test("api keys: issued once, found by hash, never stored in plaintext", () => {
   assert.equal(store.findApiKey("ordo_" + "0".repeat(36)), null);
 });
 
+test("key billing: prepaid covers a send, then leftover is owed; top-up is once per tx", () => {
+  const s = new OrdoStore(":memory:");
+  assert.equal(s.canChargeSend("v4fun", 10_000, true), false);
+  assert.equal(s.canChargeSend("v4fun", 10_000, false), true);
+  assert.equal(s.canChargeSend("anon", 10_000, true), true);
+
+  s.creditKey("v4fun", 15_000, "0x" + "ab".repeat(32), "100");
+  assert.equal(s.canChargeSend("v4fun", 10_000, true), true);
+  const after = s.chargeKeyedSend("v4fun", 10_000);
+  assert.equal(after.sends, 1);
+  assert.equal(after.prepaidUsdMicros, 5_000);
+  assert.equal(after.owedUsdMicros, 0);
+
+  const debt = s.chargeKeyedSend("v4fun", 10_000);
+  assert.equal(debt.sends, 2);
+  assert.equal(debt.prepaidUsdMicros, 0);
+  assert.equal(debt.owedUsdMicros, 5_000);
+
+  assert.throws(() => s.creditKey("v4fun", 1, "0x" + "ab".repeat(32), "1"), /UNIQUE|constraint/i);
+  s.chargeKeyedSend("anon", 10_000);
+  assert.equal(s.keyBilling("anon").sends, 0);
+  s.close();
+});
+
+test("key billing: backfill from routed is idempotent and skips anon", () => {
+  const s = new OrdoStore(":memory:");
+  s.recordRouted({ txHash: "0xaa", keyLabel: "v4fun", via: "protect" });
+  s.recordRouted({ txHash: "0xbb", keyLabel: "v4fun", via: "auction" });
+  s.recordRouted({ txHash: "0xcc", keyLabel: "anon", via: "protect" });
+  s.resolveRouted("0xaa", { status: 1, volumeUsd: 10 });
+  s.resolveRouted("0xbb", { status: 1, volumeUsd: 20 });
+  s.resolveRouted("0xcc", { status: 1, volumeUsd: 5 });
+  assert.equal(s.backfillBillingFromRouted(10_000), 1);
+  assert.equal(s.backfillBillingFromRouted(10_000), 0);
+  const b = s.keyBilling("v4fun");
+  assert.equal(b.sends, 2);
+  assert.equal(b.owedUsdMicros, 20_000);
+  assert.equal(s.keyBilling("anon").sends, 0);
+  s.close();
+});
+
 test("api keys: no rebate address means direct mode; bad address refused", () => {
   const store = new OrdoStore(":memory:");
   const { record } = store.issueApiKey({ label: "reader" });

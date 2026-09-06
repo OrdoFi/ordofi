@@ -642,7 +642,7 @@ export function swapHtml(opts: {
     $("rate").textContent = "1 " + tokIn.symbol + " = " + fmt(out / inn) + " " + tokOut.symbol;
     const minOut = (BigInt(q.amountOut) * (10000n - slippageBps)) / 10000n;
     $("minout").textContent = fmt(units(minOut, tokOut.decimals)) + " " + tokOut.symbol;
-    $("route").textContent = routeLabel(q.route) + (q.reclaim ? " + back-run" : "");
+    $("route").textContent = routeLabel(q.route) + (q.reclaim ? " + back-run" : "") + (q.routeFeeBps ? " · " + q.routeFeeBps / 100 + "% routing fee" : "");
     const m = $("mev");
     if (q.reclaim) {
       const eth = units(q.reclaim.surplusToUser, 18);

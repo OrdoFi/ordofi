@@ -59,6 +59,16 @@ export interface ApiKeyRow {
   createdAt: number;
 }
 
+export interface KeyBilling {
+  label: string;
+  sends: number;
+  billedUsdMicros: number;
+  paidUsdMicros: number;
+  prepaidUsdMicros: number;
+  owedUsdMicros: number;
+  lastSendAt: number | null;
+}
+
 /**
  * Requests a minute an application key may make, counting only the ones that
  * reach an upstream — the gateway answers chain id, the cached head and mined
@@ -254,6 +264,24 @@ export class OrdoStore {
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL
       );
+
+      -- Per-label invoice for keyed sends. $0.01 is 10_000 micros. Anon
+      -- wallet traffic is not here: there is nobody to bill.
+      CREATE TABLE IF NOT EXISTS key_ledger (
+        label TEXT PRIMARY KEY,
+        sends INTEGER NOT NULL DEFAULT 0,
+        billed_usd_micros INTEGER NOT NULL DEFAULT 0,
+        paid_usd_micros INTEGER NOT NULL DEFAULT 0,
+        prepaid_usd_micros INTEGER NOT NULL DEFAULT 0,
+        last_send_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS key_topups (
+        tx_hash TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        usd_micros INTEGER NOT NULL,
+        wei TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
   }
 
@@ -317,6 +345,119 @@ export class OrdoStore {
   apiKeyCount(): number {
     const r = this.db.prepare(`SELECT COUNT(*) c FROM api_keys WHERE enabled = 1`).get() as { c: number };
     return r.c;
+  }
+
+  keyBilling(label: string): KeyBilling {
+    const row = this.db
+      .prepare(
+        `SELECT label, sends, billed_usd_micros, paid_usd_micros, prepaid_usd_micros, last_send_at
+         FROM key_ledger WHERE label = ?`,
+      )
+      .get(label) as
+      | { label: string; sends: number; billed_usd_micros: number; paid_usd_micros: number; prepaid_usd_micros: number; last_send_at: number | null }
+      | undefined;
+    if (!row) {
+      return { label, sends: 0, billedUsdMicros: 0, paidUsdMicros: 0, prepaidUsdMicros: 0, owedUsdMicros: 0, lastSendAt: null };
+    }
+    const owed = Math.max(0, Number(row.billed_usd_micros) - Number(row.paid_usd_micros));
+    return {
+      label: row.label,
+      sends: Number(row.sends),
+      billedUsdMicros: Number(row.billed_usd_micros),
+      paidUsdMicros: Number(row.paid_usd_micros),
+      prepaidUsdMicros: Number(row.prepaid_usd_micros),
+      owedUsdMicros: owed,
+      lastSendAt: row.last_send_at == null ? null : Number(row.last_send_at),
+    };
+  }
+
+  /** True when a keyed send may go out. Anon is never billed. */
+  canChargeSend(label: string, priceMicros: number, enforce: boolean): boolean {
+    if (!enforce || !label || label === "anon") return true;
+    return this.keyBilling(label).prepaidUsdMicros >= priceMicros;
+  }
+
+  /**
+   * One confirmed send on a key. Prepaid is applied first; anything left is
+   * owed. Never throws on a missing row.
+   */
+  chargeKeyedSend(label: string, priceMicros: number): KeyBilling {
+    if (!label || label === "anon" || priceMicros <= 0) return this.keyBilling(label || "anon");
+    const now = Date.now();
+    this.db.prepare(`INSERT OR IGNORE INTO key_ledger (label) VALUES (?)`).run(label);
+    const cur = this.keyBilling(label);
+    const billed = cur.billedUsdMicros + priceMicros;
+    let paid = cur.paidUsdMicros;
+    let prepaid = cur.prepaidUsdMicros;
+    const apply = Math.min(prepaid, billed - paid);
+    prepaid -= apply;
+    paid += apply;
+    this.db
+      .prepare(
+        `UPDATE key_ledger SET sends = sends + 1, billed_usd_micros = ?, paid_usd_micros = ?, prepaid_usd_micros = ?, last_send_at = ? WHERE label = ?`,
+      )
+      .run(billed, paid, prepaid, now, label);
+    return this.keyBilling(label);
+  }
+
+  /** Credit from a verified on-chain top-up. Same tx hash cannot be applied twice. */
+  creditKey(label: string, usdMicros: number, txHash: string, wei: string): KeyBilling {
+    if (!label || label === "anon") throw new Error("cannot credit anonymous traffic");
+    if (usdMicros <= 0) throw new Error("credit must be positive");
+    const hash = txHash.toLowerCase();
+    if (!/^0x[0-9a-f]{64}$/.test(hash)) throw new Error("txHash is not a hash");
+    this.db.prepare(`INSERT OR IGNORE INTO key_ledger (label) VALUES (?)`).run(label);
+    this.db
+      .prepare(`INSERT INTO key_topups (tx_hash, label, usd_micros, wei, created_at) VALUES (?, ?, ?, ?, ?)`)
+      .run(hash, label, usdMicros, wei, Date.now());
+    const cur = this.keyBilling(label);
+    let prepaid = cur.prepaidUsdMicros + usdMicros;
+    let paid = cur.paidUsdMicros;
+    const apply = Math.min(prepaid, Math.max(0, cur.billedUsdMicros - paid));
+    prepaid -= apply;
+    paid += apply;
+    this.db.prepare(`UPDATE key_ledger SET paid_usd_micros = ?, prepaid_usd_micros = ? WHERE label = ?`).run(paid, prepaid, label);
+    return this.keyBilling(label);
+  }
+
+  /** Raise each key's invoice to match confirmed routed sends. Idempotent. */
+  backfillBillingFromRouted(priceMicros: number): number {
+    if (priceMicros <= 0) return 0;
+    const rows = this.db
+      .prepare(`SELECT key_label AS label, COUNT(*) AS n FROM routed WHERE status = 1 AND key_label != 'anon' GROUP BY key_label`)
+      .all() as { label: string; n: number }[];
+    let touched = 0;
+    for (const r of rows) {
+      this.db.prepare(`INSERT OR IGNORE INTO key_ledger (label) VALUES (?)`).run(r.label);
+      const cur = this.keyBilling(r.label);
+      const billed = Math.max(cur.billedUsdMicros, Number(r.n) * priceMicros);
+      const sends = Math.max(cur.sends, Number(r.n));
+      if (billed === cur.billedUsdMicros && sends === cur.sends) continue;
+      this.db.prepare(`UPDATE key_ledger SET sends = ?, billed_usd_micros = ? WHERE label = ?`).run(sends, billed, r.label);
+      touched++;
+    }
+    return touched;
+  }
+
+  billingTotals(): { labels: number; sends: number; billedUsdMicros: number; paidUsdMicros: number; prepaidUsdMicros: number; owedUsdMicros: number } {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) labels, COALESCE(SUM(sends),0) sends,
+                COALESCE(SUM(billed_usd_micros),0) billed, COALESCE(SUM(paid_usd_micros),0) paid,
+                COALESCE(SUM(prepaid_usd_micros),0) prepaid
+         FROM key_ledger`,
+      )
+      .get() as { labels: number; sends: number; billed: number; paid: number; prepaid: number };
+    const billed = Number(r.billed);
+    const paid = Number(r.paid);
+    return {
+      labels: Number(r.labels),
+      sends: Number(r.sends),
+      billedUsdMicros: billed,
+      paidUsdMicros: paid,
+      prepaidUsdMicros: Number(r.prepaid),
+      owedUsdMicros: Math.max(0, billed - paid),
+    };
   }
 
   insertArbs(rows: ArbRow[]): void {

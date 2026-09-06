@@ -206,6 +206,19 @@ contract OrdoSwapV2ForkTest is Test {
         assertEq(IERC20(USDG).balanceOf(user), out);
     }
 
+    function test_Fork_RouteFeeSkimsToTreasury() public {
+        vm.skip(!forked);
+        vm.prank(owner);
+        ordo.setRouteFeeBps(5);
+        vm.prank(user);
+        (uint256 out,) = ordo.swap{value: 0.1 ether}(_one(_v3(abi.encodePacked(WETH, uint24(500), USDG))), 0.1 ether, 0, user, false, _none());
+        assertGt(out, 0);
+        assertEq(IERC20(USDG).balanceOf(user), out, "user received the net");
+        uint256 fee = IERC20(USDG).balanceOf(treasury);
+        assertGt(fee, 0, "treasury received the 5 bps");
+        assertEq(fee * 10_000, (out + fee) * 5, "fee is 5 bps of the gross output");
+    }
+
     function test_Fork_NobodyElseCanDriveTheFloat() public {
         vm.skip(!forked);
         OrdoSwapV2.Reclaim memory r = OrdoSwapV2.Reclaim({legs: _two(_v4(plain20, true), _v4(hooked, false)), amountIn: 1 ether, minProfit: 0, gas: 0});

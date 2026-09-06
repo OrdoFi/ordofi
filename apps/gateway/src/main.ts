@@ -33,6 +33,7 @@ import { callOrigin, forwardHeaders, type OriginReply } from "./edge.js";
 import { getLogsWide, type LogFilterParam } from "./getlogs.js";
 import { HeadlineStats } from "./headline.js";
 import { TokenInfo, explain } from "./explain.js";
+import { canSend, chargeSend } from "./billing.js";
 import { HeadWatcher, Hub } from "./subscribe.js";
 import { attachWs } from "./ws.js";
 
@@ -134,7 +135,7 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
       return await sendRawTransaction(params[0] as string, {
         onFallback: (reason) => {
           metrics.inc("send_fallback_total");
-          console.warn(`gateway | sequencer endpoint unavailable (${reason}) — send fell back to the provider list`);
+          console.warn(`gateway | private send hop unavailable (${reason}) — trying the next private hop, never a public relay`);
         },
       });
     }
@@ -195,6 +196,12 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
     // without knowing anything about us.
     case "ordo_sendRawTransaction":
     case "eth_sendRawTransaction": {
+      if (!canSend(store, apiKey.label, CONFIG.keySendPriceUsd, CONFIG.keyBillEnforce)) {
+        throw new RpcError(
+          -32000,
+          `ordo: key "${apiKey.label}" has no prepaid credit ($${(CONFIG.keySendPriceUsd).toFixed(2)} / send) — top up at https://app.ordofi.network/portal`,
+        );
+      }
       metrics.inc("tx_submitted_total", { key: apiKey.label });
       const raw = params[0] as string;
       const opts =
@@ -207,6 +214,7 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
       if (apiKey.mode !== "auction") {
         const hash = await protectAndSend(upstream, raw, opts);
         void recordRouted(hash, raw, apiKey.label, "protect");
+        chargeSend(store, apiKey.label, CONFIG.keySendPriceUsd);
         return hash;
       }
       const out = await routeOrderFlow(upstream, raw, apiKey, opts);
@@ -215,10 +223,17 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
       });
       if (!out.auctioned) console.warn(`gateway | auction unavailable (${out.reason}) — sent direct`);
       void recordRouted(out.txHash, raw, apiKey.label, out.auctioned ? "auction" : "protect");
+      chargeSend(store, apiKey.label, CONFIG.keySendPriceUsd);
       return out.txHash;
     }
     // Always auction, regardless of how the key is configured.
     case "ordo_sendPrivateTransaction": {
+      if (!canSend(store, apiKey.label, CONFIG.keySendPriceUsd, CONFIG.keyBillEnforce)) {
+        throw new RpcError(
+          -32000,
+          `ordo: key "${apiKey.label}" has no prepaid credit ($${(CONFIG.keySendPriceUsd).toFixed(2)} / send) — top up at https://app.ordofi.network/portal`,
+        );
+      }
       metrics.inc("tx_submitted_total", { key: apiKey.label });
       const raw = params[0] as string;
       const out = await routeOrderFlow(upstream, raw, apiKey);
@@ -226,15 +241,23 @@ async function dispatch(method: string, params: unknown[], apiKey: ApiKey): Prom
         key: apiKey.label,
       });
       void recordRouted(out.txHash, raw, apiKey.label, out.auctioned ? "auction" : "protect");
+      chargeSend(store, apiKey.label, CONFIG.keySendPriceUsd);
       return out.txHash;
     }
     case "ordo_simulate":
       return simulateRaw(upstream, params[0] as string);
     case "ordo_sendBundle": {
+      if (!canSend(store, apiKey.label, CONFIG.keySendPriceUsd, CONFIG.keyBillEnforce)) {
+        throw new RpcError(
+          -32000,
+          `ordo: key "${apiKey.label}" has no prepaid credit ($${(CONFIG.keySendPriceUsd).toFixed(2)} / send) — top up at https://app.ordofi.network/portal`,
+        );
+      }
       metrics.inc("bundle_submitted_total", { key: apiKey.label });
       const bundle = params[0] as { txs: string[]; allowRevert?: boolean | number[] };
       const out = await sendBundle(upstream, bundle);
       out.txHashes.forEach((h: string, i: number) => void recordRouted(h, bundle.txs[i], apiKey.label, "bundle"));
+      for (let i = 0; i < out.txHashes.length; i++) chargeSend(store, apiKey.label, CONFIG.keySendPriceUsd);
       return out;
     }
     case "ordo_bundlerInfo":
@@ -596,6 +619,7 @@ const server = createServer((req, res) => {
         ...(CONFIG.edgeOrigin ? { origin: CONFIG.edgeOrigin } : {}),
         upstream: UPSTREAM,
         sequencer: sequencerUrl(),
+        privateSend: true,
         uptimeSeconds: metrics.json().uptimeSeconds,
         cacheEntries: cache.size,
         ...(ws ? { wsClients: ws.clients(), subscriptions: hub.size, headWatcher: headWatcher.running } : {}),
@@ -868,7 +892,7 @@ server.listen(CONFIG.port, () => {
     );
     return;
   }
-  console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon}`);
+  console.log(`OrdoFi gateway | ${apiKeys.size} api key(s) loaded | anon=${CONFIG.allowAnon} | keyed send $${CONFIG.keySendPriceUsd}${CONFIG.keyBillEnforce ? " enforced" : " accruing"}`);
   console.log(`OrdoFi gateway | GET /health /metrics /metrics.json`);
   console.log(
     ws
@@ -880,7 +904,7 @@ server.listen(CONFIG.port, () => {
     `OrdoFi gateway | fast path: chainId/net_version local, head cached ${BLOCK_MS}ms, fees 1s, mined receipts 10m; hedged reads after ${CONFIG.hedgeAfterMs}ms across ${rpcUrls().length} upstream(s), at most ${Math.round(CONFIG.hedgeBudgetRatio * 100)}% of reads; anon ${CONFIG.anonRateLimit} upstream reads + ${CONFIG.anonSendRateLimit} sends /min/IP, ${CONFIG.anonMaxInflight} in flight/IP`,
   );
   console.log(
-    `OrdoFi gateway | methods: eth_* passthrough, protected eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo${CONFIG.ordoSwapAddress ? `, ordo_quoteSwap (OrdoSwap ${CONFIG.ordoSwapAddress})` : ""}`,
+    `OrdoFi gateway | methods: eth_* passthrough, Private Send on eth_sendRawTransaction, ordo_sendPrivateTransaction, ordo_simulate, ordo_sendBundle, ordo_bundlerInfo${CONFIG.ordoSwapAddress ? `, ordo_quoteSwap (OrdoSwap ${CONFIG.ordoSwapAddress})` : ""}`,
   );
   if (SWAP_PAGE) {
     console.log(

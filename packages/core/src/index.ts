@@ -183,29 +183,62 @@ export async function rpcOnce(url: string, method: string, params: unknown[], ti
 }
 
 /**
- * Where signed transactions go. Reads may fan out across any provider, but a
- * raw transaction is the one thing a third party should never see before the
- * sequencer does, so sends go to the sequencer operator's own endpoint and
- * nowhere else unless that endpoint is unreachable — in which case the caller
- * is told, so the fallback is visible rather than silent.
+ * Where signed transactions go. Reads may fan out across any provider. A
+ * signed tx is Private Send: our node, then the sequencer operator, and
+ * never a public relay — even if that relay is on ORDO_RPC_URLS for reads.
  */
+export const OFFICIAL_SEQUENCER_URL = "https://rpc.mainnet.chain.robinhood.com";
+
 export function sequencerUrl(): string {
-  return process.env.ORDO_SEQUENCER_URL ?? "https://rpc.mainnet.chain.robinhood.com";
+  return process.env.ORDO_SEQUENCER_URL ?? OFFICIAL_SEQUENCER_URL;
+}
+
+/** Hosts that must never see a signed transaction from us. */
+export function isPublicRelay(url: string): boolean {
+  try {
+    return /publicnode|llamarpc|ankr\.com|drpc\.org|blastapi|alchemy|infura|quicknode|chainstack/i.test(new URL(url).hostname);
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The only URLs a signed transaction may be posted to, in order: our node
+ * (when it is not itself a public relay), then the sequencer operator.
+ */
+export function privateSendUrls(): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (raw?: string) => {
+    const url = raw?.trim();
+    if (!url || isPublicRelay(url) || seen.has(url)) return;
+    seen.add(url);
+    out.push(url);
+  };
+  add(process.env.ORDO_RPC_URL);
+  add(sequencerUrl());
+  add(OFFICIAL_SEQUENCER_URL);
+  return out;
 }
 
 export async function sendRawTransaction(
   rawTx: string,
   opts?: { timeoutMs?: number; onFallback?: (reason: string) => void },
 ): Promise<string> {
-  try {
-    return (await rpcOnce(sequencerUrl(), "eth_sendRawTransaction", [rawTx], opts?.timeoutMs)) as string;
-  } catch (e) {
-    // A real answer from the sequencer (bad nonce, underpriced, insufficient
-    // funds) is final. Only transport failures and throttling fall through.
-    if ((e as UpstreamRpcError).isRpcLevel && !isRetryableRpcError(e)) throw e;
-    opts?.onFallback?.((e as Error).message);
-    return (await rpcFetch("eth_sendRawTransaction", [rawTx], opts)) as string;
+  const urls = privateSendUrls();
+  if (urls.length === 0) throw new Error("ordo: no private send path configured");
+  let last: unknown;
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      return (await rpcOnce(urls[i], "eth_sendRawTransaction", [rawTx], opts?.timeoutMs)) as string;
+    } catch (e) {
+      // A real answer (bad nonce, underpriced, insufficient funds) is final.
+      if ((e as UpstreamRpcError).isRpcLevel && !isRetryableRpcError(e)) throw e;
+      last = e;
+      if (i === 0) opts?.onFallback?.((e as Error).message);
+    }
   }
+  throw last instanceof Error ? last : new Error("ordo: private send path unreachable");
 }
 
 export const ENDPOINTS = {

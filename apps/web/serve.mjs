@@ -46,6 +46,16 @@ const DATA_DIR = process.env.ORDO_DATA_DIR ?? join(import.meta.dirname, "../../d
 const PORT = Number(process.env.ORDO_WEB_PORT ?? 3000);
 const RPC = process.env.ORDO_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com";
 const SETTLEMENT = process.env.ORDO_SETTLEMENT_ADDRESS ?? "";
+const BILLING_TREASURY = (process.env.ORDO_BILLING_TREASURY ?? process.env.ORDO_TREASURY_ADDRESS ?? "").trim().toLowerCase();
+const KEY_SEND_PRICE_USD = Number(process.env.ORDO_KEY_SEND_PRICE_USD ?? 0.01);
+const KEY_SEND_PRICE_MICROS = Math.max(0, Math.round(KEY_SEND_PRICE_USD * 1_000_000));
+if (store && KEY_SEND_PRICE_MICROS > 0) {
+  try {
+    store.backfillBillingFromRouted(KEY_SEND_PRICE_MICROS);
+  } catch (e) {
+    console.warn(`web | billing backfill skipped (${e.message})`);
+  }
+}
 
 /** Report from the index when it has data, else the generated report.json. */
 function loadReport() {
@@ -572,6 +582,10 @@ async function buildStats() {
       // The five figures the dashboards lead with, precomputed so an
       // embedding site does not repeat the arithmetic or the caveats.
       headline: {
+        ...((() => {
+          const b = store ? store.billingTotals() : null;
+          return { rpcBilledUsd: b ? b.paidUsdMicros / 1_000_000 : 0, rpcOwedUsd: b ? b.owedUsdMicros / 1_000_000 : 0 };
+        })()),
         protectedVolumeUsd: routed.available ? routed.volumeUsd : 0,
         protectedVolume24hUsd: routed.available ? routed.volume24hUsd : 0,
         transactions: routed.available ? routed.transactions.confirmed : 0,
@@ -664,6 +678,83 @@ async function handle(req, res) {
     } catch (e) {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  function billingLabel(presented) {
+    const v = (presented ?? "").trim();
+    if (!v || !store) return null;
+    if (v.startsWith("ordo_")) return store.findApiKey(v)?.label ?? null;
+    return v.slice(0, 40);
+  }
+
+  function billingView(label) {
+    const b = store.keyBilling(label);
+    const usd = (m) => Math.round(m) / 1_000_000;
+    return {
+      label: b.label,
+      sends: b.sends,
+      priceUsd: KEY_SEND_PRICE_USD,
+      billedUsd: usd(b.billedUsdMicros),
+      paidUsd: usd(b.paidUsdMicros),
+      prepaidUsd: usd(b.prepaidUsdMicros),
+      owedUsd: usd(b.owedUsdMicros),
+      lastSendAt: b.lastSendAt,
+      treasury: BILLING_TREASURY || null,
+      note: "Keyed sends are $0.01 each. Prepaid ETH sent to the treasury is credited at the live ETH price. Anonymous wallet traffic is not billed.",
+    };
+  }
+
+  if (path === "/api/keys/billing" && req.method === "GET") {
+    if (!store) {
+      sendJson(req, res, 503, { error: "key store unavailable on this host" });
+      return;
+    }
+    const label = billingLabel(url.searchParams.get("key") ?? url.searchParams.get("label") ?? "");
+    if (!label || label === "anon") {
+      sendJson(req, res, 400, { error: "pass ?key=ordo_… or ?label=your-project" });
+      return;
+    }
+    sendJson(req, res, 200, billingView(label), { "cache-control": "no-store" });
+    return;
+  }
+
+  if (path === "/api/keys/topup" && req.method === "POST") {
+    if (!store) {
+      sendJson(req, res, 503, { error: "key store unavailable on this host" });
+      return;
+    }
+    if (!BILLING_TREASURY || !/^0x[0-9a-f]{40}$/.test(BILLING_TREASURY)) {
+      sendJson(req, res, 503, { error: "billing treasury is not configured" });
+      return;
+    }
+    let body = "";
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 2048) break;
+    }
+    try {
+      const { key, label: bodyLabel, txHash } = JSON.parse(body || "{}");
+      const label = billingLabel(key || bodyLabel || "");
+      if (!label || label === "anon") throw new Error("pass your API key or project label");
+      if (typeof txHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new Error("txHash must be a transaction hash");
+      const receipt = await rpcFetch("eth_getTransactionReceipt", [txHash]);
+      if (!receipt || receipt.status !== "0x1") throw new Error("transaction is not confirmed");
+      const tx = await rpcFetch("eth_getTransactionByHash", [txHash]);
+      if (!tx?.to || tx.to.toLowerCase() !== BILLING_TREASURY) throw new Error("send ETH on Robinhood Chain to " + BILLING_TREASURY);
+      const wei = BigInt(tx.value ?? "0x0");
+      if (wei <= 0n) throw new Error("transaction sent no ETH");
+      const px = await ethUsd();
+      if (!px) throw new Error("ETH price unavailable — try again in a minute");
+      const usdMicros = Math.round((Number(wei) / 1e18) * px * 1_000_000);
+      if (usdMicros <= 0) throw new Error("amount is below one microdollar at the current price");
+      const billed = store.creditKey(label, usdMicros, txHash, wei.toString());
+      sendJson(req, res, 200, { ...billingView(label), creditedUsd: usdMicros / 1_000_000, txHash: txHash.toLowerCase(), prepaidUsd: billed.prepaidUsdMicros / 1_000_000 });
+    } catch (e) {
+      const msg = e.message || String(e);
+      const status = /UNIQUE|constraint/i.test(msg) ? 409 : 400;
+      sendJson(req, res, status, { error: /UNIQUE|constraint/i.test(msg) ? "this transaction was already credited" : msg });
     }
     return;
   }

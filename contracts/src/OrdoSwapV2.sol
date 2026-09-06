@@ -62,7 +62,11 @@ contract OrdoSwapV2 is V4Swap {
     address public owner;
     address public treasury;
     uint16 public protocolBps;
+    /// @notice Share of swap output kept as a routing fee, in basis points.
+    ///         Independent of the reclaim split. 5 = 0.05%. 0 until set.
+    uint16 public routeFeeBps;
     uint16 public constant MAX_PROTOCOL_BPS = 5000;
+    uint16 public constant MAX_ROUTE_FEE_BPS = 50;
 
     uint256 private _locked = 1;
 
@@ -103,6 +107,8 @@ contract OrdoSwapV2 is V4Swap {
     event OwnershipTransferred(address indexed from, address indexed to);
     event TreasurySet(address indexed treasury);
     event ProtocolBpsSet(uint16 bps);
+    event RouteFeeBpsSet(uint16 bps);
+    event RouteFee(address indexed treasury, address token, uint256 amount);
 
     error NotOwner();
     error NotSelf();
@@ -189,8 +195,15 @@ contract OrdoSwapV2 is V4Swap {
 
         bool haveNative = msg.value != 0;
         (amountOut, haveNative) = _run(legs, amountIn, haveNative);
-        if (amountOut < amountOutMinimum) revert TooLittleReceived(amountOut, amountOutMinimum);
-        _deliver(tokenOut, etherOut, nativeOut, haveNative, recipient, amountOut);
+        uint256 fee = (amountOut * routeFeeBps) / 10_000;
+        uint256 userOut = amountOut - fee;
+        if (userOut < amountOutMinimum) revert TooLittleReceived(userOut, amountOutMinimum);
+        _deliver(tokenOut, etherOut, nativeOut, haveNative, recipient, userOut);
+        if (fee != 0) {
+            _deliver(tokenOut, etherOut, nativeOut, haveNative, treasury, fee);
+            emit RouteFee(treasury, etherOut ? address(WETH) : tokenOut, fee);
+        }
+        amountOut = userOut;
         emit Swapped(msg.sender, recipient, nativeIn ? address(WETH) : tokenIn, etherOut ? address(WETH) : tokenOut, amountIn, amountOut);
 
         if (reclaim.legs.length != 0) {
@@ -368,6 +381,12 @@ contract OrdoSwapV2 is V4Swap {
         if (bps > MAX_PROTOCOL_BPS) revert BpsTooHigh(bps);
         protocolBps = bps;
         emit ProtocolBpsSet(bps);
+    }
+
+    function setRouteFeeBps(uint16 bps) external onlyOwner {
+        if (bps > MAX_ROUTE_FEE_BPS) revert BpsTooHigh(bps);
+        routeFeeBps = bps;
+        emit RouteFeeBpsSet(bps);
     }
 
     function setTreasury(address t) external onlyOwner {

@@ -60,6 +60,12 @@ export interface StrategyConfig {
  * Sizes to quote. Price impact puts the optimum in the interior, and there is
  * only time for a couple of probes, so: a third of the budget and all of it.
  */
+/** V4 hints name the PoolManager, not a V3 pool — look at keys, not just addresses. */
+export function isBiddableHint(hint: { poolsTouched?: string[]; swaps?: { kind?: string; key?: unknown }[] }): boolean {
+  if (hint.swaps?.some((s) => s.kind === "univ4" && s.key)) return true;
+  return (hint.poolsTouched?.length ?? 0) > 0;
+}
+
 export function sizeLadder(budget: bigint): bigint[] {
   const sizes = [budget / 3n, budget].filter((s) => s > 0n);
   return [...new Set(sizes.map(String))].map(BigInt);

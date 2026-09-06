@@ -172,6 +172,13 @@ export const CONFIG = {
    */
   ordoSwapAddress: (process.env.ORDO_SWAP_ADDRESS ?? "").trim().toLowerCase(),
   /**
+   * USD charged to a keyed send (not anon). $0.01 is the floor that turns
+   * routed volume into an invoice. Enforcement is opt-in so existing partners
+   * keep landing while the tab accrues.
+   */
+  keySendPriceUsd: Number(process.env.ORDO_KEY_SEND_PRICE_USD ?? 0.01),
+  keyBillEnforce: process.env.ORDO_KEY_BILL_ENFORCE === "1",
+  /**
    * Superseded OrdoSwap deployments, comma-separated. Their swaps and reclaims
    * still happened, so /swap/stats counts them; only the live contract is
    * quoted against. Defaults to the V3-only first deployment, which ran from
