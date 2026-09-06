@@ -83,6 +83,8 @@ const ledgerFile = join(DATA_DIR, "batches.ndjson");
 
 const orders = new Map<Hex, Pending>();
 const inFlight = new Set<Hex>();
+/** After a refused send, no settlement is attempted before this time. */
+let sendPausedUntil = 0;
 const recentBatches: BatchRecord[] = [];
 const stats = {
   received: 0,
@@ -322,8 +324,23 @@ async function settlePair(batch: PairBatch): Promise<void> {
   try {
     txHash = await chain.settle(os, sigs, px, solved.interactions, dry.gas);
   } catch (e) {
-    for (const o of os) inFlight.delete(pendingOf(o).hash);
-    console.warn(`batcher | send failed: ${(e as Error).message}`);
+    // A refused send is not the orders' fault, but retrying every window is
+    // how a rate limit stays hit. Back off for as long as the sequencer says,
+    // and count the attempt so a dead path does not hold orders forever.
+    const msg = (e as Error).message;
+    const m = /reset in (\d+) seconds?/i.exec(msg);
+    const pause = /429|rate limit|too many/i.test(msg) ? (m ? Number(m[1]) * 1000 : 5_000) : 2_000;
+    sendPausedUntil = Date.now() + pause;
+    for (const o of os) {
+      const p = pendingOf(o);
+      p.attempts++;
+      if (p.attempts >= MAX_ATTEMPTS * 2) {
+        stats.rejected++;
+        p.status = { state: "rejected", reason: `could not submit: ${msg}` };
+      }
+      inFlight.delete(p.hash);
+    }
+    console.warn(`batcher | send failed (${msg}); pausing sends ${pause}ms`);
     return;
   }
   for (const o of os) setStatus(o, { state: "settling", txHash });
@@ -407,7 +424,7 @@ async function tick(): Promise<void> {
       }),
     );
   }
-  if (ready.length === 0) return;
+  if (ready.length === 0 || Date.now() < sendPausedUntil) return;
   for (const p of ready) inFlight.add(p.hash);
   const batches = groupByPair(ready.map((p) => p.order));
   await chain.refresh().catch(() => {});
@@ -428,7 +445,7 @@ const server = createServer((req, res) => {
     res.end(json(body));
   };
   if (req.method === "OPTIONS") return send(204, {});
-  if (req.method === "GET" && url === "/health") return send(200, { status: "ok", batch: BATCH, solver: chain.account.address, windowMs: WINDOW_MS, feeBps: FEE_BPS, pending: [...orders.values()].filter((p) => p.status.state === "pending").length, stats });
+  if (req.method === "GET" && url === "/health") return send(200, { status: "ok", batch: BATCH, solver: chain.account.address, windowMs: WINDOW_MS, feeBps: FEE_BPS, pending: [...orders.values()].filter((p) => p.status.state === "pending").length, sendPausedMs: Math.max(0, sendPausedUntil - Date.now()), stats });
   if (req.method === "GET" && url === "/stats") return send(200, { stats, windowMs: WINDOW_MS, feeBps: FEE_BPS, maxFeeBps, batch: BATCH, solver: chain.account.address });
   if (req.method === "GET" && url === "/batches") return send(200, { batches: recentBatches.slice(0, 50) });
   if (req.method === "GET" && url.startsWith("/order/")) {
