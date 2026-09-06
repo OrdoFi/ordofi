@@ -163,6 +163,31 @@ async function fetchLogs(params: unknown[]): Promise<unknown> {
   throw last instanceof Error ? last : new Error("every logs upstream failed");
 }
 
+/**
+ * One real eth_getLogs — the latest block, the busiest contract on the chain —
+ * timed, and remembered for ten seconds so the health check does not become
+ * load. Under a second is healthy; anything else is what a partner sees.
+ */
+let deepCache: { at: number; v: { ok: boolean; ms: number; error?: string } } | null = null;
+async function deepProbe(): Promise<{ ok: boolean; ms: number; error?: string }> {
+  if (CONFIG.edgeOrigin) return { ok: true, ms: 0 };
+  if (deepCache && Date.now() - deepCache.at < 10_000) return deepCache.v;
+  const t0 = Date.now();
+  let v: { ok: boolean; ms: number; error?: string };
+  try {
+    const head = (await upstream("eth_blockNumber", [])) as string;
+    await Promise.race([
+      fetchLogs([{ fromBlock: head, toBlock: head, address: "0x8366a39cc670b4001a1121b8f6a443a643e40951" }]),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("eth_getLogs took over 3s")), 3_000).unref?.()),
+    ]);
+    v = { ok: true, ms: Date.now() - t0 };
+  } catch (e) {
+    v = { ok: false, ms: Date.now() - t0, error: (e as Error).message.slice(0, 120) };
+  }
+  deepCache = { at: Date.now(), v };
+  return v;
+}
+
 async function upstream(method: string, params: unknown[]): Promise<any> {
   const started = Date.now();
   try {
@@ -647,23 +672,34 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify(swapStats.totals()));
     return;
   }
-  if (req.method === "GET" && url === "/health") {
+  if (req.method === "GET" && (url === "/health" || url === "/health/deep")) {
     // 503 while draining: the edge's health check drops this replica before
     // the listener closes, so nothing is routed here in its last seconds.
-    res.writeHead(stopping ? 503 : 200, { "content-type": "application/json" });
-    res.end(
-      JSON.stringify({
-        status: stopping ? "draining" : "ok",
-        role: CONFIG.edgeOrigin ? "edge" : "origin",
-        ...(CONFIG.edgeOrigin ? { origin: CONFIG.edgeOrigin } : {}),
-        upstream: UPSTREAM,
-        sequencer: sequencerUrl(),
-        privateSend: true,
-        uptimeSeconds: metrics.json().uptimeSeconds,
-        cacheEntries: cache.size,
-        ...(ws ? { wsClients: ws.clients(), subscriptions: hub.size, headWatcher: headWatcher.running } : {}),
-      }),
-    );
+    //
+    // /health also reports the heavy read path. eth_blockNumber answering is
+    // not the same as eth_getLogs answering — the node's log indexer stalled
+    // for hours while every cheap read stayed green, and a partner's indexer
+    // found out before we did. /health/deep turns that into a 503 for outside
+    // monitors; plain /health stays 200 so the edge does not pull a replica
+    // over a slow upstream that both replicas share.
+    void deepProbe().then((deep) => {
+      const degraded = !deep.ok;
+      res.writeHead(stopping ? 503 : url === "/health/deep" && degraded ? 503 : 200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          status: stopping ? "draining" : degraded ? "degraded" : "ok",
+          role: CONFIG.edgeOrigin ? "edge" : "origin",
+          ...(CONFIG.edgeOrigin ? { origin: CONFIG.edgeOrigin } : {}),
+          upstream: UPSTREAM,
+          sequencer: sequencerUrl(),
+          privateSend: true,
+          logs: deep,
+          uptimeSeconds: metrics.json().uptimeSeconds,
+          cacheEntries: cache.size,
+          ...(ws ? { wsClients: ws.clients(), subscriptions: hub.size, headWatcher: headWatcher.running } : {}),
+        }),
+      );
+    });
     return;
   }
   if (req.method === "GET" && url === "/metrics") {
