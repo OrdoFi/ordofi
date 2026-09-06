@@ -95,7 +95,7 @@ export function batchHtml(opts: { contract: string; explorer: string; rpc: strin
   <div class="grid3">
     <div><div class="n">01</div><h4>Sign, don't send</h4><p>An order is an EIP-712 intent: sell exactly this much of one token for at least that much of another, valid for a few seconds. No transaction, no gas. Paying in ether? <code>depositOrder</code> escrows it in the contract and the deposit itself is the authorisation.</p></div>
     <div><div class="n">02</div><h4>Net, then route</h4><p>Every ${windowMs} ms the batcher takes each pair's orders together. Buyers and sellers cancel out peer-to-peer; the residual is priced against the real AMM by simulating the settlement, and the clearing price is set from that answer. Nothing is guessed.</p></div>
-    <div><div class="n">03</div><h4>One price, checked on-chain</h4><p>The contract pays every order at the same rate per token, enforces every limit, and then checks per token that it neither lost funds nor kept more than ${maxFeeBps} bps of what passed through. The batcher takes ${feeBps} bps of what the AMM delivered; a perfect net pays nothing.</p></div>
+    <div><div class="n">03</div><h4>One price, checked on-chain</h4><p>The contract pays every order at the same rate per token, enforces every limit, and then checks per token that it neither lost funds nor kept more than ${maxFeeBps} bps of what passed through. The fee is ${feeBps} bps of the improvement, taken only when the batch beat the pool. An order nobody met goes to the pool at the pool's own price and pays nothing: Batch is never worse than the pool.</p></div>
   </div>
 </div></section>
 

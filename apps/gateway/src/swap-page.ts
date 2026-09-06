@@ -785,7 +785,7 @@ export function swapHtml(opts: {
           ? '<div class="big">met another trader</div><p>Your order was matched against someone trading the other way. That part never touched the pool and paid no price impact. Everyone in the batch got the same price.</p>'
           : alone !== null
             ? '<div class="cmp"><div class="best"><div class="k">In the batch</div><div class="n">' + fmt(got) + "</div></div><div><div class=\\"k\\">Alone at the pool</div><div class=\\"n\\">" + fmt(alone) + "</div></div></div>" +
-              "<p>" + (gain > 0 ? "The batch found a better route than a direct swap would have." : "Nobody was trading the other way in this window, so your order went to the pool at the batch's uniform price, less a 0.1% fee.") + "</p>"
+              "<p>" + (gain > 0 ? "The batch found a better route than a direct swap would have." : "Nobody was trading the other way in this window, so your order went to the pool at the pool's own price. No fee: Batch is never worse than the pool.") + "</p>"
             : "<p>Settled at the batch's uniform price.</p>") +
         '<p style="margin-top:8px"><a href="' + EXPLORER + "/tx/" + s.txHash + '" target="_blank" rel="noopener">' + shortHash(s.txHash) + " →</a></p></div>";
       $("result").textContent = "";

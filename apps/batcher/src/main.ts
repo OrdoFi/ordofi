@@ -264,7 +264,13 @@ async function solve(initial: PairBatch): Promise<Solved | { error: string; drop
     const s = await chain.simulate(allOrders(batch), prices(batch, c), interactions);
     if ("error" in s) return { error: `simulate: ${s.error}`, dropped };
     sim = s;
-    const next = nextClearing(batch, c, s, FEE_BPS, res);
+    // The fee is a share of the improvement, not of the fill. A one-sided
+    // batch is the pool's own price by another road; charging on it made
+    // Batch strictly worse than Instant whenever nobody was on the other side,
+    // which is most windows until there is flow. So: no counterparty, no fee —
+    // the user gets exactly what the pool gives, and we pay the gas.
+    const oneSided = batch.sellA.length === 0 || batch.sellB.length === 0;
+    const next = nextClearing(batch, c, s, oneSided ? 0n : FEE_BPS, res);
     const moved = next.pA !== c.pA || next.pB !== c.pB;
     const ok = acceptable(batch, s, maxFeeBps).ok;
     // Converged: accepted, and the price would move by less than a basis point.
