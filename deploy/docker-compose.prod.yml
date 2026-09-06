@@ -54,6 +54,10 @@ x-gateway: &gateway
     # page. Without it /swap can only be used from a wallet's own browser on a
     # phone; with it, Safari and Chrome can reach the wallet app.
     ORDO_WC_PROJECT_ID: ${ORDO_WC_PROJECT_ID:-}
+    # $0.01 per keyed send. Enforce=1 refuses a send when prepaid is empty;
+    # leave it off until partners have topped up so v4.fun does not stall.
+    ORDO_KEY_SEND_PRICE_USD: ${ORDO_KEY_SEND_PRICE_USD:-0.01}
+    ORDO_KEY_BILL_ENFORCE: ${ORDO_KEY_BILL_ENFORCE:-0}
   # Shared index: the portal writes hashed API keys, the gateway reads them.
   volumes: ["ordo-data:/app/data"]
   depends_on: [auction]
@@ -87,6 +91,8 @@ x-web-env: &web-env
     ORDO_STAKE_FACTORY_V4: ${ORDO_STAKE_FACTORY_V4:-}
     ORDO_STAKE_ZAP_V4: ${ORDO_STAKE_ZAP_V4:-}
     ORDO_ARCHIVE_RPC: ${ORDO_ARCHIVE_RPC:-}
+    ORDO_KEY_SEND_PRICE_USD: ${ORDO_KEY_SEND_PRICE_USD:-0.01}
+    ORDO_BILLING_TREASURY: ${ORDO_BILLING_TREASURY:-}
 
 services:
   caddy:
@@ -110,10 +116,14 @@ services:
   # them possible.
   gateway-a:
     <<: *gateway
-    networks: { default: { aliases: [gateway] } }
+    networks:
+      default: { aliases: [gateway] }
+      nitro:
   gateway-b:
     <<: *gateway
-    networks: { default: { aliases: [gateway] } }
+    networks:
+      default: { aliases: [gateway] }
+      nitro:
 
   auction:
     build: { context: .., dockerfile: deploy/Dockerfile }
@@ -243,6 +253,34 @@ services:
       # Read-only status the web app publishes at /desk; the fill ledger goes
       # on the shared volume so totals survive restarts.
       ORDO_ARB_PORT: 8549
+    volumes: ["ordo-data:/app/data"]
+    networks: [default, nitro]
+    restart: unless-stopped
+
+  # Ordo Batch (contracts/src/OrdoBatch.sol): signed intents are netted against
+  # each other and only the residual meets the AMM, one settlement per pair per
+  # window. Idle (answers /health as "unconfigured") until the contract is
+  # deployed and both variables below are set; see contracts/deploy-batch.sh.
+  batcher:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    environment:
+      SERVICE: batcher
+      ORDO_BATCHER_PORT: 8550
+      ORDO_CHAIN_ID: 4663
+      ORDO_RPC_URL: ${ORDO_RPC_URL:-https://rpc.mainnet.chain.robinhood.com}
+      # Simulations are eth_calls against our own node; nothing here is metered.
+      ORDO_RPC_URLS: ${ORDO_RPC_URLS_LIGHT:-${ORDO_RPC_URLS:-}}
+      ORDO_BATCH_ADDRESS: ${ORDO_BATCH_ADDRESS:-}
+      # The solver's hot key. It only pays gas: the contract refuses any
+      # settlement where it would lose funds or keep more than the cap.
+      ORDO_BATCH_SOLVER_KEY: ${ORDO_BATCH_SOLVER_KEY:-}
+      # Three blocks of flow per batch. Longer nets more, feels slower.
+      ORDO_BATCH_WINDOW_MS: ${ORDO_BATCH_WINDOW_MS:-300}
+      # Kept from the clearing amount of the token the AMM fed; on-chain cap is
+      # maxFeeBps (30). A perfect net pays no fee.
+      ORDO_BATCH_FEE_BPS: ${ORDO_BATCH_FEE_BPS:-10}
+      ORDO_DB: /app/data/ordo.db
+      ORDO_DATA_DIR: /app/data
     volumes: ["ordo-data:/app/data"]
     networks: [default, nitro]
     restart: unless-stopped

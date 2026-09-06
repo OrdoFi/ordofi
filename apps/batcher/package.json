@@ -1,0 +1,13 @@
+{
+  "name": "@ordofi/batcher",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@ordofi/core": "*",
+    "@ordofi/store": "*",
+    "viem": "^2.21.0"
+  }
+}

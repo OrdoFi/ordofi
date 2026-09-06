@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["src", "../../packages/core/src", "../gateway/src/ordoswap2.ts"],
+  "compilerOptions": {
+    "types": ["node"]
+  }
+}

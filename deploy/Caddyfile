@@ -98,3 +98,10 @@ auction.ordofi.network {
 	# WebSocket (searcher feed) + HTTP (/submit, /stats) on the same host.
 	reverse_proxy auction:8548
 }
+
+# Ordo Batch: signed intents in, one settlement per pair per window.
+#   POST /order · GET /order/:hash · /health /stats /batches
+batch.ordofi.network {
+	reverse_proxy batcher:8550
+	encode zstd gzip
+}
