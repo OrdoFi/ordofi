@@ -127,14 +127,16 @@ async function fetchUpstream(method: string, params: unknown[]): Promise<unknown
 }
 
 /**
- * Log reads have their own upstream list. Our Nitro node's log indexer renders
- * the head continuously on this chain — ten blocks a second is about what it
- * can index — and every eth_getLogs waits behind it: a 25-block filtered query
- * took 30 s and timed out while eth_getBlockReceipts for the same block took
- * 11 ms. An indexer partner saw 0 of 30 succeed and moved off us. So logs go
- * to providers that answer them in well under a second, in order, and our
- * node is the last resort rather than the first hop. Each hop gets a short
- * deadline: a slow answer here is a wrong answer.
+ * Log reads take their own path: our node first, then a list of providers that
+ * answer eth_getLogs, each hop on a short deadline. The node used to keep a
+ * log search index current over 9.4M blocks on a chain that produces ten
+ * blocks a second; the indexer rendered continuously and every eth_getLogs
+ * waited behind it — a 25-block filtered query timed out at 30 s while the
+ * same block's receipts took 11 ms, and an indexer partner measured 0 of 30
+ * and left. The node now runs without the index (deploy/nitro-node) and
+ * answers from receipts in milliseconds; the extra hops are for when it is
+ * down. Free public endpoints throttle a box like ours within seconds, which
+ * is why they are the fallback and not the path.
  */
 const LOGS_UPSTREAMS = (process.env.ORDO_LOGS_UPSTREAMS ?? "https://rpc-robinhood.blockmachine.io,https://rpc.mainnet.chain.robinhood.com")
   .split(",")
@@ -143,7 +145,8 @@ const LOGS_UPSTREAMS = (process.env.ORDO_LOGS_UPSTREAMS ?? "https://rpc-robinhoo
 const LOGS_HOP_TIMEOUT_MS = Number(process.env.ORDO_LOGS_HOP_TIMEOUT_MS ?? 6_000);
 
 async function fetchLogs(params: unknown[]): Promise<unknown> {
-  const hops = [...LOGS_UPSTREAMS, ...rpcUrls().filter((u) => !LOGS_UPSTREAMS.includes(u))];
+  const own = rpcUrls().filter((u) => !/publicnode/i.test(u)); // publicnode refuses logs without a token
+  const hops = [...own, ...LOGS_UPSTREAMS.filter((u) => !own.includes(u))];
   let last: unknown;
   for (const url of hops) {
     try {

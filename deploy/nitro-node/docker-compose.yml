@@ -57,6 +57,15 @@ services:
       # limit a busy box's reads were spending before its sends.
       - --execution.forwarding-target=https://sequencer.mainnet.chain.robinhood.com
 
+      # No log search index. The default keeps an index current over 9.4M
+      # blocks from head, and on a chain that produces ten blocks a second
+      # the indexer renders continuously and every eth_getLogs waits behind
+      # it — a 25-block filtered query timed out at 30 s while reading the
+      # same block's receipts took 11 ms. Without the index, geth answers
+      # eth_getLogs by scanning receipts: milliseconds for the ranges an
+      # indexer or a wallet asks for, and the gateway splits wide ranges.
+      - --execution.rpc.log-no-history
+
       # debug is the whole point — debug_traceTransaction is what turns guessed
       # MEV into measured MEV. arb exposes the L1 gas breakdown.
       - --http.addr=0.0.0.0
