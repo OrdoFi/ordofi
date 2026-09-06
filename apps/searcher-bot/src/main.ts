@@ -1,6 +1,6 @@
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { encodeFunctionData, decodeFunctionResult, formatEther, parseEther, type Hex } from "viem";
-import { WETH, normalizePrivateKey, rpcFetch } from "@ordofi/core";
+import { WETH, normalizePrivateKey, rpcFetch, sendRawTransaction } from "@ordofi/core";
 import { buildCycleSwap } from "@ordofi/core/arb";
 import { ROUTER } from "@ordofi/core/router";
 import { OrdoSearcher } from "@ordofi/sdk";
@@ -208,7 +208,8 @@ async function ensureBond(): Promise<void> {
     nonce: nonce++,
     type: "eip1559",
   });
-  const hash = (await rpcFetch("eth_sendRawTransaction", [raw])) as string;
+  // Private Send: the sequencer, then our node — never the public read list.
+  const hash = (await sendRawTransaction(raw)) as string;
 
   // Confirm rather than assume. A silently reverting bond looks identical to
   // a pending one from the next loop's point of view, so the bot just retries

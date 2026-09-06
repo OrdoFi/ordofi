@@ -127,9 +127,11 @@ test("sendRawTransaction: stays on the private path — never a public relay", a
   process.env.ORDO_SEQUENCER_URL = "https://sequencer.test";
   process.env.ORDO_RPC_URLS = "https://robinhood-rpc.publicnode.com,https://provider-b.test";
   try {
+    // The sequencer first: a send should never queue behind our node's reads
+    // or the public RPC's per-IP limit.
     assert.deepEqual(privateSendUrls(), [
-      "http://nitro.test:8547",
       "https://sequencer.test",
+      "http://nitro.test:8547",
       "https://rpc.mainnet.chain.robinhood.com",
     ]);
 
@@ -138,20 +140,24 @@ test("sendRawTransaction: stays on the private path — never a public relay", a
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "nonce too low" } }));
     }) as any;
     await assert.rejects(sendRawTransaction("0x01"), /nonce too low/);
-    assert.deepEqual(calls, ["http://nitro.test:8547"], "a definitive answer never reaches anyone else");
+    assert.deepEqual(calls, ["https://sequencer.test"], "a definitive answer never reaches anyone else");
 
     calls.length = 0;
     let fallbackReason = "";
     globalThis.fetch = (async (url: any) => {
       calls.push(String(url));
-      if (String(url).includes("nitro")) return new Response("<html>cloudflare</html>", { status: 403 });
+      if (String(url).includes("sequencer")) return new Response("<html>cloudflare</html>", { status: 403 });
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0xhash" }));
     }) as any;
     const hash = await sendRawTransaction("0x01", { onFallback: (r) => (fallbackReason = r) });
     assert.equal(hash, "0xhash");
     assert.match(fallbackReason, /403/);
-    assert.deepEqual(calls, ["http://nitro.test:8547", "https://sequencer.test"]);
+    assert.deepEqual(calls, ["https://sequencer.test", "http://nitro.test:8547"]);
     assert.ok(!calls.some((u) => u.includes("publicnode")), "public relays are not a send fallback");
+
+    // An empty ORDO_SEQUENCER_URL (compose passes "" for unset) means the default, not "".
+    process.env.ORDO_SEQUENCER_URL = "";
+    assert.equal(privateSendUrls()[0], "https://sequencer.mainnet.chain.robinhood.com");
   } finally {
     globalThis.fetch = realFetch;
     delete process.env.ORDO_RPC_URL;

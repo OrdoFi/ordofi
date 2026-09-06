@@ -184,13 +184,25 @@ export async function rpcOnce(url: string, method: string, params: unknown[], ti
 
 /**
  * Where signed transactions go. Reads may fan out across any provider. A
- * signed tx is Private Send: our node, then the sequencer operator, and
- * never a public relay — even if that relay is on ORDO_RPC_URLS for reads.
+ * signed tx is Private Send: the sequencer itself, then our node, then the
+ * operator's public RPC — and never a public relay, even if that relay is on
+ * ORDO_RPC_URLS for reads.
+ *
+ * The sequencer has its own host. `rpc.mainnet.chain.robinhood.com` is the
+ * public read RPC behind Cloudflare with a per-IP limit that our own reads
+ * were spending; `sequencer.mainnet.chain.robinhood.com` is the Arbitrum
+ * sequencer's ingress (Envoy, `*.arbitrum-internal.io`), answers only
+ * eth_sendRawTransaction, and is the same arrangement Arbitrum One has with
+ * arb1-sequencer.arbitrum.io. A send should not queue behind a read.
  */
-export const OFFICIAL_SEQUENCER_URL = "https://rpc.mainnet.chain.robinhood.com";
+export const SEQUENCER_URL = "https://sequencer.mainnet.chain.robinhood.com";
+export const OFFICIAL_RPC_URL = "https://rpc.mainnet.chain.robinhood.com";
+/** @deprecated the public RPC; kept for callers that named it. */
+export const OFFICIAL_SEQUENCER_URL = OFFICIAL_RPC_URL;
 
 export function sequencerUrl(): string {
-  return process.env.ORDO_SEQUENCER_URL ?? OFFICIAL_SEQUENCER_URL;
+  const v = process.env.ORDO_SEQUENCER_URL?.trim();
+  return v || SEQUENCER_URL;
 }
 
 /** Hosts that must never see a signed transaction from us. */
@@ -203,8 +215,9 @@ export function isPublicRelay(url: string): boolean {
 }
 
 /**
- * The only URLs a signed transaction may be posted to, in order: our node
- * (when it is not itself a public relay), then the sequencer operator.
+ * The only URLs a signed transaction may be posted to, in order: the
+ * sequencer, then our node (which forwards to the sequencer itself), then the
+ * operator's public RPC as the last resort.
  */
 export function privateSendUrls(): string[] {
   const seen = new Set<string>();
@@ -215,9 +228,9 @@ export function privateSendUrls(): string[] {
     seen.add(url);
     out.push(url);
   };
-  add(process.env.ORDO_RPC_URL);
   add(sequencerUrl());
-  add(OFFICIAL_SEQUENCER_URL);
+  add(process.env.ORDO_RPC_URL);
+  add(OFFICIAL_RPC_URL);
   return out;
 }
 

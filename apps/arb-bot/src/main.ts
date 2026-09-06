@@ -6,7 +6,7 @@ import {
   type Hex,
 } from "viem";
 import { join } from "node:path";
-import { normalizePrivateKey, rpcFetch, rpcOnce } from "@ordofi/core";
+import { normalizePrivateKey, rpcFetch, rpcOnce, sendRawTransaction } from "@ordofi/core";
 import { ROUTER } from "@ordofi/core/router";
 import { QUOTER_V2, buildCycleSwap, poolTiers as tiersFor, quoteCycle as quoteCycleShared, type Cycle } from "@ordofi/core/arb";
 import { proveDelivery } from "@ordofi/core/guard";
@@ -412,7 +412,8 @@ async function scan(cycles: Cycle[]): Promise<void> {
     chainId: CHAIN_ID, to: ROUTER as Hex, data: data as Hex, value: best.amountIn,
     gas, maxFeePerGas, maxPriorityFeePerGas: 0n, nonce, type: "eip1559",
   });
-  const hash = (await rpcFetch("eth_sendRawTransaction", [raw])) as string;
+  // Private Send: the sequencer, then our node — never the public read list.
+  const hash = (await sendRawTransaction(raw)) as string;
   console.log(`[arb] FIRING ${best.c.label} size ${formatEther(best.amountIn)} ETH · sim net ${formatEther(net)} ETH · ${hash}`);
   tele.record({ kind: "fire", t: Date.now(), cycle: best.c.label, sizeWei: best.amountIn.toString(), simNetWei: net.toString(), hash });
   await confirm(hash, best.c.label, best.amountIn, minReturn);

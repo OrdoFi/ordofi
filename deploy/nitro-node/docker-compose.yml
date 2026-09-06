@@ -52,8 +52,10 @@ services:
 
       - --node.feed.input.url=wss://feed.mainnet.chain.robinhood.com
       - --node.staker.enable=false
-      # A reader, not a sequencer: forward anything submitted to it upstream.
-      - --execution.forwarding-target=https://rpc.mainnet.chain.robinhood.com
+      # A reader, not a sequencer: forward anything submitted to it upstream —
+      # to the sequencer's own ingress, not the public read RPC, whose per-IP
+      # limit a busy box's reads were spending before its sends.
+      - --execution.forwarding-target=https://sequencer.mainnet.chain.robinhood.com
 
       # debug is the whole point — debug_traceTransaction is what turns guessed
       # MEV into measured MEV. arb exposes the L1 gas breakdown.
