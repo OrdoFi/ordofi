@@ -70,13 +70,40 @@ healthy() {
   ' >/dev/null 2>&1
 }
 
+# /health says the process is up; it does not say a send would work. A gateway
+# once ran for twelve hours answering every read while every
+# eth_sendRawTransaction threw "store.canChargeSend is not a function" — an
+# import the image had, against a store it did not. So a replica is only
+# healthy once a send gets as far as the transaction parser: a malformed raw
+# transaction must come back with a JSON-RPC error about the transaction, not
+# an internal one. Nothing is ever submitted.
+send_path_ok() {
+  local id="$1"
+  [ -n "$id" ] || return 1
+  docker exec "$id" node -e '
+    const body = { jsonrpc: "2.0", id: 1, method: "eth_sendRawTransaction", params: ["0x02c0"] };
+    fetch("http://127.0.0.1:8547/", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(j => {
+        const msg = String(j?.error?.message ?? "");
+        const internal = /is not a function|is not defined|Cannot read|undefined|ReferenceError|TypeError/i.test(msg);
+        process.exit(j?.error && !internal ? 0 : 1);
+      }, () => process.exit(1));
+  ' >/dev/null 2>&1
+}
+
 wait_healthy() {
   local svc="$1" id
   for _ in $(seq 1 "$HEALTH_TIMEOUT"); do
     id="$(container_of "$svc")"
     if healthy "$id"; then
-      say "ok    $svc healthy"
-      return 0
+      if send_path_ok "$id"; then
+        say "ok    $svc healthy (send path answers)"
+        return 0
+      fi
+      say "!!    $svc is up but the send path fails; its logs:"
+      docker logs --tail 40 "$id" 2>&1 | sed 's/^/        /'
+      return 1
     fi
     sleep 1
   done
