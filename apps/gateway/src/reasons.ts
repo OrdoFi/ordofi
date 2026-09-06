@@ -17,6 +17,26 @@
 import { decodeErrorResult, formatUnits, parseAbi, type Hex } from "viem";
 
 const KNOWN = parseAbi([
+  // Tokens that revert without arguments (Solady, custom; USDG says InsufficientFunds)
+  "error InsufficientFunds()",
+  "error InsufficientBalance()",
+  "error InsufficientAllowance()",
+  "error TransferFailed()",
+  "error Blacklisted()",
+  "error Paused()",
+  "error EnforcedPause()",
+  "error Unauthorized()",
+  "error InvalidReceiver()",
+  "error AmountTooLow()",
+  "error InvalidAmount()",
+  // Routers that revert without arguments
+  "error DeadlineExpired()",
+  "error Expired()",
+  "error SlippageExceeded()",
+  "error InsufficientOutputAmount()",
+  "error InsufficientInputAmount()",
+  "error InsufficientLiquidity()",
+  "error Locked()",
   // OpenZeppelin ERC-20 (v5)
   "error ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)",
   "error ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)",
@@ -142,6 +162,36 @@ export function explainRevert(data: unknown, ctx: RevertContext = {}): string | 
       return stringReason(String(a[0] ?? ""));
     case "Panic":
       return panicReason(Number(a[0] ?? 0));
+    case "InsufficientFunds":
+    case "InsufficientBalance":
+      return `Insufficient${sym || " token"} balance for this transaction.`;
+    case "InsufficientAllowance":
+      return "The token is not approved for this contract. Approve it first.";
+    case "TransferFailed":
+      return "A token transfer failed. Usually the balance is short, or the token blocks transfers.";
+    case "Blacklisted":
+      return "The token has blocked this address.";
+    case "Paused":
+    case "EnforcedPause":
+      return "The token or contract is paused.";
+    case "Unauthorized":
+      return "This address is not allowed to do that.";
+    case "InvalidReceiver":
+      return "The token refuses to be sent to that address.";
+    case "AmountTooLow":
+    case "InvalidAmount":
+      return "The amount is too small or not allowed.";
+    case "DeadlineExpired":
+      return "This quote has expired. Refresh and try again.";
+    case "SlippageExceeded":
+    case "InsufficientOutputAmount":
+      return "Slippage too tight: the swap would return less than your minimum. Raise slippage a little or reduce the amount.";
+    case "InsufficientInputAmount":
+      return "Insufficient input amount: the token sent less than the pool expected. Fee-on-transfer tokens do this; try a smaller amount.";
+    case "InsufficientLiquidity":
+      return "The pool does not have enough liquidity for this amount.";
+    case "Locked":
+      return "The pool is locked by another operation in this same transaction.";
     case "ERC20InsufficientBalance":
       return `Insufficient${sym} balance: you have ${amount(a[1], ctx.decimals)}, this needs ${amount(a[2], ctx.decimals)}.`;
     case "ERC20InsufficientAllowance":

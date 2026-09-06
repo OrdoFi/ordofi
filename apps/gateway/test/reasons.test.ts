@@ -58,3 +58,10 @@ test("walletMessage prefers the decoded reason and strips provider branding othe
   assert.equal(walletMessage("Block range limit exceeded, see https://docs.chainstack.com/limits", undefined), "Block range limit exceeded,");
   assert.equal(walletMessage("execution reverted", undefined), "execution reverted");
 });
+
+test("argument-less token errors: USDG's InsufficientFunds and friends", () => {
+  assert.equal(explainRevert("0x356680b7"), "Insufficient token balance for this transaction.");
+  assert.equal(explainRevert("0x356680b7", { symbol: "USDG" }), "Insufficient USDG balance for this transaction.");
+  assert.equal(explainRevert("0x13be252b"), "The token is not approved for this contract. Approve it first.");
+  assert.match(explainRevert("0x8199f5f3")!, /Slippage too tight/);
+});
