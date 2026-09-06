@@ -34,6 +34,7 @@ import { getLogsWide, type LogFilterParam } from "./getlogs.js";
 import { HeadlineStats } from "./headline.js";
 import { TokenInfo, explain } from "./explain.js";
 import { canSend, chargeSend } from "./billing.js";
+import { walletMessage } from "./reasons.js";
 import { HeadWatcher, Hub } from "./subscribe.js";
 import { attachWs } from "./ws.js";
 
@@ -224,9 +225,14 @@ async function upstream(method: string, params: unknown[]): Promise<any> {
     }
     // A real answer from a healthy upstream, code and data intact. The data is
     // the revert reason — the one thing a wallet can show for a failed
-    // eth_call or eth_estimateGas — and used to be lost right here.
+    // eth_call or eth_estimateGas — and used to be lost right here. Now it is
+    // also read: MetaMask shows whatever message the RPC returns, so a revert
+    // arrives as "Slippage too tight: …" rather than as its selector.
     const code = (e as { code?: number }).code;
-    if (typeof code === "number") throw new RpcError(code, (e as Error).message, (e as { data?: unknown }).data);
+    if (typeof code === "number") {
+      const data = (e as { data?: unknown }).data;
+      throw new RpcError(code, walletMessage((e as Error).message, data), data);
+    }
     metrics.inc("upstream_challenge_total");
     throw new RpcError(-32000, `all RPC upstreams refused the request — ${(e as Error).message}`);
   } finally {

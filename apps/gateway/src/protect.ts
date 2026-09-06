@@ -7,6 +7,7 @@ import {
 import { proveDelivery, type DeliveryProof } from "@ordofi/core/guard";
 import { approvalRefusal, checkApproval } from "./approvals.js";
 import { RpcError } from "./errors.js";
+import { walletMessage } from "./reasons.js";
 
 export type Upstream = (method: string, params: unknown[]) => Promise<any>;
 
@@ -148,11 +149,13 @@ export async function assertSafe(upstream: Upstream, rawTx: string, opts: Safety
       );
     }
   } else if (burn.reverted !== undefined) {
+    // eth_simulateV1 reports a revert as its raw return data or a bare
+    // message; say what it means when the bytes can be read.
     throw new RpcError(
-      -32000,
-      `ordo: transaction would revert, not submitted: ${burn.reverted}`,
-      { ordoProtected: true },
-    );
+        -32000,
+        `ordo: transaction would revert, not submitted: ${walletMessage(burn.reverted, burn.reverted)}`,
+        { ordoProtected: true, data: /^0x[0-9a-fA-F]{8,}$/.test(burn.reverted ?? "") ? burn.reverted : undefined },
+      );
   }
   if (burn && burn.leaks.length) {
     throw new RpcError(
