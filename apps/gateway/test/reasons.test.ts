@@ -39,7 +39,11 @@ test("Ordo's own errors read as slippage and limits", () => {
 test("Uniswap V4 errors", () => {
   assert.equal(explainRevert(enc("error HookCallFailed()", [])), "The pool's hook rejected this swap. The token's launchpad rules did not allow it.");
   const v4 = enc("error V4TooLittleReceived(uint256,uint256)", [100n, 90n]);
-  assert.match(explainRevert(v4)!, /receive 90 .*at least 100/);
+  assert.equal(explainRevert(v4), "Slippage too tight: you'd receive 10.0% less than your minimum. Set slippage to about 10.1% or reduce the amount.");
+  const tiny = enc("error V4TooLittleReceived(uint256,uint256)", [10_000n, 9_955n]);
+  assert.match(explainRevert(tiny)!, /0\.45% less than your minimum\. Set slippage to about 0\.6%/, "the number a user turns into a setting");
+  const stale = enc("error V4TooLittleReceived(uint256,uint256)", [10n ** 27n, 10n ** 21n]);
+  assert.match(explainRevert(stale)!, /almost nothing.*stale/);
 });
 
 test("unknown selectors are kept, never hidden; non-reverts are null", () => {

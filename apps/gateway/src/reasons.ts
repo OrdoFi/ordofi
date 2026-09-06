@@ -95,6 +95,23 @@ function amount(v: bigint, decimals?: number): string {
   return decimals === undefined ? `${v.toString()} (smallest units)` : num(v, decimals);
 }
 
+/**
+ * A slippage miss, as a sentence. With decimals, the two amounts; without,
+ * the shortfall as a percentage — which needs no units and is the number the
+ * user actually turns into a slippage setting.
+ */
+function slippage(got: bigint, wanted: bigint, ctx: RevertContext): string {
+  const sym = ctx.symbol ? ` ${ctx.symbol}` : "";
+  if (ctx.decimals !== undefined) {
+    return `Slippage too tight: you'd receive ${num(got, ctx.decimals)}${sym} but asked for at least ${num(wanted, ctx.decimals)}. Raise slippage a little or reduce the amount.`;
+  }
+  if (wanted <= 0n) return "Slippage too tight: the swap would return less than your minimum. Raise slippage a little or reduce the amount.";
+  const shortBps = ((wanted - got) * 10_000n) / wanted;
+  const pct = Number(shortBps) / 100;
+  if (pct >= 99) return "The swap would return almost nothing against your minimum — the quote is stale or the amounts are wrong. Refresh and try again.";
+  return `Slippage too tight: you'd receive ${pct < 0.01 ? "under 0.01" : pct.toFixed(pct < 1 ? 2 : 1)}% less than your minimum. Set slippage to about ${Math.max(0.1, Math.ceil(pct * 10 + 1) / 10).toFixed(1)}% or reduce the amount.`;
+}
+
 export interface RevertContext {
   /** Decimals of the token the error is about, when the caller knows. */
   decimals?: number;
@@ -155,13 +172,13 @@ export function explainRevert(data: unknown, ctx: RevertContext = {}): string | 
     case "HookCallFailed":
       return "The pool's hook rejected this swap. The token's launchpad rules did not allow it.";
     case "V4TooLittleReceived":
-      return `Slippage too tight: you'd receive ${amount(a[1], ctx.decimals)}${sym} but asked for at least ${amount(a[0], ctx.decimals)}. Raise slippage a little or reduce the amount.`;
+      return slippage(a[1], a[0], ctx);
     case "V4TooMuchRequested":
       return `Slippage too tight: this would cost ${amount(a[1], ctx.decimals)}${sym}, more than your maximum of ${amount(a[0], ctx.decimals)}.`;
     case "DeadlinePassed":
       return `This quote expired at ${when(a[0])}. Refresh and try again.`;
     case "TooLittleReceived":
-      return `Slippage too tight: you'd receive ${amount(a[0], ctx.decimals)}${sym} but asked for at least ${amount(a[1], ctx.decimals)}. Raise slippage a little or reduce the amount.`;
+      return slippage(a[0], a[1], ctx);
     case "InsufficientGasForReclaim":
       return `Not enough gas for the back-run: ${a[0]} left, ${a[1]} needed. Raise the gas limit.`;
     case "LimitNotMet":
