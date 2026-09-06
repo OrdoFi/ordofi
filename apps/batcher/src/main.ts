@@ -12,7 +12,7 @@
  *   GET  /health /stats /batches
  */
 import { createServer } from "node:http";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hex } from "viem";
 import { rpcFetch } from "@ordofi/core";
@@ -80,13 +80,35 @@ try {
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 const ledgerFile = join(DATA_DIR, "batches.ndjson");
 
+/** The last settlements from disk, so a restart does not blank the page. */
+function loadLedger(): BatchRecord[] {
+  try {
+    if (!existsSync(ledgerFile)) return [];
+    const lines = readFileSync(ledgerFile, "utf8").trim().split("\n").filter(Boolean).slice(-200);
+    return lines
+      .map((l) => {
+        try {
+          const r = JSON.parse(l);
+          for (const k of ["nettedA", "residualA", "residualB", "fee", "gasUsed"]) if (r[k] != null) r[k] = BigInt(r[k]);
+          return r as BatchRecord;
+        } catch {
+          return null;
+        }
+      })
+      .filter((r): r is BatchRecord => !!r)
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
 // ------------------------------------------------------------------- state
 
 const orders = new Map<Hex, Pending>();
 const inFlight = new Set<Hex>();
 /** After a refused send, no settlement is attempted before this time. */
 let sendPausedUntil = 0;
-const recentBatches: BatchRecord[] = [];
+const recentBatches: BatchRecord[] = loadLedger();
 const stats = {
   received: 0,
   rejected: 0,

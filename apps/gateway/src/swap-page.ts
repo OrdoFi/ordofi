@@ -23,8 +23,11 @@ export function swapHtml(opts: {
   proofTx: string;
   /** WalletConnect, when a project id is configured and the bundle is built. Null: extensions only. */
   wc?: { projectId: string; src: string } | null;
+  /** Ordo Batch, when the contract is deployed: the mode where orders meet each other before the pool. */
+  batch?: { address: string; url: string; windowMs: number } | null;
 }): string {
   const { address, explorer, rpc, app, docs, proofTx } = opts;
+  const batch = opts.batch ? JSON.stringify({ address: opts.batch.address.toLowerCase(), url: opts.batch.url.replace(/\/$/, ""), windowMs: opts.batch.windowMs }) : "null";
   const wc = opts.wc
     ? JSON.stringify({ projectId: opts.wc.projectId, src: opts.wc.src, wallets: MOBILE_WALLETS, handoff: HANDOFF_METHODS })
     : "null";
@@ -146,6 +149,25 @@ export function swapHtml(opts: {
   .flip button:hover { border-color:var(--text); }
   .flip button.spin { transform:rotate(180deg); }
   .usd { font-family:var(--mono); font-size:10.5px; color:var(--muted); text-align:right; margin-top:6px; min-height:14px; }
+
+  /* ---- instant / batch ---- */
+  .modes { display:flex; border:1px solid var(--border); margin-bottom:14px; }
+  .modes button { flex:1; padding:9px 10px; font-family:var(--sans); font-size:13px; font-weight:600; background:transparent; border:none; cursor:pointer; color:var(--muted); border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; gap:1px; }
+  .modes button:last-child { border-right:none; }
+  .modes button small { font-family:var(--mono); font-size:9.5px; font-weight:400; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+  .modes button.on { background:var(--text); color:#fff; }
+  .modes button.on small { color:rgba(255,255,255,.7); }
+  .modes button:disabled { opacity:.4; cursor:default; }
+  .bnote { font-family:var(--mono); font-size:10.5px; color:var(--muted); margin-top:10px; line-height:1.6; }
+  .bnote b { color:var(--text); font-weight:500; }
+  .done .cmp { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:10px 0 4px; }
+  .done .cmp div { border:1px solid var(--border); padding:10px 12px; }
+  .done .cmp .k { font-family:var(--mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  .done .cmp .n { font-family:var(--display); font-size:18px; margin-top:2px; }
+  .done .cmp .best { border-color:var(--ok); background:var(--okbg); }
+  .done .cmp .best .n { color:var(--ok); }
+  .refund { margin-top:10px; font-family:var(--sans); font-size:13px; padding:9px 14px; border:1px solid var(--border2); background:transparent; cursor:pointer; color:var(--text); }
+  .refund:disabled { opacity:.5; cursor:default; }
 
   .mev { margin-top:16px; border:1px solid var(--border); padding:12px 14px; display:flex; justify-content:space-between; align-items:center; gap:12px; transition:all .3s; }
   .mev .l { font-size:13px; color:var(--dim); }
@@ -302,6 +324,10 @@ export function swapHtml(opts: {
   <div class="card" id="card">
     <h2>Swap <span class="gear" id="gear">slippage <span id="slip-v">0.5%</span></span></h2>
     <div class="slip" id="slip"><button data-v="0.1">0.1%</button><button data-v="0.5" class="on">0.5%</button><button data-v="1">1%</button><button data-v="3">3%</button></div>
+    <div class="modes" id="modes" style="display:none">
+      <button data-mode="instant" class="on">Instant<small>one tx · keeps its MEV</small></button>
+      <button data-mode="batch">Batch<small>meets other traders first</small></button>
+    </div>
 
     <label class="f"><span>You pay</span><span class="bal" id="bal-in"></span></label>
     <div class="box">
@@ -326,6 +352,7 @@ export function swapHtml(opts: {
       <div class="row"><span>Minimum received</span><span class="v" id="minout">—</span></div>
       <div class="row"><span>Route</span><span class="v" id="route">—</span></div>
     </div>
+    <div class="bnote" id="bnote" style="display:none"></div>
 
     <button class="go" id="go">Connect wallet</button>
     <div class="result" id="result"></div>
@@ -401,6 +428,9 @@ export function swapHtml(opts: {
   const WC = ${wc};
   const TOPIC_RECLAIMED = ${JSON.stringify(TOPIC_RECLAIMED)};
   const TOPIC_SWAPPED = ${JSON.stringify(TOPIC_SWAPPED)};
+  // Ordo Batch (contracts/src/OrdoBatch.sol), when deployed. Null: instant only.
+  const BATCH = ${batch};
+  let mode = BATCH && new URLSearchParams(location.search).get("mode") === "batch" ? "batch" : "instant";
   const FALLBACK_ETHUSD = 2523;
   const DEAD = "0x000000000000000000000000000000000000dEaD";
 
@@ -453,7 +483,7 @@ export function swapHtml(opts: {
     if (t.native) return BigInt(await rpc("eth_getBalance", [account, "latest"]));
     return BigInt(await rpc("eth_call", [{ to: t.address, data: "0x70a08231" + pad(account) }, "latest"]));
   }
-  async function allowance(t) { return BigInt(await rpc("eth_call", [{ to: t.address, data: "0xdd62ed3e" + pad(account) + pad(SWAP) }, "latest"])); }
+  async function allowance(t, spender = SWAP) { return BigInt(await rpc("eth_call", [{ to: t.address, data: "0xdd62ed3e" + pad(account) + pad(spender) }, "latest"])); }
 
   /** A token we have never seen: read it off the chain. Null if it is not an ERC-20. */
   async function lookupToken(addr) {
@@ -669,12 +699,122 @@ export function swapHtml(opts: {
     if (bal !== null && bal < quote.amountIn) { go.textContent = "Insufficient " + tokIn.symbol; go.disabled = true; return; }
     needsApprove = false;
     if (!tokIn.native) {
-      const a = await allowance(tokIn).catch(() => 0n);
+      const a = await allowance(tokIn, mode === "batch" ? BATCH.address : SWAP).catch(() => 0n);
       if (a < quote.amountIn) { needsApprove = true; go.textContent = "Approve " + tokIn.symbol; go.disabled = false; return; }
     }
+    if (mode === "batch") { go.textContent = tokIn.native ? "Batch swap" : "Sign batch order"; go.disabled = false; return; }
     if (quote.provisional) { go.textContent = "Checking for MEV…"; go.disabled = true; return; }
     go.textContent = quote.reclaim ? "Swap and keep the MEV" : "Swap";
     go.disabled = false;
+  }
+
+  // ---- instant / batch --------------------------------------------------------------
+  // Instant is one transaction through OrdoSwap. Batch is an intent to Ordo
+  // Batch: the order waits one window to meet the other side of the same
+  // token, and only the difference touches the pool. Paying in ETH is one
+  // transaction (depositOrder escrows it); paying in a token is a signature.
+  function paintMode() {
+    if (!BATCH) return;
+    $("modes").style.display = "";
+    $("modes").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+    const note = $("bnote");
+    if (mode === "batch") {
+      note.style.display = "";
+      note.innerHTML = "Your order waits up to <b>" + BATCH.windowMs + " ms</b> to meet someone trading the other way. What meets never touches the pool; only the difference pays price impact. Everyone in the batch gets one price. " +
+        (tokIn.native ? "<b>One confirmation</b> — your ETH is held by the contract until it fills, and comes back to you if it does not." : "<b>One signature</b> — nothing moves until the batch settles.");
+      $("mev").style.display = "none";
+    } else {
+      note.style.display = "none";
+      $("mev").style.display = "";
+    }
+    const u = new URL(location.href);
+    if (mode === "batch") u.searchParams.set("mode", "batch"); else u.searchParams.delete("mode");
+    history.replaceState(null, "", u);
+    paintButton();
+  }
+  if (BATCH) {
+    $("modes").querySelectorAll("button").forEach((b) => b.onclick = () => { mode = b.dataset.mode; paintMode(); });
+    paintMode();
+  }
+
+  const ORDER_TYPES = [["owner","address"],["receiver","address"],["sellToken","address"],["buyToken","address"],["sellAmount","uint256"],["minBuyAmount","uint256"],["validTo","uint32"],["nonce","uint256"],["appData","bytes32"]];
+  const APPDATA = "0x6f72646f2d737761700000000000000000000000000000000000000000000000"; // "ordo-swap"
+  const word = (v) => BigInt(v).toString(16).padStart(64, "0");
+  const orderCalldata = (sel, o) => sel + pad(o.owner) + pad(o.receiver) + pad(o.sellToken) + pad(o.buyToken) + word(o.sellAmount) + word(o.minBuyAmount) + word(o.validTo) + word(o.nonce) + o.appData.slice(2);
+
+  async function goBatch(btn) {
+    const minOut = (BigInt(quote.amountOut) * (10000n - slippageBps)) / 10000n;
+    const order = {
+      owner: account, receiver: "0x0000000000000000000000000000000000000000",
+      sellToken: tokIn.address, buyToken: tokOut.native ? "0x0000000000000000000000000000000000000000" : tokOut.address,
+      sellAmount: quote.amountIn.toString(), minBuyAmount: minOut.toString(),
+      validTo: Math.floor(Date.now() / 1000) + 90, nonce: String(Date.now()), appData: APPDATA,
+    };
+    let signature = "";
+    let depositHash = null;
+    if (tokIn.native) {
+      btn.innerHTML = '<span class="spin"></span>Confirm in your wallet…';
+      depositHash = await sendTx({ from: account, to: BATCH.address, data: orderCalldata("0x11fba1f5", order), value: hex(order.sellAmount) });
+      $("result").innerHTML = 'deposited · <a href="' + EXPLORER + "/tx/" + depositHash + '" target="_blank" rel="noopener">' + shortHash(depositHash) + "</a>";
+    } else {
+      btn.innerHTML = '<span class="spin"></span>Sign the order in your wallet…';
+      const typed = {
+        types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }], Order: ORDER_TYPES.map(([name, type]) => ({ name, type })) },
+        domain: { name: "OrdoBatch", version: "1", chainId: CHAIN_ID, verifyingContract: BATCH.address },
+        primaryType: "Order", message: order,
+      };
+      signature = await provider.request({ method: "eth_signTypedData_v4", params: [account, JSON.stringify(typed)] });
+    }
+    btn.innerHTML = '<span class="spin"></span>Waiting for the batch…';
+    const posted = await fetch(BATCH.url + "/order", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ order, signature }) }).then((r) => r.json());
+    if (posted.error) throw new Error(posted.error);
+    const t0 = Date.now();
+    let s = posted.status;
+    while (!["filled", "rejected", "expired"].includes(s.state) && Date.now() - t0 < 120000) {
+      await new Promise((r) => setTimeout(r, 250));
+      const cur = await fetch(BATCH.url + "/order/" + posted.orderHash).then((r) => r.json()).catch(() => null);
+      if (cur && cur.status) s = cur.status;
+      if (s.state === "settling") btn.innerHTML = '<span class="spin"></span>Settling…';
+    }
+    if (s.state === "filled") {
+      const got = units(s.buyAmount, tokOut.decimals);
+      const alone = s.alone ? units(s.alone, tokOut.decimals) : null;
+      const gain = alone ? got - alone : null;
+      $("done").innerHTML = '<div class="done"><b><span class="tick">✓</span>Received ' + fmt(got) + " " + tokOut.symbol + " in " + ((Date.now() - t0) / 1000).toFixed(1) + "s</b>" +
+        (s.netted
+          ? '<div class="big">met another trader</div><p>Your order was matched against someone trading the other way. That part never touched the pool and paid no price impact. Everyone in the batch got the same price.</p>'
+          : alone !== null
+            ? '<div class="cmp"><div class="best"><div class="k">In the batch</div><div class="n">' + fmt(got) + "</div></div><div><div class=\\"k\\">Alone at the pool</div><div class=\\"n\\">" + fmt(alone) + "</div></div></div>" +
+              "<p>" + (gain > 0 ? "The batch found a better route than a direct swap would have." : "Nobody was trading the other way in this window, so your order went to the pool at the batch's uniform price, less a 0.1% fee.") + "</p>"
+            : "<p>Settled at the batch's uniform price.</p>") +
+        '<p style="margin-top:8px"><a href="' + EXPLORER + "/tx/" + s.txHash + '" target="_blank" rel="noopener">' + shortHash(s.txHash) + " →</a></p></div>";
+      $("result").textContent = "";
+      $("amt").value = ""; resetQuote();
+      paintBalances(); refreshStats();
+      return;
+    }
+    // Not filled. A signed order costs nothing. A deposit is held by the
+    // contract and comes back on request once the order has expired.
+    const why = s.state === "expired" ? "no batch could fill it before it expired" : (s.reason || "rejected");
+    if (!depositHash) throw new Error("not filled — " + why + ". Nothing moved.");
+    const html = '<div class="done"><b>Not filled — ' + esc(why) + "</b><p>Your " + fmt(units(order.sellAmount, 18)) + " ETH is held by the batch contract. It is yours to take back once the order has expired" +
+      (order.validTo * 1000 > Date.now() ? " (in about " + Math.ceil((order.validTo * 1000 - Date.now()) / 1000) + "s)" : "") + '.</p><button class="refund" id="refund">Refund ' + fmt(units(order.sellAmount, 18)) + " ETH</button></div>";
+    $("done").innerHTML = html;
+    const rb = $("refund");
+    const tick = () => { const left = order.validTo * 1000 + 1500 - Date.now(); if (left > 0) { rb.disabled = true; rb.textContent = "Refund available in " + Math.ceil(left / 1000) + "s"; setTimeout(tick, 1000); } else { rb.disabled = false; rb.textContent = "Refund " + fmt(units(order.sellAmount, 18)) + " ETH"; } };
+    tick();
+    rb.onclick = async () => {
+      try {
+        rb.disabled = true; rb.innerHTML = '<span class="spin"></span>Confirm in your wallet…';
+        const h = await sendTx({ from: account, to: BATCH.address, data: orderCalldata("0xbd803b1d", order) });
+        rb.innerHTML = '<span class="spin"></span>Refunding…';
+        const rec = await waitReceipt(h);
+        if (rec.status !== "0x1") throw new Error("the refund reverted");
+        $("done").innerHTML = '<div class="done"><b><span class="tick">✓</span>Refunded ' + fmt(units(order.sellAmount, 18)) + ' ETH</b><p><a href="' + EXPLORER + "/tx/" + h + '" target="_blank" rel="noopener">' + shortHash(h) + " →</a></p></div>";
+        paintBalances();
+      } catch (e) { rb.disabled = false; rb.textContent = "Refund"; $("result").className = "result bad"; $("result").textContent = explain(e); }
+    };
+    $("result").textContent = "";
   }
 
   // -32005 is "limit exceeded", and every wallet renders it in its own words —
@@ -715,13 +855,14 @@ export function swapHtml(opts: {
       await ensureChain();
       if (needsApprove) {
         btn.innerHTML = '<span class="spin"></span>Confirm approval in your wallet…';
-        const h = await sendTx({ from: account, to: tokIn.address, data: "0x095ea7b3" + pad(SWAP) + "f".repeat(64) });
+        const h = await sendTx({ from: account, to: tokIn.address, data: "0x095ea7b3" + pad(mode === "batch" ? BATCH.address : SWAP) + "f".repeat(64) });
         btn.innerHTML = '<span class="spin"></span>Approving…';
         await waitReceipt(h);
         busy = false; await requote(); await paintButton(); return;
       }
       // Re-quote right before sending so the reclaim is against the freshest state.
       await requote(); if (!quote) throw new Error("quote expired, try again");
+      if (mode === "batch") { await goBatch(btn); return; }
       const minOut = (BigInt(quote.amountOut) * (10000n - slippageBps)) / 10000n;
       const req = { tokenIn: tokIn.address, tokenOut: tokOut.address, amountIn: hex(quote.amountIn), amountOutMinimum: hex(minOut), recipient: account, nativeOut: !!tokOut.native };
       if (!tokIn.native) req.from = account;

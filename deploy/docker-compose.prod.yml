@@ -54,6 +54,10 @@ x-gateway: &gateway
     # page. Without it /swap can only be used from a wallet's own browser on a
     # phone; with it, Safari and Chrome can reach the wallet app.
     ORDO_WC_PROJECT_ID: ${ORDO_WC_PROJECT_ID:-}
+    # Ordo Batch: gives /swap its Batch mode once the contract is deployed.
+    ORDO_BATCH_ADDRESS: ${ORDO_BATCH_ADDRESS:-}
+    ORDO_BATCH_URL: ${ORDO_BATCH_URL:-https://batch.ordofi.network}
+    ORDO_BATCH_WINDOW_MS: ${ORDO_BATCH_WINDOW_MS:-300}
     # $0.01 per keyed send. Enforce=1 refuses a send when prepaid is empty;
     # leave it off until partners have topped up so v4.fun does not stall.
     ORDO_KEY_SEND_PRICE_USD: ${ORDO_KEY_SEND_PRICE_USD:-0.01}

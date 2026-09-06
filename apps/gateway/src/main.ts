@@ -447,6 +447,7 @@ const SWAP_PAGE = CONFIG.ordoSwapAddress
       docs: "https://app.ordofi.network/docs",
       proofTx: process.env.ORDO_SWAP_PROOF_TX ?? "0xd3402046255c3f0b954989660d3faae2c39a46930fd442f813e39b116b8d0641",
       wc: CONFIG.wcProjectId && WC_BUNDLE ? { projectId: CONFIG.wcProjectId, src: `/swap/wc.js?v=${WC_BUNDLE.tag}` } : null,
+      batch: /^0x[0-9a-f]{40}$/.test(CONFIG.batchAddress) ? { address: CONFIG.batchAddress, url: CONFIG.batchUrl, windowMs: CONFIG.batchWindowMs } : null,
     })
   : null;
 const swapStats = CONFIG.ordoSwapAddress
@@ -914,6 +915,11 @@ server.listen(CONFIG.port, () => {
           : !CONFIG.wcProjectId
             ? "no (no ORDO_WC_PROJECT_ID) — a phone can only use /swap from inside a wallet's own browser"
             : `over WalletConnect (/swap/wc.js @ ${WC_BUNDLE.tag})`
+      }`,
+    );
+    console.log(
+      `OrdoFi gateway | /swap batch mode: ${
+        /^0x[0-9a-f]{40}$/.test(CONFIG.batchAddress) ? `on (OrdoBatch ${CONFIG.batchAddress} via ${CONFIG.batchUrl}, ${CONFIG.batchWindowMs}ms window)` : "off (no ORDO_BATCH_ADDRESS)"
       }`,
     );
   }

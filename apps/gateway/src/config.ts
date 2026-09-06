@@ -198,6 +198,15 @@ export const CONFIG = {
    */
   wcProjectId: (process.env.ORDO_WC_PROJECT_ID ?? "").trim(),
   /**
+   * Ordo Batch (contracts/src/OrdoBatch.sol) and its batcher. When both are
+   * set, /swap offers a Batch mode: the order waits one window to meet the
+   * other side of the same token and only the difference touches the pool.
+   * Empty disables the mode; the page is instant-only, as before.
+   */
+  batchAddress: (process.env.ORDO_BATCH_ADDRESS ?? "").trim().toLowerCase(),
+  batchUrl: (process.env.ORDO_BATCH_URL ?? "https://batch.ordofi.network").trim(),
+  batchWindowMs: Number(process.env.ORDO_BATCH_WINDOW_MS ?? 300),
+  /**
    * Upstream queries one eth_getLogs may spend when its range is too wide for
    * a single request (see getlogs.ts). Wide enough to answer a month of
    * history on a filtered query; not so wide that one caller can turn a
